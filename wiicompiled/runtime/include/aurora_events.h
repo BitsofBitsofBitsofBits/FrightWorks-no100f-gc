@@ -1,6 +1,7 @@
 #pragma once
 
 #include "settings_overlay.h"
+#include "no100f_recorder.h"
 #include "runtime_config.h"
 #include "display_settings.h"
 
@@ -61,6 +62,7 @@ inline void Flush(bool force = false) {
 // still active.  A window close is an intentional successful exit, so end the
 // process directly and do not run the crash/atexit paths.
 [[noreturn]] inline void ExitForAuroraWindowClose() noexcept {
+    no100f_recorder::FinishForExit();  // a running F3 video: finish the file first
     settings_overlay::ReleaseControllers();
     WindowPlacementPersistence::Flush(true);
 #if defined(_WIN32)

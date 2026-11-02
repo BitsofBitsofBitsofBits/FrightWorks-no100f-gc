@@ -109,6 +109,18 @@ cutscene, it waits for normal play (**Cancel travel** drops it). **Skip** presse
 recorded cutscene (A) or the title intro / attract demo (Start). More commands (scripted through `Play\devmenu.txt`) are in the
 `game-logic-debug` skill.
 
+**F3** (developer tools on) starts / stops a video of the game: `Videos\FrightWorks_<date>_<time>.mp4` beside the
+launcher (`Play\Videos` in a source build) and a `.txt` with the build, picture size, Scooby's position at the start and
+the end, and the `[video]` / `[game]` settings. The frames come from the renderer at the window's size (at most 1080
+lines, 60 fps), so other windows on top don't get in; a red REC light shows in the top-right corner while it records
+(never in the video). F3 again, closing the game or 30 minutes stops it. Two toggles at the top of the F8 dev menu (saved in
+`[game]`): **Record audio** (`record_audio`, on by default) adds the game's own sound, taken before the volume and
+mute settings; **Menus in screenshots and videos** (`capture_overlay`, off by default) puts the F8/F10 menus and
+notices in F3 videos and F2 screenshots too; off, only the DEV mark is in them. Resizing the window (or F11) during a recording
+freezes the video until the window is back to its old size. It needs ffmpeg: on PATH, next to the launcher (`ffmpeg\bin`) or the kit's
+`tools\debug\local\ffmpeg`; turning the developer tools on in the launcher offers to download it there (the same
+SHA-256-checked build as `tools\debug\capture\get-ffmpeg.ps1`).
+
 The Textures and Effects tabs list textures from `Play\UserData\devmenu_textures.txt`, one per line, tab-separated:
 `id  file  severity  asset  scenes  level  [effect]` (`scenes` space-separated, `boot` = every scene; `#` starts a
 comment). Lines whose seventh column starts with `effect` go on the Effects tab: textures drawn at runtime (bonks,

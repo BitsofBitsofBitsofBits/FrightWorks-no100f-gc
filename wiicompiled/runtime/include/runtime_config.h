@@ -55,6 +55,8 @@ struct RuntimeUserConfig {
     std::optional<bool> fps60;
     std::optional<std::string> holiday;  // NO100F [game] holiday: "auto" (today), "off" or "MM-DD"
     std::optional<bool> devTools;        // NO100F [game] dev_tools: F8 dev menu + DEV build mark (launcher Extras)
+    std::optional<bool> recordAudio;     // NO100F [game] record_audio: F3 videos (dev tools) include the game's sound
+    std::optional<bool> captureOverlay;  // NO100F [game] capture_overlay: F2/F3 captures show the F8/F10 menus (dev tools)
     std::optional<uint32_t> msaa;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
@@ -443,7 +445,11 @@ inline void EnsureConfigFile() {
               "# \"off\" = never, or \"MM-DD\" to pretend it is that day (e.g. \"10-31\").\n"
               "holiday = \"auto\"\n"
               "# Developer tools: the F8 dev menu (travel, spots, free camera, texture finder) and a DEV build mark.\n"
-              "dev_tools = false\n\n"
+              "dev_tools = false\n"
+              "# With the developer tools on, F3 records a video of the game (needs ffmpeg); this adds the game's sound.\n"
+              "record_audio = true\n"
+              "# With the developer tools on: F2 screenshots and F3 videos show the F8/F10 menus too (else only the DEV stamp).\n"
+              "capture_overlay = false\n\n"
               "[audio]\n"
               "volume = 1.0\n"
               "music_volume = 1.0\n"
@@ -624,6 +630,8 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     if (auto value = FindConfigValue<bool>(document, "game", "dev_tools")) {
         config.devTools = *value;
     }
+    config.recordAudio = FindConfigValue<bool>(document, "game", "record_audio");
+    config.captureOverlay = FindConfigValue<bool>(document, "game", "capture_overlay");
     if (auto value = FindConfigValue<std::string>(document, "game", "holiday"); value && IsSupportedHoliday(*value)) {
         config.holiday = *value;
     }
@@ -1232,6 +1240,28 @@ inline bool DevTools() {
         return *env != '0';
     }
     return Get().devTools.value_or(false);
+}
+
+// NO100F [game] record_audio: F3 videos (developer tools) include the game's own sound (default on). Read when a
+// recording starts; the dev menu's toggle writes it.
+inline bool RecordAudio() {
+    return Get().recordAudio.value_or(true);
+}
+
+inline bool SetRecordAudio(bool value) {
+    Mutable().recordAudio = value;
+    return WriteSetting("game", "record_audio", value ? "true" : "false");
+}
+
+// NO100F [game] capture_overlay: with the developer tools on, F2 screenshots and F3 videos show the F8/F10 menus and
+// notices too; off (default) = only the DEV stamp. The dev menu's toggle writes it.
+inline bool CaptureOverlay() {
+    return Get().captureOverlay.value_or(false);
+}
+
+inline bool SetCaptureOverlay(bool value) {
+    Mutable().captureOverlay = value;
+    return WriteSetting("game", "capture_overlay", value ? "true" : "false");
 }
 
 inline bool ShowFps(bool fallback = true) {

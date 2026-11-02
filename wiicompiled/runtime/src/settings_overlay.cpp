@@ -10,6 +10,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include "overlay_theme.h"
 #include "build_info.h"
 #include "no100f_devmenu.h"
+#include "no100f_recorder.h"
 #include "audio_backend.h"
 #include "aurora_events.h"
 #include "controller_button_names.h"
@@ -1788,15 +1789,16 @@ void DrawAboutPage() {
     }
     ImGui::TextDisabled("Graphics API: %s", GraphicsApiDisplayName());
     if (no100f_devmenu::Enabled()) {
-        ImGui::TextColored(Vec(Colour::Lime), "Developer tools are on: F8 opens the dev menu.");
+        ImGui::TextColored(Vec(Colour::Lime), "Developer tools are on: F8 opens the dev menu, F3 records a video.");
     }
     SectionTitle("Keys");
-    const std::array<std::pair<const char*, const char*>, 6> keys = {{
+    const std::array<std::pair<const char*, const char*>, 7> keys = {{
         {"F10 / Esc / Back", "Settings (this board) / back to the game (Back = the controller's Back / Select)"},
         {"F11", "Fullscreen or window"},
         {"F2", "Screenshot (Screenshots folder beside the launcher)"},
         {"F1", "Project page in your browser"},
         {"F8", "Dev menu (with developer tools on in the launcher)"},
+        {"F3", "Start / stop a video (with developer tools on; Videos folder, needs ffmpeg)"},
         {"LB / RB", "Change the page here with a controller"},
     }};
     if (ImGui::BeginTable("##keys", 2, ImGuiTableFlags_SizingFixedFit)) {
@@ -1982,15 +1984,33 @@ void TakeScreenshot() {
     aurora_request_screenshot(RuntimeConfigFile::PathToUtf8(file).c_str());
 }
 
-// Developer tools on: "DEV" and the build ID in the bottom-left corner, so screenshots of the window and recordings
-// say which build they came from (F2 screenshots leave the overlay out).
+// Developer tools on: "DEV" and the build ID in the bottom-left corner, so screenshots and recordings say which build
+// they came from. Drawn in its own full-screen ImGui window, AURORA_CAPTURE_STAMP_WINDOW: F2/F3 captures keep it when
+// they leave the menus out ([game] capture_overlay off), which is what the first line here tells aurora.
 void DrawDevMark() {
     using namespace OverlayTheme;
     if (!no100f_devmenu::Enabled()) {
+        aurora_set_capture_overlay(AURORA_CAPTURE_OVERLAY_NONE);
         return;
     }
+    aurora_set_capture_overlay(RuntimeConfigFile::CaptureOverlay() ? AURORA_CAPTURE_OVERLAY_ALL
+                                                                   : AURORA_CAPTURE_OVERLAY_STAMP);
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImDrawList* list = ImGui::GetForegroundDrawList();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    const bool visible = ImGui::Begin(AURORA_CAPTURE_STAMP_WINDOW, nullptr, kFlags);
+    ImGui::PopStyleVar();
+    if (!visible) {
+        ImGui::End();
+        return;
+    }
+    ImDrawList* list = ImGui::GetWindowDrawList();
+    list->PushClipRectFullScreen();
     ImFont* heading = Heading();
     ImFont* small = Small();
     const char* build = BuildInfo::Id();
@@ -2005,12 +2025,17 @@ void DrawDevMark() {
                         ImVec2(buildPos.x + buildSize.x + Px(8), bottom + Px(4)), Col(Colour::Ink, 0.55f), Px(8));
     OutlinedText(list, heading, devPos, Col(Colour::Lime), Col(Colour::Ink), Px(2), "DEV");
     list->AddText(small, small->FontSize, buildPos, Col(Colour::Cream, 0.9f), build);
+    list->PopClipRect();
+    ImGui::End();
 }
 
 void DrawNotice() {
     if (const int result = aurora_take_screenshot_result(); result != 0) {
         ShowNotice(result > 0 ? "Screenshot saved: Screenshots\\" + RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename())
                               : std::string("Screenshot failed (see the log)"));
+    }
+    if (std::string recorder = no100f_recorder::TakeNotice(); !recorder.empty()) {
+        ShowNotice(std::move(recorder));
     }
     if (g_noticeText.empty() || Clock::now() >= g_noticeUntil) {
         return;
@@ -2302,8 +2327,12 @@ void Draw() noexcept {
     }
     NetplayUi::Draw();
     DrawFpsOverlay();
+    if (no100f_devmenu::Enabled()) {
+        no100f_recorder::Update();
+    }
     DrawNotice();
     DrawDevMark();
+    no100f_recorder::DrawIndicator();
     DrawTopBar();
     no100f_devmenu::Draw();
     DrawExitPrompt();

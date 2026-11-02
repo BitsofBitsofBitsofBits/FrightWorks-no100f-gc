@@ -174,11 +174,31 @@ void aurora_set_present_schedule(uint64_t baseNanos, uint64_t intervalNanos);
 // slot group from this, backing off after misses. Only paced presents may report.
 void aurora_report_producer_paced(bool paced);
 void aurora_request_frame_capture(uint32_t frame, const char* outputPath);
-// Saves the next presented game frame (without the ImGui overlay) as a PNG at outputPath (UTF-8),
-// encoded on a worker thread. Replaces a capture still waiting for its frame.
+// Saves the next presented frame as a PNG at outputPath (UTF-8), encoded on a worker thread: the game frame without
+// the ImGui overlay, or as aurora_set_capture_overlay says. Replaces a capture still waiting for its frame.
 void aurora_request_screenshot(const char* outputPath);
 // Outcome of the last screenshot: 1 saved, -1 failed, 0 nothing new. Reading it clears it.
 int aurora_take_screenshot_result(void);
+// What screenshots and video frames show of the ImGui overlay. NONE: screenshots are the game frame at its render size
+// (the default). STAMP / ALL: the window's picture (game scaled as on screen) with only the ImGui window named
+// AURORA_CAPTURE_STAMP_WINDOW on top / with every ImGui window. The window named AURORA_CAPTURE_HIDDEN_WINDOW is never
+// captured (an on-screen recording light).
+typedef enum {
+  AURORA_CAPTURE_OVERLAY_NONE = 0,
+  AURORA_CAPTURE_OVERLAY_STAMP = 1,
+  AURORA_CAPTURE_OVERLAY_ALL = 2,
+} AuroraCaptureOverlay;
+#define AURORA_CAPTURE_STAMP_WINDOW "##CaptureStamp"
+#define AURORA_CAPTURE_HIDDEN_WINDOW "##CaptureHidden"
+void aurora_set_capture_overlay(AuroraCaptureOverlay overlay);
+// Video capture: every sealed frame as the window's picture (overlay as set above, NONE counting as STAMP), scaled
+// down to at most maxHeight rows, read back asynchronously and passed to the callback on a render thread with the
+// Unix time (microseconds) it was rendered. Pixels are tightly packed 8-bit, BGRA when bgra is true, else RGBA; the
+// pointer is valid only during the call. Frames are skipped while 4 are still being read back. NULL stops; after
+// that returns, the callback is not called again. Returns false when the swapchain format can't be captured (HDR).
+typedef void (*AuroraVideoFrameCallback)(const uint8_t* pixels, uint32_t width, uint32_t height, bool bgra,
+                                         int64_t unixMicros, void* user);
+bool aurora_set_video_capture(AuroraVideoFrameCallback callback, void* user, uint32_t maxHeight);
 bool aurora_flush_efb_copies_to_ram();
 bool aurora_flush_efb_copy_to_ram(void* dest);
 

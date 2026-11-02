@@ -17,7 +17,10 @@ sealed class MainForm : Form
     readonly Dictionary<string, Board> boards = new();
     Label discStatus = null!, dumpHelp = null!;
     PlankButton chooseDisc = null!;
-    ThemedBar progress = null!;
+    ThemedBar progress = null!, ffmpegBar = null!;
+    Label ffmpegStatus = null!;
+    PlankButton ffmpegButton = null!;
+    CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
     Action<bool>? showControlsTab;
     readonly Gamepads gamepads;
     Label padStatus = null!;
@@ -71,7 +74,7 @@ sealed class MainForm : Form
         // Connected controllers: shown on Settings > Controls; an Xbox pad asks for the layout once.
         var padTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         padTimer.Tick += (_, _) => RefreshGamepads();
-        FormClosed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); };
+        FormClosed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
         Shown += (_, _) =>
         {
             if (shotDir != null) { TakeShots(shotDir); return; }
@@ -93,6 +96,7 @@ sealed class MainForm : Form
 
     // Where F2 in the game saves (beside the launcher in a release, Play\Screenshots in the dev tree).
     string ScreenshotsDir => IsRelease ? Path.Combine(root, "Screenshots") : Path.Combine(play, "Screenshots");
+    string VideosDir => IsRelease ? Path.Combine(root, "Videos") : Path.Combine(play, "Videos");
 
     // Headless visual check (--shots <dir>): the main screen, a lightning flash and every board, then exit.
     void TakeShots(string dir)
@@ -357,14 +361,24 @@ sealed class MainForm : Form
         body.Controls.Add(Title("Developer tools"));
         body.Controls.Add(DevToolsBox());
         body.Controls.Add(Note("For testing and bug hunting: F8 in the game opens the dev menu (go to any level, saved spots, " +
-                               "free camera, god mode, texture finder), and the game shows DEV and its build in the corner. " +
-                               "Applies the next time the game starts."));
+                               "free camera, god mode, texture finder, recording options), F3 records a video of the game into " +
+                               "the Videos folder with a .txt for bug reports, and the game shows DEV and its build in the " +
+                               "corner. Applies the next time the game starts."));
+        ffmpegStatus = Note("");
+        body.Controls.Add(ffmpegStatus);
+        ffmpegButton = new PlankButton("Download ffmpeg", async (_, _) => await DownloadFfmpeg());
+        body.Controls.Add(ffmpegButton);
+        ffmpegBar = new ThemedBar { Visible = false };
+        body.Controls.Add(ffmpegBar);
+        RefreshFfmpeg(offerDownload: false);
 
         body.Controls.Add(Title("Folders"));
         var folders = Row();
+        folders.MaximumSize = new Size(S(520), 0);  // wrap instead of widening the page
         folders.Controls.Add(new PlankButton("Game", (_, _) => OpenFolder(play)));
         folders.Controls.Add(new PlankButton("Saves and settings", (_, _) => OpenFolder(userData)));
         folders.Controls.Add(new PlankButton("Screenshots", (_, _) => OpenFolder(ScreenshotsDir)));
+        folders.Controls.Add(new PlankButton("Videos", (_, _) => OpenFolder(VideosDir)));
         body.Controls.Add(folders);
 
         body.Controls.Add(Title("About"));
@@ -413,8 +427,60 @@ sealed class MainForm : Form
             var c = new GameConfig(configPath);
             c.Set("game", "dev_tools", box.SelectedIndex == 1 ? "true" : "false");
             c.Save();
+            RefreshFfmpeg(offerDownload: box.SelectedIndex == 1);
         };
         return box;
+    }
+
+    // F3 videos need ffmpeg. Looked for only while the developer tools are on; turning them on offers the download.
+    void RefreshFfmpeg(bool offerDownload)
+    {
+        bool dev = new GameConfig(configPath).Get("game", "dev_tools") == "true";
+        bool busy = ffmpegCancel != null;
+        var found = dev && !busy ? FfmpegSetup.Find(root, play) : null;
+        ffmpegStatus.Visible = dev || busy;
+        ffmpegButton.Visible = dev && !busy && found == null;
+        if (busy || !dev) return;
+        ffmpegStatus.Text = found != null
+            ? "F3 videos use ffmpeg from " + found + "."
+            : "F3 videos need ffmpeg, which isn't installed. The launcher can download it (about 200 MB, the free " +
+              "win64 build from github.com/BtbN/FFmpeg-Builds) into " + FfmpegSetup.InstallDir(root, IsRelease) + ".";
+        ffmpegStatus.ForeColor = found != null ? Good : Warn;
+        if (found == null && offerDownload &&
+            MessageBox.Show(this, "F3 video recording needs ffmpeg, which isn't installed.\n\nDownload it now? (about 200 MB, " +
+                                  "the free win64 build from github.com/BtbN/FFmpeg-Builds, checked against its published SHA-256)",
+                            AppTitle, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            _ = DownloadFfmpeg();
+    }
+
+    async Task DownloadFfmpeg()
+    {
+        if (ffmpegCancel != null) return;
+        ffmpegCancel = new CancellationTokenSource();
+        ffmpegButton.Visible = false;
+        ffmpegBar.Visible = true;
+        ffmpegBar.Maximum = 1000;
+        ffmpegBar.Value = 0;
+        ffmpegStatus.ForeColor = CreamDim;
+        ffmpegStatus.Text = "Downloading ffmpeg...";
+        var report = new Progress<(long done, long total)>(p =>
+        {
+            if (IsDisposed || ffmpegCancel == null) return;
+            ffmpegBar.Value = p.total > 0 ? (int)(p.done * 1000 / p.total) : 0;
+            ffmpegStatus.Text = p.total > 0 ? $"Downloading ffmpeg: {p.done >> 20} of {p.total >> 20} MB" : $"Downloading ffmpeg: {p.done >> 20} MB";
+        });
+        string? error = null;
+        try { await FfmpegSetup.Download(root, IsRelease, report, ffmpegCancel.Token); }
+        catch (OperationCanceledException) when (ffmpegCancel.IsCancellationRequested) { return; }  // the launcher closed
+        catch (Exception e) { error = e.Message; }
+        finally
+        {
+            ffmpegCancel.Dispose();
+            ffmpegCancel = null;
+            if (!IsDisposed) ffmpegBar.Visible = false;
+        }
+        RefreshFfmpeg(offerDownload: false);
+        if (error != null) MessageBox.Show(this, "Downloading ffmpeg failed: " + error, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     // ----- The disc and starting the game -----

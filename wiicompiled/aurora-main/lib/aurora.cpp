@@ -77,6 +77,7 @@ constexpr uint32_t kCaptureNextFrame = UINT32_MAX - 1;
 std::mutex g_captureMutex;  // guards the two below
 std::string g_captureOutputPath;
 bool g_captureScreenshot = false;  // PNG on a worker thread, result in g_screenshotResult
+std::atomic<int> g_captureOverlay{AURORA_CAPTURE_OVERLAY_NONE};  // AuroraCaptureOverlay
 // 0 = nothing new, 1 = saved, -1 = failed; read and cleared by aurora_take_screenshot_result.
 std::atomic<int> g_screenshotResult{0};
 
@@ -516,8 +517,192 @@ struct PendingFrameCapture {
   std::string path;
 };
 
+// FrightWorks captures with the overlay choice (aurora_set_capture_overlay) and video frames (aurora_set_video_capture):
+// the window's picture is drawn again into a capture texture (the game scaled as on screen, then a subset of this
+// frame's ImGui lists) and copied into a buffer that is read back.
+struct CaptureTarget {
+  webgpu::TextureWithSampler texture;
+  uint32_t width = 0;
+  uint32_t height = 0;
+};
+
+bool capture_format_supported(wgpu::TextureFormat format) noexcept {
+  return format == wgpu::TextureFormat::BGRA8Unorm || format == wgpu::TextureFormat::BGRA8UnormSrgb ||
+         format == wgpu::TextureFormat::RGBA8Unorm || format == wgpu::TextureFormat::RGBA8UnormSrgb;
+}
+
+bool capture_format_bgra(wgpu::TextureFormat format) noexcept {
+  return format == wgpu::TextureFormat::BGRA8Unorm || format == wgpu::TextureFormat::BGRA8UnormSrgb;
+}
+
+// scale = width / the window's framebuffer width (ImGui's coordinates are the window's).
+void encode_capture_image(const wgpu::CommandEncoder& encoder, const webgpu::PresentSource& source,
+                          CaptureTarget& target, uint32_t width, uint32_t height, float scale, bool stampOnly) {
+  if (!target.texture.texture || target.width != width || target.height != height) {
+    target.texture = webgpu::create_render_texture(width, height, false);
+    target.width = width;
+    target.height = height;
+  }
+  const uint32_t targetWidth = target.texture.size.width;
+  const uint32_t targetHeight = target.texture.size.height;
+  auto viewport =
+      webgpu::calculate_present_viewport(targetWidth, targetHeight, source.size.width, source.size.height);
+  float presentAspect = 0.f;
+  if (window::get_present_aspect_ratio(presentAspect)) {
+    viewport = webgpu::calculate_present_viewport_for_aspect(targetWidth, targetHeight, presentAspect);
+  }
+  const wgpu::RenderPassColorAttachment attachment{
+      .view = target.texture.view,
+      .loadOp = wgpu::LoadOp::Clear,
+      .storeOp = wgpu::StoreOp::Store,
+  };
+  const wgpu::RenderPassDescriptor descriptor{
+      .label = "Capture image pass",
+      .colorAttachmentCount = 1,
+      .colorAttachments = &attachment,
+  };
+  const auto pass = encoder.BeginRenderPass(&descriptor);
+  pass.SetPipeline(webgpu::g_CopyPipeline);
+  pass.SetBindGroup(0, source.bindGroup, 0, nullptr);
+  pass.SetViewport(viewport.left, viewport.top, viewport.width, viewport.height, viewport.znear, viewport.zfar);
+  pass.Draw(3);
+  pass.SetViewport(0.f, 0.f, static_cast<float>(targetWidth), static_cast<float>(targetHeight), 0.f, 1.f);
+  imgui::render_capture(pass, stampOnly, scale);
+  pass.End();
+}
+
+CaptureTarget g_screenshotTarget;
+CaptureTarget g_videoTarget;
+
+int64_t unix_micros_now() noexcept {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+// Video readback slots: Free -> Copied (copy recorded) -> Mapping (after submit) -> callback -> Free.
+struct VideoSlot {
+  enum class State { Free, Copied, Mapping };
+  wgpu::Buffer buffer;
+  uint64_t bufferSize = 0;
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint32_t bytesPerRow = 0;
+  bool bgra = false;
+  int64_t unixMicros = 0;
+  State state = State::Free;
+};
+std::mutex g_videoMutex;  // guards everything below; held while the callback runs
+AuroraVideoFrameCallback g_videoCallback = nullptr;
+void* g_videoUser = nullptr;
+uint32_t g_videoMaxHeight = 1080;
+std::array<VideoSlot, 4> g_videoSlots;
+std::vector<uint8_t> g_videoPacked;
+
+void encode_video_frame(const wgpu::CommandEncoder& encoder, const webgpu::PresentSource& source,
+                        uint32_t windowWidth, uint32_t windowHeight) {
+  if (!source.texture || windowWidth == 0 || windowHeight == 0) return;
+  VideoSlot* slot = nullptr;
+  uint32_t maxHeight = 0;
+  {
+    std::lock_guard lock(g_videoMutex);
+    if (g_videoCallback == nullptr) return;
+    for (auto& candidate : g_videoSlots) {
+      if (candidate.state == VideoSlot::State::Free) {
+        slot = &candidate;
+        break;
+      }
+    }
+    maxHeight = g_videoMaxHeight;
+  }
+  if (slot == nullptr) return;  // the readback is behind: skip this frame
+  const auto format = webgpu::g_graphicsConfig.surfaceConfiguration.format;
+  if (!capture_format_supported(format)) return;
+  const float scale = windowHeight > maxHeight ? static_cast<float>(maxHeight) / static_cast<float>(windowHeight) : 1.f;
+  const uint32_t width = (std::max)(2u, static_cast<uint32_t>(static_cast<float>(windowWidth) * scale) & ~1u);
+  const uint32_t height = (std::max)(2u, static_cast<uint32_t>(static_cast<float>(windowHeight) * scale) & ~1u);
+  const bool stampOnly = g_captureOverlay.load(std::memory_order_acquire) != AURORA_CAPTURE_OVERLAY_ALL;
+  encode_capture_image(encoder, source, g_videoTarget, width, height, scale, stampOnly);
+  const auto& texture = g_videoTarget.texture;
+  const uint32_t bytesPerRow = align_to(texture.size.width * 4, 256);
+  const uint64_t bufferSize = static_cast<uint64_t>(bytesPerRow) * texture.size.height;
+  if (!slot->buffer || slot->bufferSize != bufferSize) {
+    const wgpu::BufferDescriptor descriptor{
+        .label = "Video frame readback",
+        .usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead,
+        .size = bufferSize,
+    };
+    slot->buffer = g_device.CreateBuffer(&descriptor);
+    slot->bufferSize = bufferSize;
+  }
+  const wgpu::TexelCopyTextureInfo sourceInfo{
+      .texture = texture.texture,
+      .mipLevel = 0,
+      .origin = {0, 0, 0},
+      .aspect = wgpu::TextureAspect::All,
+  };
+  const wgpu::TexelCopyBufferInfo destinationInfo{
+      .layout = {.offset = 0, .bytesPerRow = bytesPerRow, .rowsPerImage = texture.size.height},
+      .buffer = slot->buffer,
+  };
+  encoder.CopyTextureToBuffer(&sourceInfo, &destinationInfo, &texture.size);
+  std::lock_guard lock(g_videoMutex);
+  slot->width = texture.size.width;
+  slot->height = texture.size.height;
+  slot->bytesPerRow = bytesPerRow;
+  slot->bgra = capture_format_bgra(format);
+  slot->unixMicros = unix_micros_now();
+  slot->state = VideoSlot::State::Copied;
+}
+
+void complete_video_slot(size_t index, wgpu::MapAsyncStatus status) {
+  std::lock_guard lock(g_videoMutex);
+  auto& slot = g_videoSlots[index];
+  if (status == wgpu::MapAsyncStatus::Success) {
+    const auto* mapped = static_cast<const uint8_t*>(slot.buffer.GetConstMappedRange(0, slot.bufferSize));
+    if (mapped != nullptr && g_videoCallback != nullptr) {
+      const uint32_t rowBytes = slot.width * 4;
+      const uint8_t* pixels = mapped;
+      if (slot.bytesPerRow != rowBytes) {
+        g_videoPacked.resize(static_cast<size_t>(rowBytes) * slot.height);
+        for (uint32_t y = 0; y < slot.height; ++y) {
+          std::memcpy(g_videoPacked.data() + static_cast<size_t>(y) * rowBytes,
+                      mapped + static_cast<size_t>(y) * slot.bytesPerRow, rowBytes);
+        }
+        pixels = g_videoPacked.data();
+      }
+      g_videoCallback(pixels, slot.width, slot.height, slot.bgra, slot.unixMicros, g_videoUser);
+    }
+    slot.buffer.Unmap();
+  } else if (status != wgpu::MapAsyncStatus::CallbackCancelled && status != wgpu::MapAsyncStatus::Aborted) {
+    Log.warn("Video frame readback failed: {}", magic_enum::enum_name(status));
+  }
+  slot.state = VideoSlot::State::Free;
+}
+
+// After the submit that holds the copies: start reading them back. Completion runs on whatever thread Dawn reports
+// it from (AllowSpontaneous), at the latest in the next ProcessEvents.
+void start_video_readbacks() {
+  std::vector<size_t> indices;
+  {
+    std::lock_guard lock(g_videoMutex);
+    for (size_t i = 0; i < g_videoSlots.size(); ++i) {
+      if (g_videoSlots[i].state == VideoSlot::State::Copied) {
+        g_videoSlots[i].state = VideoSlot::State::Mapping;
+        indices.push_back(i);
+      }
+    }
+  }
+  for (const size_t i : indices) {
+    g_videoSlots[i].buffer.MapAsync(wgpu::MapMode::Read, 0, g_videoSlots[i].bufferSize,
+                                    wgpu::CallbackMode::AllowSpontaneous,
+                                    [i](wgpu::MapAsyncStatus status, wgpu::StringView) { complete_video_slot(i, status); });
+  }
+}
+
 std::optional<PendingFrameCapture> encode_frame_capture(const wgpu::CommandEncoder& encoder,
-                                                        const webgpu::PresentSource& source) {
+                                                        const webgpu::PresentSource& source, uint32_t windowWidth,
+                                                        uint32_t windowHeight) {
   uint32_t requestedFrame = g_captureFrame.load(std::memory_order_acquire);
   const uint32_t currentFrame = gfx::current_frame();
   if (requestedFrame == kCaptureNextFrame) requestedFrame = currentFrame;
@@ -539,18 +724,27 @@ std::optional<PendingFrameCapture> encode_frame_capture(const wgpu::CommandEncod
     if (screenshot) g_screenshotResult.store(-1, std::memory_order_release);
     return std::nullopt;
   }
-  const bool bgra = source.format == wgpu::TextureFormat::BGRA8Unorm ||
-                    source.format == wgpu::TextureFormat::BGRA8UnormSrgb;
-  const bool rgba = source.format == wgpu::TextureFormat::RGBA8Unorm ||
-                    source.format == wgpu::TextureFormat::RGBA8UnormSrgb;
-  if (!bgra && !rgba) {
-    Log.error("Frame {} capture does not support texture format {}", currentFrame,
-              magic_enum::enum_name(source.format));
+  // A screenshot with an overlay choice is the window's picture; otherwise the game frame at its render size.
+  wgpu::Texture texture = source.texture;
+  wgpu::Extent3D size = source.size;
+  wgpu::TextureFormat format = source.format;
+  const auto overlay = static_cast<AuroraCaptureOverlay>(g_captureOverlay.load(std::memory_order_acquire));
+  if (screenshot && overlay != AURORA_CAPTURE_OVERLAY_NONE && windowWidth != 0 && windowHeight != 0 &&
+      capture_format_supported(webgpu::g_graphicsConfig.surfaceConfiguration.format)) {
+    encode_capture_image(encoder, source, g_screenshotTarget, windowWidth, windowHeight, 1.f,
+                         overlay == AURORA_CAPTURE_OVERLAY_STAMP);
+    texture = g_screenshotTarget.texture.texture;
+    size = g_screenshotTarget.texture.size;
+    format = g_screenshotTarget.texture.format;
+  }
+  const bool bgra = capture_format_bgra(format);
+  if (!capture_format_supported(format)) {
+    Log.error("Frame {} capture does not support texture format {}", currentFrame, magic_enum::enum_name(format));
     if (screenshot) g_screenshotResult.store(-1, std::memory_order_release);
     return std::nullopt;
   }
-  const uint32_t bytesPerRow = align_to(source.size.width * 4, 256);
-  const uint64_t bufferSize = static_cast<uint64_t>(bytesPerRow) * source.size.height;
+  const uint32_t bytesPerRow = align_to(size.width * 4, 256);
+  const uint64_t bufferSize = static_cast<uint64_t>(bytesPerRow) * size.height;
   const wgpu::BufferDescriptor descriptor{
       .label = "Visual validation frame capture",
       .usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead,
@@ -558,20 +752,20 @@ std::optional<PendingFrameCapture> encode_frame_capture(const wgpu::CommandEncod
   };
   auto buffer = g_device.CreateBuffer(&descriptor);
   const wgpu::TexelCopyTextureInfo sourceInfo{
-      .texture = source.texture,
+      .texture = texture,
       .mipLevel = 0,
       .origin = {0, 0, 0},
       .aspect = wgpu::TextureAspect::All,
   };
   const wgpu::TexelCopyBufferInfo destinationInfo{
-      .layout = {.offset = 0, .bytesPerRow = bytesPerRow, .rowsPerImage = source.size.height},
+      .layout = {.offset = 0, .bytesPerRow = bytesPerRow, .rowsPerImage = size.height},
       .buffer = buffer,
   };
-  encoder.CopyTextureToBuffer(&sourceInfo, &destinationInfo, &source.size);
+  encoder.CopyTextureToBuffer(&sourceInfo, &destinationInfo, &size);
   return PendingFrameCapture{
       .buffer = std::move(buffer),
-      .width = source.size.width,
-      .height = source.size.height,
+      .width = size.width,
+      .height = size.height,
       .bytesPerRow = bytesPerRow,
       .bufferSize = bufferSize,
       .bgra = bgra,
@@ -1723,7 +1917,9 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
       acquire_presentation_image(ctx.interpolatedFrameCount, ctx.snapshotWidth, ctx.snapshotHeight);
   encode_presentation_snapshot(encoder, ctx.presentSource, *finalImage, true, ctx.metalfxEnabled,
                                duplicatedMetalFXOutput ? &duplicatedMetalFXOutput : nullptr);
-  auto pendingFrameCapture = encode_frame_capture(encoder, ctx.presentSource);
+  auto pendingFrameCapture =
+      encode_frame_capture(encoder, ctx.presentSource, ctx.snapshotWidth, ctx.snapshotHeight);
+  encode_video_frame(encoder, ctx.presentSource, ctx.snapshotWidth, ctx.snapshotHeight);
   presentationJobs.push_back({
       .image = std::move(finalImage),
       .logicalFrame = ctx.logicalFrame,
@@ -1767,6 +1963,7 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
     s_lastGroupAnchor = {};
   }
 
+  start_video_readbacks();
   if (pendingFrameCapture.has_value()) {
     complete_frame_capture(*pendingFrameCapture);
   }
@@ -2152,6 +2349,27 @@ void aurora_request_screenshot(const char* outputPath) {
 }
 int aurora_take_screenshot_result() {
   return aurora::g_screenshotResult.exchange(0, std::memory_order_acq_rel);
+}
+void aurora_set_capture_overlay(AuroraCaptureOverlay overlay) {
+  aurora::g_captureOverlay.store(overlay, std::memory_order_release);
+}
+bool aurora_set_video_capture(AuroraVideoFrameCallback callback, void* user, uint32_t maxHeight) {
+#ifdef AURORA_ENABLE_GX
+  if (callback != nullptr &&
+      !aurora::capture_format_supported(aurora::webgpu::g_graphicsConfig.surfaceConfiguration.format)) {
+    return false;
+  }
+  std::lock_guard lock(aurora::g_videoMutex);
+  aurora::g_videoCallback = callback;
+  aurora::g_videoUser = user;
+  aurora::g_videoMaxHeight = maxHeight != 0 ? maxHeight : 1080;
+  return true;
+#else
+  (void)callback;
+  (void)user;
+  (void)maxHeight;
+  return false;
+#endif
 }
 bool aurora_flush_efb_copies_to_ram() {
 #ifdef AURORA_ENABLE_GX

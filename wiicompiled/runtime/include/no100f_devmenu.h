@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include <SDL3/SDL_events.h>
 
@@ -15,6 +16,8 @@ void HandleSdlEvent(const SDL_Event& event) noexcept;
 // Called from settings_overlay::Draw (game thread, once per GXCopyDisp, inside the ImGui frame).
 void Draw() noexcept;
 bool IsOpen() noexcept;
+// The "where" command's answer ("h001 -19.315 0.060 16.083 yaw 90.0"), or why there is none. Game thread.
+std::string WhereText();
 // Game input is held: menu open and focused (click the game or press LB to move with it open), or free camera on.
 bool BlocksInput() noexcept;
 // Free camera: called from the RwCameraBeginUpdate override with the camera about to render.

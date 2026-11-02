@@ -50,7 +50,9 @@ screenshot to the `Screenshots` folder and **F1** opens this page in your browse
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
-free camera, god mode, power-ups on/off, texture finder) and a **DEV** mark with the build in the corner of the game. The build (version,
+free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
+[ffmpeg](https://ffmpeg.org): the launcher offers to download it when you turn the tools on) and a **DEV** mark with the
+build in the corner of the game. The build (version,
 branch and commit of a test build) is also on the F10 **About** page and at the top of `console.log`.
 
 Coming from Scooby-Doo: Refrightened? Unzip FrightWorks next to your old folder. On first start, the launcher offers

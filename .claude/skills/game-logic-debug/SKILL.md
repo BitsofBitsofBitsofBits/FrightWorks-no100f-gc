@@ -65,6 +65,14 @@ source when the game closes (`-SkipTranslate` only if the last build was this br
 `Play\UserData\texture_replacements`, `texture_replacements = true`; both put back afterwards). The user's config has HD off,
 so a bug seen in the release but not in a dev build may be an HD texture: retry with `-HdTextures`.
 
+**F3** in game (same gate, `no100f_recorder.cpp`): video to `Play\Videos\*.mp4` + `.txt` (build, start/end position,
+settings). Frames come from aurora (`aurora_set_video_capture`: presentation image re-rendered at window size, max 1080
+lines, read back async, 60 fps CFR piped raw to ffmpeg); `[game] record_audio` (default on) muxes the game's output in
+by wall-clock time; `[game] capture_overlay` (default off) = F8/F10 in F3 videos and F2 shots, else only the DEV mark
+(ImGui windows `##CaptureStamp` / `##CaptureHidden`, aurora.h). Needs ffmpeg (PATH or `tools\debug\local\ffmpeg`; the
+launcher downloads it when dev tools get turned on). Handy for the human to record a bug while playing; test driver
+`autotest\f3-recording\rec-test.ps1`.
+
 **F8** in game: current scene + Scooby's position, go to any scene (start position), save/delete spots and go to them
 (another scene loads first; one transfer at a time, queued until in play with no cutscene, Cancel travel, 60 s
 timeout; travel turns the free camera off), Skip button (presses the game's own A in a recorded cutscene, Start on the
