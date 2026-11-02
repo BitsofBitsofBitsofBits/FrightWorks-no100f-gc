@@ -9,7 +9,8 @@ Needs your own GameCube disc image: USA v1.01 (GIHE78, revision 1), .iso/.gcm/.c
 2. Press Play. The first time, it asks for your disc image (Extras).
 
 Settings: resolution, widescreen, 60 fps, anti-aliasing, HD textures, skip intro. Extras: disc, holidays,
-developer tools (F8 dev menu + a DEV mark with the build in the corner), folders.
+developer tools (F8 dev menu, F3 video recording: the launcher offers to download ffmpeg for it, a DEV mark
+with the build in the corner), folders.
 In game: F10 = settings, F11 = fullscreen / window, F2 = screenshot (saved in the Screenshots folder),
 F1 = project page in your browser. Gamepads work right away.
 Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, IJKL D-pad.

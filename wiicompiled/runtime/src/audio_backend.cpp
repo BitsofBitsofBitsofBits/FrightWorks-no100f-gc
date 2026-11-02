@@ -36,6 +36,11 @@ void AudioBackend::SetMuted(bool muted) {
     ApplyGainLocked();
 }
 
+void AudioBackend::SetCapture(CaptureFn capture) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_capture = capture;
+}
+
 bool AudioBackend::EnsureInitializedLocked(uint32_t sampleRate, uint32_t channels) {
     if (m_initialized && m_sampleRate == sampleRate && m_channels == channels) {
         return true;
@@ -168,6 +173,10 @@ bool AudioBackend::PushWiiAiSamplesBE16(const uint8_t* data, size_t bytes) {
         m_convertBuffer[frame * 2 + 1] = static_cast<int16_t>(right);
     }
 
+    if (m_capture) {
+        m_capture(m_convertBuffer.data(), frameCount, 2, m_sampleRate);
+    }
+
     const int lenBytes = static_cast<int>(frameCount * 2 * sizeof(int16_t));
     if (!QueueHasCapacityLocked(lenBytes)) {
         return true;
@@ -188,6 +197,10 @@ bool AudioBackend::PushSamplesLE16(const int16_t* samples, size_t sampleCount) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_initialized || !m_stream) {
         return false;
+    }
+
+    if (m_capture && m_channels != 0) {
+        m_capture(samples, sampleCount / m_channels, m_channels, m_sampleRate);
     }
 
     const int lenBytes = static_cast<int>(sampleCount * sizeof(int16_t));

@@ -1,6 +1,7 @@
 #include "imgui.hpp"
 
 #include <cstddef>
+#include <cstring>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -210,6 +211,39 @@ void render(const wgpu::RenderPassEncoder& pass) noexcept {
     ImGui_ImplWGPU_RenderDrawData(data, pass.Get());
     pass.PopDebugGroup();
   }
+}
+
+void render_capture(const wgpu::RenderPassEncoder& pass, bool stampOnly, float scale) noexcept {
+  ZoneScoped;
+  render_frame_data();
+  const ImDrawData* data = ImGui::GetDrawData();
+  if (g_useSdlRenderer || data == nullptr) {
+    return;
+  }
+  // A shallow copy holding a subset of the lists; the backend sizes its viewport and scissors from
+  // DisplaySize * FramebufferScale, so the scale maps window coordinates onto the capture image.
+  ImDrawData capture = *data;
+  capture.CmdLists.clear();
+  capture.TotalVtxCount = 0;
+  capture.TotalIdxCount = 0;
+  for (ImDrawList* list : data->CmdLists) {
+    const char* owner = list->_OwnerName != nullptr ? list->_OwnerName : "";
+    if (std::strcmp(owner, AURORA_CAPTURE_HIDDEN_WINDOW) == 0 ||
+        (stampOnly && std::strcmp(owner, AURORA_CAPTURE_STAMP_WINDOW) != 0)) {
+      continue;
+    }
+    capture.CmdLists.push_back(list);
+    capture.TotalVtxCount += list->VtxBuffer.Size;
+    capture.TotalIdxCount += list->IdxBuffer.Size;
+  }
+  capture.CmdListsCount = capture.CmdLists.Size;
+  if (capture.CmdListsCount == 0) {
+    return;
+  }
+  capture.FramebufferScale = ImVec2(data->FramebufferScale.x * scale, data->FramebufferScale.y * scale);
+  pass.PushDebugGroup("Aurora: Dear Imgui capture");
+  ImGui_ImplWGPU_RenderDrawData(&capture, pass.Get());
+  pass.PopDebugGroup();
 }
 
 ImTextureID add_texture(uint32_t width, uint32_t height, const uint8_t* data) noexcept {

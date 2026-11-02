@@ -1,6 +1,6 @@
 // Dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
 // god mode, monsters off, power-ups on/off, free camera, texture finder. Only with [game] dev_tools = true (launcher: Extras >
-// Developer tools); otherwise it reserves no memory and ignores F7/F8.
+// Developer tools); otherwise it reserves no memory and ignores F3 (video, no100f_recorder), F7 and F8.
 //
 // Scene switch: the game travels through a portal by setting the current scene's pending portal ([scene+0x70]);
 // the scene update (0x800CEB30) then fades out and the switch handler (0x800ACD30, state 0xB/5) reads the portal's
@@ -22,6 +22,7 @@
 // Everything runs on the game thread (settings_overlay::Draw is called from the GXCopyDisp HLE).
 #include "no100f_devmenu.h"
 #include "no100f_devmenu_state.h"
+#include "no100f_recorder.h"
 #include "build_info.h"
 #include "overlay_theme.h"
 
@@ -989,12 +990,7 @@ void PollCommandFile() {
                 g_status = "Saved " + arg;
             }
         } else if (cmd == "where") {
-            Spot s;
-            char b[128];
-            if (ReadPlayer(s))
-                std::snprintf(b, sizeof b, "%s %.3f %.3f %.3f yaw %.1f", Lower(IdString(s.scene)).c_str(), s.x, s.y, s.z,
-                              s.yaw * 180.0f / 3.14159265f);
-            g_status = ReadPlayer(s) ? b : "Player not found.";
+            g_status = WhereText();
         } else if (cmd == "peek" || cmd == "frame") {
             uint32_t addr = 0, n = 64;
             if (cmd == "frame") {
@@ -1172,6 +1168,18 @@ void DrawStatus() {
         ImGui::TextDisabled("%.1f %.1f %.1f  yaw %.0f pitch %.0f", g_cam.x, g_cam.y, g_cam.z,
                             g_cam.yaw * 180.0f / 3.14159265f, g_cam.pitch * 180.0f / 3.14159265f);
     }
+    bool recordAudio = RuntimeConfigFile::RecordAudio();
+    if (OverlayTheme::Toggle("Record audio (F3 videos)", &recordAudio)) RuntimeConfigFile::SetRecordAudio(recordAudio);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("F3 starts / stops a video of the game (Videos folder, needs ffmpeg).\n"
+                          "On: the video has the game's sound (before the volume and mute settings).\n"
+                          "Applies to the next recording.");
+    bool captureOverlay = RuntimeConfigFile::CaptureOverlay();
+    if (OverlayTheme::Toggle("Menus in screenshots and videos", &captureOverlay))
+        RuntimeConfigFile::SetCaptureOverlay(captureOverlay);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: F2 screenshots and F3 videos show this menu, the F10 board and notices.\n"
+                          "Off: only the DEV stamp with the build. The REC light is never recorded.");
     if (!g_status.empty()) ImGui::TextWrapped("%s", g_status.c_str());
 }
 
@@ -1631,6 +1639,8 @@ void HandleSdlEvent(const SDL_Event& event) noexcept {
     if (!Enabled()) return;
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F8) g_open = !g_open;
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F7) CycleCutoutMode();
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F3)
+        no100f_recorder::Toggle();
     // LB: not mapped on the default controller layouts (it is L on the NSO GameCube one)
     if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER && g_open)
         g_toggleFocus = true;
@@ -1642,6 +1652,15 @@ uint16_t PressedButtons() noexcept {
 }
 
 bool IsOpen() noexcept { return g_open; }
+
+std::string WhereText() {
+    Spot s;
+    if (!ReadPlayer(s)) return "Player not found.";
+    char b[128];
+    std::snprintf(b, sizeof b, "%s %.3f %.3f %.3f yaw %.1f", Lower(IdString(s.scene)).c_str(), s.x, s.y, s.z,
+                  s.yaw * 180.0f / 3.14159265f);
+    return b;
+}
 
 bool BlocksInput() noexcept { return (g_open && g_focused) || g_cam.on; }
 
