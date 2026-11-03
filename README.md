@@ -44,7 +44,7 @@ are left unchanged.
 Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** as `.iso`,
 `.gcm` or `.ciso`.
 
-1. From the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest), run
+1. From the [latest release](https://github.com/FrightWorks/FrightWorks-no100f/releases/latest), run
    `FrightWorks-win-Setup.exe` (installs for your Windows user, no admin rights; Start menu and desktop shortcuts), or
    unzip `FrightWorks-<version>.zip` anywhere if you'd rather keep everything in one folder.
 2. Open **FrightWorks** and press **Play**. The first time, it asks for your disc image (**Extras**).

@@ -9,7 +9,7 @@ namespace ScoobyReMasked;
 sealed class MainForm : Form
 {
     internal const string GameExe = DataPaths.GameExe, AppTitle = "FrightWorks: Night of 100 Frights";
-    const string ProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+    const string ProjectUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
 
     readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
