@@ -384,9 +384,9 @@ int run(std::function<int()> game) {
                 const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
                     nextDisplayRefresh - std::chrono::steady_clock::now()).count();
                 SDL_Event event{};
-                SDL_ClearError();
+                // false means the timeout passed. Don't read SDL_GetError() here: SDL can leave an
+                // error string from a failure it handled (device detection runs inside this wait).
                 const bool received = SDL_WaitEventTimeout(&event, static_cast<Sint32>(std::max<int64_t>(1, remaining)));
-                if (!received && *SDL_GetError()) throw std::runtime_error(SDL_GetError());
                 bool changed = received && queue_event(event);
                 changed |= collect_events();
                 if (changed) publish();
