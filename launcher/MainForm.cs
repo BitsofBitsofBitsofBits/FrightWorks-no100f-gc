@@ -252,6 +252,16 @@ sealed class MainForm : Form
         body.Controls.Add(controls);
     }
 
+    // Config values as the game reads them: numbers by value (F10 writes 8 or 0.75, a hand-edited file may say 8.0 or
+    // 2.250), the rest as text without the quotes.
+    static bool SameValue(string a, string b)
+    {
+        a = a.Trim('"');
+        b = b.Trim('"');
+        return a == b || double.TryParse(a, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) &&
+                         double.TryParse(b, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) && x == y;
+    }
+
     void BuildDisplay(FlowLayoutPanel body)
     {
         var cfg = new GameConfig(configPath);
@@ -261,8 +271,8 @@ sealed class MainForm : Form
             var box = new ThemedCombo();
             foreach (var o in options) box.Items.Add(o.text);
             var current = cfg.Get("video", key) ?? fallback;
-            int index = Array.FindIndex(options, o => o.raw.Trim('"') == current.Trim('"'));
-            box.SelectedIndex = index >= 0 ? index : Array.FindIndex(options, o => o.raw.Trim('"') == fallback);
+            int index = Array.FindIndex(options, o => SameValue(o.raw, current));
+            box.SelectedIndex = index >= 0 ? index : Array.FindIndex(options, o => SameValue(o.raw, fallback));
             box.SelectedIndexChanged += (_, _) =>
             {
                 var c = new GameConfig(configPath);
