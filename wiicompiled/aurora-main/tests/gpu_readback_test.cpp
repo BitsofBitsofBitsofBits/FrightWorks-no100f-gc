@@ -268,9 +268,14 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0) {
   GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
   GXSetZMode(true, GX_LEQUAL, true);
   quad(variant == 1 ? -1.5f : -3.f, {255, 0, 0, static_cast<u8>(variant == 2 ? 64 : 255)});
-  if (variant == 6 || variant == 7) {
-    GXSetZMode(variant == 6, GX_ALWAYS, variant == 6);
-    quad(-1.f, {255, 255, 255, 255});
+  if (variant == 6 || variant == 7 || variant == 9 || variant == 10) {
+    if (variant == 9) {
+      const float ortho[]{1.f, 1.f, 0.f, 1.f, 0.f, 0.f, -0.5f};
+      GXSetProjectionv(ortho);
+    }
+    GXSetZMode(variant != 7, variant == 9 ? GX_LEQUAL : variant == 10 ? GX_EQUAL : GX_ALWAYS,
+               variant == 6);
+    quad(variant == 10 ? -3.f : -1.f, {255, 255, 255, 255});
   }
   gx::fifo::drain();
   if (variant == 8) {
@@ -345,7 +350,7 @@ int main(int argc, char** argv) {
         check_alpha_pixel(pixels, 4, {127, 128, 0});
         check_alpha_pixel(pixels, 12, {255, 0, 0});
       }
-      for (unsigned variant : {6, 7, 8})
+      for (unsigned variant : {6, 7, 8, 9, 10})
         check_alpha_pixel(run_alpha_order(mode, variant), 4, {255, 255, 255});
     }
     check_alpha_pixel(run_alpha_order(gx::CutoutMode::TwoPassAll, 2), 4, {32, 128, 95});

@@ -110,6 +110,8 @@ occlusion, soft cut-out fringes, translucent submission order, viewport/scissor 
 With the enhanced two-pass cut-out modes, each render pass finishes solid geometry, then cut-out fringes, then
 depth-tested translucent world draws. Clears, overlays and non-monotonic depth passes flush that ordering.
 Original-game and single-cut modes retain the game's submission order; the test checks those controls too.
+This intentionally improves inherited foliage ordering in the enhanced modes, rather than claiming a mismatch
+with console rendering. Translucent systems keep their submission order; this is not per-particle depth sorting.
 
 ## 4. Playtest a level
 
