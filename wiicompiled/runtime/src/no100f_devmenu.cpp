@@ -1,5 +1,5 @@
 // Dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
-// god mode, monsters off, power-ups on/off, free camera, texture finder. Only with [game] dev_tools = true (launcher: Extras >
+// god mode, player stats, monsters off, power-ups on/off, free camera, texture finder. Only with [game] dev_tools = true (launcher: Extras >
 // Developer tools); otherwise it reserves no memory and ignores F3 (video, no100f_recorder), F7 and F8.
 //
 // Scene switch: the game travels through a portal by setting the current scene's pending portal ([scene+0x70]);
@@ -22,7 +22,10 @@
 // Everything runs on the game thread (settings_overlay::Draw is called from the GXCopyDisp HLE).
 #include "no100f_devmenu.h"
 #include "no100f_devmenu_state.h"
+#include "no100f_devmenu_progress.h"
+#include "no100f_game_state.h"
 #include "no100f_recorder.h"
+#include "no100f_resources.h"
 #include "build_info.h"
 #include "overlay_theme.h"
 
@@ -58,6 +61,12 @@
 #include "runtime_config.h"
 
 extern "C" void func_8016A300(CpuContext* ctx);  // the game's RwFrameUpdateObjects
+extern "C" void func_80045AC8(CpuContext* ctx);
+extern "C" void func_8001C1C4(CpuContext* ctx);
+extern "C" void func_80048B2C(CpuContext* ctx);
+extern "C" void func_800D5150(CpuContext* ctx);
+extern "C" void func_8004C968(CpuContext* ctx);
+extern "C" void func_8005A0A8(CpuContext* ctx);
 
 namespace no100f_devmenu {
 namespace {
@@ -65,8 +74,8 @@ namespace {
 constexpr uint32_t kSceneCurPtr = 0x80245CF4u;     // globals (0x80245190) + 0xB64: current scene
 constexpr uint32_t kPlayerFramePtr = 0x802453C8u;    // globals + 0x238: player entity frame (matrix first, pos at +0x30)
 constexpr uint32_t kPlayerModelPtr = 0x802453B4u;  // globals + 0x224: player model instance, [+0x20] = its matrix
-constexpr uint32_t kGameMode = 0x80270E18u;        // r13-0x7468: 0xB in game
-constexpr uint32_t kGameState = 0x802703C8u;       // r13-0x7EB8: 1 = playing, 4 = fade out, 5 = scene switch
+constexpr uint32_t kGameMode = no100f_game_state::kModeAddress;
+constexpr uint32_t kGameState = no100f_game_state::kStateAddress;
 constexpr uint32_t kCameraTarget = 0x801BD0A0u;    // camera follow target: current (+0), previous (+0xC)
 constexpr uint32_t kAreaTable = 0x801D6428u;       // 13 x 16: name, letter << 24, index, 0
 constexpr uint32_t kLevelTable = 0x801D651Cu;      // 36-byte entries: title, index, snacks, snacks, tokens, 4 scene IDs
@@ -113,6 +122,11 @@ bool g_spotsLoaded = false;
 bool g_thisSceneOnly = true;
 char g_newSpotName[64] = "";
 std::string g_status;
+GalleryRules g_galleryRules;
+SnackConfirmation g_snackConfirmation;
+uint32_t g_playerEditScene = 0, g_playerEditSceneId = 0;
+bool g_playerInputsReady = false;
+int g_healthInput = 3, g_snacksInput = 0, g_snackAreaInput = 0, g_snackArea = 1;
 
 // A spot in another scene: teleport after the switch, once the scene has been in play for kSettleFrames.
 constexpr int kSettleFrames = 15;
@@ -263,6 +277,298 @@ uint32_t CurrentSceneId() {
 }
 bool CutscenePlaying() { return Read32Or0(kCutsceneMgr) != 0; }
 bool InPlay() { return Read32Or0(kGameMode) == 0xB && Read32Or0(kGameState) == 1 && CurrentScenePtr(); }
+bool ProgressRead(uint32_t address, uint32_t& value) {
+    return GuestRange(address, 4) && Memory::TryRead32(address, value);
+}
+
+ProgressAvailability ProgressState() {
+    const uint32_t scene = CurrentScenePtr();
+    uint32_t portal = 0, movie = 0, control = 0;
+    const bool readable = scene && ProgressRead(scene + 0x70, portal) &&
+                          ProgressRead(no100f_game_state::kMovieAddress, movie) &&
+                          ProgressRead(kPlayerControl, control);
+    const CpuContext* context = TryGetCpuContext();
+    const bool safeContext = context && context->gpr[1] >= 0x80001000u &&
+                             GuestRange(context->gpr[1] - 0x1000, 0x1020) &&
+                             Memory::Contains(context->gpr[1] - 0x1000, 0x1020);
+    return {no100f_game_state::g_diagnosticLayoutVerified.load(), readable && InPlay(),
+            CutscenePlaying(), movie != 0, control == 1,
+            portal != 0 || g_pendingSpot || g_sceneRequest.Active(), safeContext};
+}
+
+struct GallerySnapshot {
+    std::array<uint32_t, kGalleryConditionCount> bases{};
+    bool pictures = false, movies = false;
+    const char* reason = nullptr;
+};
+
+GallerySnapshot ReadGallery() {
+    GallerySnapshot result;
+    if (!no100f_game_state::g_diagnosticLayoutVerified.load()) {
+        result.reason = "Unsupported executable layout.";
+        return result;
+    }
+    const uint32_t scene = CurrentScenePtr();
+    uint32_t count, list;
+    if (!InPlay() || CurrentSceneId() != kGalleryScene || !ProgressRead(scene + 0x74, count) ||
+        count == 0 || count > 4000 || !ProgressRead(scene + 0x78, list) || !GuestRange(list, count * 4)) {
+        result.reason = "Requires the loaded H003 gallery scene.";
+        return result;
+    }
+    std::map<uint32_t, uint32_t> objects;
+    if (!ReadSceneObjects(ProgressRead, list, count, objects)) {
+        result.reason = "Unreadable/ambiguous gallery scene objects.";
+        return result;
+    }
+    const auto find = [&](uint32_t id) {
+        const auto it = objects.find(id);
+        return it == objects.end() ? 0u : it->second;
+    };
+    result.pictures = result.movies = true;
+    for (size_t i = 0; i < result.bases.size(); ++i) {
+        const auto spec = ConditionAt(i);
+        if (!ValidateCondition(ProgressRead, find, spec, result.bases[i])) {
+            (spec.section == GallerySection::Pictures ? result.pictures : result.movies) = false;
+        }
+    }
+    if (!result.pictures || !result.movies)
+        result.reason = "Missing or modified gallery condition/link schema; affected section unavailable.";
+    return result;
+}
+
+void ObserveGallery() {
+    const uint32_t scene = CurrentScenePtr(), id = CurrentSceneId(), mode = Read32Or0(kGameMode);
+    const bool loading = mode == 11 && Read32Or0(kGameState) == 5;
+    g_galleryRules.Observe(scene, id, mode, scene != 0 && !loading &&
+                          no100f_game_state::g_diagnosticLayoutVerified.load());
+}
+
+uint32_t NaturalCondition(uint32_t base) {
+    CpuContext call = *TryGetCpuContext();
+    CpuContextScope scope(&call);
+    call.gpr[3] = base;
+    func_80045AC8(&call);
+    return static_cast<uint32_t>(call.gpr[3]);
+}
+
+std::string WarpReadout() {
+    if (!no100f_game_state::g_diagnosticLayoutVerified.load()) return "warps unavailable: unsupported executable layout";
+    std::array<uint32_t, 26> flags{};
+    if (!ReadWarps(ProgressRead, flags)) return "warps unavailable: unreadable/modified table or non-boolean flag";
+    std::string text = "warp discovery:";
+    for (size_t i = 0; i < flags.size(); ++i)
+        text += " " + Lower(IdString(kWarpScenes[i])) + "=" + std::to_string(flags[i]);
+    return text;
+}
+
+std::string ChangeWarp(size_t index, bool enabled) {
+    if (const char* reason = ProgressState().Reason()) return std::string("warp rejected: ") + reason;
+    uint32_t before = 0;
+    const bool changed = WriteWarp(ProgressRead, [index](uint32_t address, uint32_t value) {
+        if (value == 1) {
+            CpuContext call = *TryGetCpuContext();
+            CpuContextScope scope(&call);
+            call.gpr[3] = static_cast<uint32_t>(index);
+            func_8004C968(&call);
+            return true;
+        }
+        return Memory::TryWrite32(address, value);
+    }, index, enabled, before);
+    if (!changed) return "warp failed: invalid table/index/value or write/readback failure; inspect live flags.";
+    return "warp " + Lower(IdString(kWarpScenes[index])) + " " + std::to_string(before) + " -> " +
+           (enabled ? "1" : "0") + "; live discovery edit; approach can unlock again; normal saves can retain it.";
+}
+
+std::string ChangeGallery(GallerySection section, GalleryRule rule) {
+    ObserveGallery();
+    if (const char* reason = ProgressState().Reason()) return std::string("gallery rejected: ") + reason;
+    const GallerySnapshot snapshot = ReadGallery();
+    if (!(section == GallerySection::Pictures ? snapshot.pictures : snapshot.movies))
+        return std::string("gallery rejected: ") + snapshot.reason;
+    // Let menu entry/browsing evaluate conditions; eager evaluation exposes hidden movie icons on other screens.
+    g_galleryRules.Set(section, rule);
+    return std::string(section == GallerySection::Pictures ? "pictures: " : "movies: ") + RuleName(rule) +
+           "; gallery-only test override, progression unchanged. Reopen/browse the gallery to refresh.";
+}
+
+std::string GalleryReadout() {
+    ObserveGallery();
+    if (const char* reason = ProgressState().Reason()) return std::string("gallery unavailable: ") + reason;
+    const GallerySnapshot snapshot = ReadGallery();
+    if (!snapshot.pictures && !snapshot.movies) return std::string("gallery unavailable: ") + snapshot.reason;
+    std::string text = "gallery";
+    for (GallerySection section : {GallerySection::Pictures, GallerySection::Movies}) {
+        text += std::string("\n  ") + (section == GallerySection::Pictures ? "pictures" : "movies") + ": ";
+        if (!(section == GallerySection::Pictures ? snapshot.pictures : snapshot.movies)) {
+            text += snapshot.reason;
+            continue;
+        }
+        const auto rule = g_galleryRules.Get(section);
+        text += RuleName(rule);
+        for (size_t i = 0; i < snapshot.bases.size(); ++i) {
+            const auto spec = ConditionAt(i);
+            if (spec.section != section || (section == GallerySection::Movies && !spec.visibility)) continue;
+            const bool natural = NaturalCondition(snapshot.bases[i]) != 0;
+            const bool effective = rule == GalleryRule::Natural ? natural : rule == GalleryRule::Unlocked;
+            text += " " + std::to_string(section == GallerySection::Pictures ? i + 1 :
+                                       (i - kPictureEntries.size()) / 2 + 1) +
+                    "[game=" + (natural ? "open" : "locked") + ",effective=" +
+                    (effective ? "open" : "locked") + "]";
+        }
+    }
+    return text;
+}
+
+void ProgressLog(const std::string& action, const std::string& result) {
+    std::ofstream log("devmenu.log", std::ios::app);
+    if (!log) {
+        RT_LOGF(RT_TAG_RUNTIME, "[devmenu] cannot open devmenu.log for %s\n", action.c_str());
+        g_status = result + " (Could not write devmenu.log.)";
+        return;
+    }
+    log << action << " -> " << result << "\n";
+    if (!log) RT_LOGF(RT_TAG_RUNTIME, "[devmenu] cannot write devmenu.log for %s\n", action.c_str());
+}
+
+const char* PlayerReason(PlayerStats& snapshot, bool* readable = nullptr) {
+    if (readable) *readable = false;
+    if (const char* reason = ProgressState().Reason()) return reason;
+    if (CurrentSceneId() == 0) return "Missing current scene identity.";
+    const CpuContext* context = TryGetCpuContext();
+    if (!context || context->gpr[13] != kPlayerSda) return "Unsupported game-thread SDA layout.";
+    if (!ReadPlayerStats(ProgressRead, snapshot)) return "Unreadable player statistics.";
+    if (readable) *readable = true;
+    return snapshot.Reason();
+}
+
+void ObservePlayerEdits() {
+    PlayerStats snapshot;
+    const char* reason = PlayerReason(snapshot);
+    const uint32_t scene = CurrentScenePtr(), id = CurrentSceneId();
+    const bool reset = reason || scene != g_playerEditScene || id != g_playerEditSceneId;
+    SnackAreas areas{};
+    if (g_snackConfirmation.active &&
+        (reset || !ReadSnackAreas(ProgressRead, areas) || !g_snackConfirmation.Matches(scene, id, areas))) {
+        g_snackConfirmation.Clear();
+        g_status = "Collected-snack confirmation cancelled: scene, availability or area state changed.";
+        ProgressLog("snackcancel", g_status);
+    }
+    if (reset) g_playerInputsReady = false;
+    g_playerEditScene = reason ? 0 : scene;
+    g_playerEditSceneId = reason ? 0 : id;
+}
+
+std::string PlayerReadout() {
+    PlayerStats snapshot;
+    if (const char* reason = PlayerReason(snapshot)) return std::string("player unavailable: ") + reason;
+    return "player health=" + std::to_string(snapshot.health) + "/5 snacks=" + std::to_string(snapshot.snacks) +
+           " payment=0; one-time live edits; collected progression is separate.";
+}
+
+std::string SnackAreaLabel(uint32_t index, const SnackArea& area) {
+    return std::to_string(index) + ". " + CStr(area.title);
+}
+
+std::string SnackAreasReadout() {
+    PlayerStats player;
+    if (const char* reason = PlayerReason(player)) return std::string("snackareas unavailable: ") + reason;
+    SnackAreas areas{};
+    if (!ReadSnackAreas(ProgressRead, areas)) return "snackareas unavailable: unreadable/modified area schema or counts.";
+    std::ostringstream result;
+    uint32_t total = 0;
+    for (uint32_t i = 1; i < areas.size(); ++i) {
+        result << "\n  " << SnackAreaLabel(i, areas[i]) << " collected=" << areas[i].collected
+               << " target=" << areas[i].target;
+        total += areas[i].collected;
+    }
+    result << "\nAll real areas collected (sum)=" << total << "; physical pickups/scene-local counts unchanged.";
+    return result.str();
+}
+
+std::string ChangePlayerStat(PlayerStat stat, uint32_t value) {
+    PlayerStats snapshot;
+    if (const char* reason = PlayerReason(snapshot)) return std::string("player edit rejected: ") + reason;
+    uint32_t before;
+    const bool changed = WritePlayerStat(ProgressRead, [&](uint32_t address, uint32_t count) {
+        if (stat == PlayerStat::Health && count > snapshot.health) {
+            CpuContext call = *TryGetCpuContext();
+            CpuContextScope scope(&call);
+            call.gpr[3] = count - snapshot.health;
+            func_8005A0A8(&call);
+            return true;
+        }
+        return Memory::TryWrite32(address, count);
+    }, stat, value, before);
+    if (!changed) return "player edit failed: invalid value/state or write/readback failure; inspect live values.";
+    return std::string(stat == PlayerStat::Health ? "health " : "spendable snacks ") + std::to_string(before) +
+           " -> " + std::to_string(value) + (stat == PlayerStat::Health ?
+           "; one-time stat edit, not damage simulation." :
+           "; collection totals/pickups unchanged; a normal save can retain it.");
+}
+
+std::string StageSnackArea(uint32_t index, uint32_t value) {
+    g_snackConfirmation.Clear();
+    PlayerStats player;
+    if (const char* reason = PlayerReason(player)) return std::string("snackarea rejected: ") + reason;
+    SnackAreas areas{};
+    if (!ReadSnackAreas(ProgressRead, areas)) return "snackarea rejected: unreadable/modified area schema or counts.";
+    if (!g_snackConfirmation.Stage(CurrentScenePtr(), CurrentSceneId(), index, value, areas))
+        return "snackarea rejected: select area 1..29 and a count within its live target.";
+    g_snackArea = static_cast<int>(index);
+    g_snackAreaInput = static_cast<int>(value);
+    return "CONFIRM collected progression: " + SnackAreaLabel(index, areas[index]) + " " +
+           std::to_string(areas[index].collected) + " -> " + std::to_string(value) +
+           ". Can affect galleries and later normal saves; balance/physical pickups unchanged. Use snackconfirm or Cancel.";
+}
+
+std::string ConfirmSnackArea() {
+    const SnackConfirmation pending = g_snackConfirmation;
+    g_snackConfirmation.Clear();
+    PlayerStats player;
+    if (const char* reason = PlayerReason(player)) return std::string("snackconfirm rejected: ") + reason;
+    if (!pending.active) return "snackconfirm rejected: no staged progression edit.";
+    if (!WriteSnackArea(ProgressRead, Memory::TryWrite32, pending, CurrentScenePtr(), CurrentSceneId()))
+        return "snackconfirm failed: stale confirmation, unsupported state or write/readback failure; inspect counts.";
+    return "area " + std::to_string(pending.area) + " collected " + std::to_string(pending.before) + " -> " +
+           std::to_string(pending.value) + "; balance/other areas/physical pickups unchanged. Normal saves can retain it.";
+}
+
+bool HandlePlayerCommand(const std::string& command, const std::string& arguments) {
+    if (!IsPlayerCommand(command)) return false;
+    const auto parsed = ParsePlayerCommand(command, arguments);
+    using Kind = PlayerCommand::Kind;
+    switch (parsed.kind) {
+    case Kind::Read: g_status = PlayerReadout(); break;
+    case Kind::Health: g_status = ChangePlayerStat(PlayerStat::Health, parsed.value); break;
+    case Kind::Snacks: g_status = ChangePlayerStat(PlayerStat::Snacks, parsed.value); break;
+    case Kind::Areas: g_status = SnackAreasReadout(); break;
+    case Kind::Stage: g_status = StageSnackArea(parsed.area, parsed.value); break;
+    case Kind::Confirm: g_status = ConfirmSnackArea(); break;
+    case Kind::Cancel: g_snackConfirmation.Clear(); g_status = "Collected-snack confirmation cancelled."; break;
+    default:
+        g_snackConfirmation.Clear();
+        g_status = "Invalid player command. Use player | health 1..5 | snacks 0..99999 | snackareas | "
+                   "snackarea INDEX COUNT (stage) | snackconfirm | snackcancel. Pending confirmation cancelled.";
+        break;
+    }
+    return true;
+}
+
+bool HandleProgressCommand(const std::string& command, const std::string& arguments) {
+    if (command != "warps" && command != "warp" && command != "gallery") return false;
+    const auto parsed = ParseProgressCommand(command, arguments);
+    switch (parsed.kind) {
+    case ProgressCommand::Kind::Warps: g_status = WarpReadout(); break;
+    case ProgressCommand::Kind::Warp: g_status = ChangeWarp(parsed.warp, parsed.enabled); break;
+    case ProgressCommand::Kind::Gallery: g_status = GalleryReadout(); break;
+    case ProgressCommand::Kind::GallerySet: g_status = ChangeGallery(parsed.section, parsed.rule); break;
+    default:
+        g_status = "Invalid command. Use warps | warp SCENE on|off | gallery [pictures|movies natural|locked|unlocked].";
+        break;
+    }
+    return true;
+}
+
 bool SkippableSequence() {
     return SkipControlFor(Read32Or0(kGameMode), Read32Or0(kGameState), CutscenePlaying()) != SkipControl::None;
 }
@@ -927,6 +1233,150 @@ const Spot* FindSpot(const std::string& name, uint32_t scene) {
 // devmenu.txt (cwd = Play), read every 30 frames and then deleted; results go to devmenu.log. The file waits (is
 // left alone) until the game is in play with no scene/spot transfer pending, unless every line is "skip" or, with no
 // transfer pending, "scene".
+std::string ReadinessText() {
+    ObserveGallery();
+    const ProgressAvailability state = ProgressState();
+    const auto flag = [](uint32_t address) -> std::string {
+        uint32_t value;
+        if (!ProgressRead(address, value)) return "unavailable";
+        return value ? "yes" : "no";
+    };
+    const bool layout = no100f_game_state::g_diagnosticLayoutVerified.load();
+    const auto guestFlag = [&](uint32_t address) { return layout ? flag(address) : "unsupported"; };
+    const auto guestWord = [&](uint32_t address) -> std::string {
+        uint32_t value;
+        if (!layout) return "unsupported";
+        return ProgressRead(address, value) ? std::to_string(value) : "unavailable";
+    };
+    PlayerStats player;
+    const char* playerReason = PlayerReason(player);
+    return std::string("interaction readiness: ") + (state.Reason() ? state.Reason() : "ready") +
+           "\n  mode=" + guestWord(kGameMode) + " state=" + guestWord(kGameState) +
+           "\n  cutscene=" + guestFlag(kCutsceneMgr) + " movie=" + guestFlag(no100f_game_state::kMovieAddress) +
+           " control=" + guestFlag(kPlayerControl) +
+           "\n  portal=" + (CurrentScenePtr() ? guestFlag(CurrentScenePtr() + 0x70) : "unavailable") +
+           " travel=" + (g_sceneRequest.Active() ? "pending" : "none") +
+           " spot=" + (g_pendingSpot ? "pending" : "none") +
+           " freecam=" + (g_cam.on ? "on" : "off") + " input_capture=" + (BlocksInput() ? "yes" : "no") +
+           "\n  pictures=" + RuleName(g_galleryRules.Get(GallerySection::Pictures)) +
+           " movies=" + RuleName(g_galleryRules.Get(GallerySection::Movies)) +
+           "\n  player_edits=" + (playerReason ? playerReason : "ready");
+}
+
+std::string ProgressReceipt() {
+    std::ostringstream result;
+    result << "progress receipt build=" << BuildInfo::Id() << "\n" << WhereText();
+    result << "\nprofile_data=" << RuntimeConfigFile::PathToUtf8(RuntimeConfigFile::ApplicationDataDirectory())
+           << "\nprofile_saves=" << RuntimeConfigFile::PathToUtf8(RuntimeConfigFile::SavesDirectory());
+    if (no100f_game_state::g_diagnosticLayoutVerified.load()) {
+        uint32_t map, powers;
+        if (ProgressRead(kMapReceived, map) && ProgressRead(kPowerups, powers))
+            result << "\nMap=" << map << " gadgets=0x" << std::hex << powers << std::dec;
+        else
+            result << "\nMap/gadgets unavailable: unreadable state";
+    } else {
+        result << "\nMap/gadgets unavailable: unsupported layout";
+    }
+    result << "\n" << PlayerReadout() << "\n" << WarpReadout() << "\n" << GalleryReadout() << "\n" << ReadinessText();
+    return result.str();
+}
+
+void DrawWarps() {
+    ImGui::TextWrapped("One-time live discovery edits. Approaching a gate can unlock it again. Normal saves can retain changes.");
+    if (!no100f_game_state::g_diagnosticLayoutVerified.load()) {
+        ImGui::TextDisabled("Unavailable: unsupported executable layout.");
+        return;
+    }
+    std::array<uint32_t, 26> flags{};
+    if (!ReadWarps(ProgressRead, flags)) {
+        ImGui::TextWrapped("Unavailable: unreadable/modified table or non-boolean flag.");
+        return;
+    }
+    const char* reason = ProgressState().Reason();
+    if (reason) ImGui::TextWrapped("Edits unavailable: %s", reason);
+    uint32_t discovered = 0;
+    for (uint32_t flag : flags) discovered += flag;
+    ImGui::Text("Discovered %u / 26", discovered);
+    for (size_t i = 0; i < flags.size(); ++i) {
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::TextWrapped("%s%s", SceneName(kWarpScenes[i]).c_str(),
+                           CurrentSceneId() == kWarpScenes[i] ? " (current scene)" : "");
+        ImGui::Text("Index %zu: discovery %u", i, flags[i]);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(reason != nullptr);
+        if (ImGui::Button(flags[i] ? "Disable" : "Enable")) {
+            g_status = ChangeWarp(i, flags[i] == 0);
+            ProgressLog("warp " + Lower(IdString(kWarpScenes[i])), g_status);
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        ImGui::Separator();
+    }
+}
+
+void DrawGallery() {
+    ImGui::TextWrapped("H003-only access tests, not progression edits. Overrides clear when leaving the gallery. Normal movie playback can still update watched state.");
+    const GallerySnapshot snapshot = ReadGallery();
+    if (snapshot.reason) ImGui::TextWrapped("%s", snapshot.reason);
+    const char* reason = ProgressState().Reason();
+    if (reason) ImGui::TextWrapped("Edits unavailable: %s", reason);
+    for (GallerySection section : {GallerySection::Pictures, GallerySection::Movies}) {
+        const bool available = section == GallerySection::Pictures ? snapshot.pictures : snapshot.movies;
+        const char* label = section == GallerySection::Pictures ? "Picture Gallery" : "Movie Gallery";
+        ImGui::PushID(label);
+        ImGui::Text("%s: %s", label, RuleName(g_galleryRules.Get(section)));
+        int selected = static_cast<int>(g_galleryRules.Get(section));
+        ImGui::BeginDisabled(!available || reason != nullptr);
+        if (ImGui::Combo("Test access", &selected, "Game rules\0Force locked\0Force unlocked\0")) {
+            g_status = ChangeGallery(section, static_cast<GalleryRule>(selected));
+            ProgressLog(std::string("gallery ") + label, g_status);
+        }
+        ImGui::EndDisabled();
+        if (available && !reason && ImGui::TreeNode("Natural availability (read-only)")) {
+            if (section == GallerySection::Pictures) {
+                CpuContext call = *TryGetCpuContext();
+                CpuContextScope scope(&call);
+                func_800D5150(&call);
+                ImGui::Text("Snack-complete areas: %u / 30", static_cast<uint32_t>(call.gpr[3]));
+            }
+            for (size_t i = 0; i < snapshot.bases.size(); ++i) {
+                const auto spec = ConditionAt(i);
+                if (spec.section != section || (section == GallerySection::Movies && !spec.visibility)) continue;
+                const unsigned number = static_cast<unsigned>(section == GallerySection::Pictures ? i + 1 :
+                                                              (i - kPictureEntries.size()) / 2 + 1);
+                const bool natural = NaturalCondition(snapshot.bases[i]) != 0;
+                const GalleryRule rule = g_galleryRules.Get(section);
+                const bool effective = rule == GalleryRule::Natural ? natural : rule == GalleryRule::Unlocked;
+                ImGui::Text("%s %u: game %s, effective %s", section == GallerySection::Pictures ? "Picture" : "Movie",
+                            number, natural ? "open" : "locked", effective ? "open" : "locked");
+                if (section == GallerySection::Pictures) {
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(requires %u complete areas)", spec.threshold);
+                }
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+    ImGui::BeginDisabled(reason != nullptr || (!snapshot.pictures && !snapshot.movies));
+    if (ImGui::Button("Clear gallery overrides")) {
+        g_galleryRules.Clear();
+        g_status = "Gallery overrides cleared. Reopen/browse the gallery to refresh.";
+        ProgressLog("gallery clear", g_status);
+    }
+    ImGui::EndDisabled();
+    ImGui::TextWrapped("Visibility refreshes through normal gallery entry/browsing. Close/reopen the gallery after changes.");
+}
+
+void DrawDiagnostics() {
+    ImGui::TextWrapped("%s", ReadinessText().c_str());
+    if (ImGui::Button("Log progression receipt")) {
+        g_status = ProgressReceipt();
+        ProgressLog("receipt", g_status);
+    }
+    ImGui::TextDisabled("Read-only; local devmenu.log only. No import/restore.");
+}
+
 //   scene ID            go to scene ID (start position; queued until the game is in play with no cutscene)
 //   skip                skip the recorded cutscene / title intro / attract demo with the game's own button
 //   spot NAME           go to a saved spot
@@ -938,6 +1388,11 @@ const Spot* FindSpot(const std::string& name, uint32_t scene) {
 //   god on|off          god mode
 //   powerups [all|none|HEX]  log powers; unlock main-game set / lock everything / set gadget mask (Map unchanged)
 //   powerup NAME on|off unlock / lock one (Map or sd2.ini name without eSPECIAL_, e.g. Spring)
+//   player / health 1..5 / snacks 0..99999  read / one-time player-stat edits
+//   snackareas / snackarea INDEX COUNT / snackconfirm / snackcancel  separate confirmed area-counter edits
+//   warps / warp SCENE on|off    read / change one live discovery flag (normal saves can retain it)
+//   gallery [pictures|movies natural|locked|unlocked]  H003-only access tests, not progression edits
+//   receipt / readiness         read-only progression receipt / interaction blockers
 //   monsters [on|off]   list this scene's monsters; all monsters off (every scene) / back on
 //   monster N|NAME on|off
 //   ents                log the scene's entity list
@@ -962,7 +1417,9 @@ void PollCommandFile() {
             std::istringstream ss(l);
             std::string cmd;
             if (!(ss >> cmd)) continue;
-            if (cmd != "skip" && !(cmd == "scene" && !busy)) return;  // wait for play
+            const bool diagnostic = cmd == "warps" || cmd == "warp" || cmd == "gallery" ||
+                                    cmd == "receipt" || cmd == "readiness" || IsPlayerCommand(cmd);
+            if (cmd != "skip" && !(cmd == "scene" && !busy) && !diagnostic) return;  // wait for play
         }
     }
     std::remove("devmenu.txt");
@@ -973,7 +1430,11 @@ void PollCommandFile() {
         ss >> cmd;
         std::getline(ss >> std::ws, arg);
         g_status.clear();
-        if (cmd == "skip") {
+        if (HandleProgressCommand(cmd, arg) || HandlePlayerCommand(cmd, arg)) {
+        } else if (cmd == "receipt" || cmd == "readiness") {
+            g_status = !arg.empty() ? "receipt/readiness take no arguments." :
+                       cmd == "receipt" ? ProgressReceipt() : ReadinessText();
+        } else if (cmd == "skip") {
             RequestSkip();
         } else if (cmd == "scene") {
             GoToScene(IdFromString(arg));
@@ -1181,7 +1642,19 @@ void DrawStatus() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("On: F2 screenshots and F3 videos show this menu, the F10 board and notices.\n"
                           "Off: only the DEV stamp with the build. The REC light is never recorded.");
-    if (!g_status.empty()) ImGui::TextWrapped("%s", g_status.c_str());
+    if (!g_status.empty()) {
+        const float maxHeight = ImGui::GetTextLineHeightWithSpacing() * 4.0f;
+        const float wrapWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+        if (ImGui::CalcTextSize(g_status.c_str(), nullptr, false, wrapWidth).y > maxHeight) {
+            ImGui::TextDisabled("Command output (scroll for full readout)");
+            if (ImGui::BeginChild("##command-output", ImVec2(0.0f, maxHeight),
+                                  ImGuiChildFlags_AlwaysUseWindowPadding))
+                ImGui::TextWrapped("%s", g_status.c_str());
+            ImGui::EndChild();
+        } else {
+            ImGui::TextWrapped("%s", g_status.c_str());
+        }
+    }
 }
 
 void DrawSpots() {
@@ -1299,6 +1772,109 @@ void DrawPowerups() {
         bool on = HasPowerup(power);
         if (OverlayTheme::Toggle(power.label, &on)) SetPowerup(power, on);
         ImGui::PopID();
+    }
+}
+
+void DrawPlayer() {
+    PlayerStats snapshot;
+    bool readable;
+    const char* reason = PlayerReason(snapshot, &readable);
+    if (!reason && !g_playerInputsReady) {
+        g_healthInput = static_cast<int>(snapshot.health);
+        g_snacksInput = snapshot.snacks <= kDiagnosticSnackLimit ? static_cast<int>(snapshot.snacks) : 0;
+        SnackAreas areas{};
+        g_snackAreaInput = g_snackConfirmation.active ? static_cast<int>(g_snackConfirmation.value) :
+                          ReadSnackAreas(ProgressRead, areas) ?
+                          static_cast<int>(areas[static_cast<size_t>(g_snackArea)].collected) : 0;
+        g_playerInputsReady = true;
+    }
+    if (ImGui::CollapsingHeader("Health and balance", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (reason) ImGui::TextWrapped("Unavailable: %s", reason);
+        if (readable) ImGui::Text("Health %u/5 | Spendable snacks %u", snapshot.health, snapshot.snacks);
+        ImGui::TextWrapped("One-time edits, not damage simulation. No kill/resurrection or automatic save.");
+        ImGui::BeginDisabled(reason != nullptr);
+        ImGui::SetNextItemWidth(OverlayTheme::Px(150));
+        ImGui::InputInt("Health (1..5)", &g_healthInput, 1, 1);
+        ImGui::BeginDisabled(g_healthInput < 1 || g_healthInput > 5);
+        if (ImGui::Button("Set health")) {
+            g_status = ChangePlayerStat(PlayerStat::Health, static_cast<uint32_t>(g_healthInput));
+            ProgressLog("health", g_status);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Restore to 5")) {
+            g_status = ChangePlayerStat(PlayerStat::Health, 5);
+            ProgressLog("health 5", g_status);
+        }
+        ImGui::SetNextItemWidth(OverlayTheme::Px(150));
+        ImGui::InputInt("Spendable snacks", &g_snacksInput);
+        ImGui::TextDisabled("0..99999: diagnostic input limit, not the game's maximum.");
+        ImGui::BeginDisabled(g_snacksInput < 0 || g_snacksInput > static_cast<int>(kDiagnosticSnackLimit));
+        if (ImGui::Button("Set snack balance")) {
+            g_status = ChangePlayerStat(PlayerStat::Snacks, static_cast<uint32_t>(g_snacksInput));
+            ProgressLog("snacks", g_status);
+        }
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        ImGui::TextWrapped("Balance edits leave collection totals and galleries unchanged. A later normal save can retain them.");
+    }
+    if (ImGui::CollapsingHeader("Power-ups")) DrawPowerups();
+    if (ImGui::CollapsingHeader("Collected-snack progression")) {
+        ImGui::TextWrapped("Advanced counter diagnostic. Can change natural picture-gallery access and persist in a "
+                           "later normal save. Does NOT collect/remove/respawn physical snacks or reconcile "
+                           "scene-local pickup statistics. Balance stays unchanged. Reopen galleries to refresh.");
+        SnackAreas areas{};
+        if (reason) ImGui::TextWrapped("Unavailable: %s", reason);
+        else if (!ReadSnackAreas(ProgressRead, areas))
+            ImGui::TextWrapped("Unavailable: unreadable/modified area schema or unsupported counts/targets.");
+        else {
+            const auto selected = static_cast<uint32_t>(g_snackArea);
+            if (ImGui::BeginCombo("Area", SnackAreaLabel(selected, areas[selected]).c_str())) {
+                for (uint32_t i = 1; i < areas.size(); ++i) {
+                    if (ImGui::Selectable(SnackAreaLabel(i, areas[i]).c_str(), i == selected) && i != selected) {
+                        g_snackArea = static_cast<int>(i);
+                        g_snackAreaInput = static_cast<int>(areas[i].collected);
+                        if (g_snackConfirmation.active) {
+                            g_snackConfirmation.Clear();
+                            g_status = "Collected-snack confirmation cancelled: selected area changed.";
+                            ProgressLog("snackcancel", g_status);
+                        }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            const auto& area = areas[static_cast<size_t>(g_snackArea)];
+            uint32_t sum = 0;
+            for (size_t i = 1; i < areas.size(); ++i) sum += areas[i].collected;
+            ImGui::Text("Collected %u / live target %u | All real areas (sum) %u", area.collected, area.target, sum);
+            ImGui::SetNextItemWidth(OverlayTheme::Px(150));
+            if (ImGui::InputInt("Area collected count", &g_snackAreaInput) && g_snackConfirmation.active) {
+                g_snackConfirmation.Clear();
+                g_status = "Collected-snack confirmation cancelled: requested count changed.";
+                ProgressLog("snackcancel", g_status);
+            }
+            ImGui::BeginDisabled(g_snackAreaInput < 0 || static_cast<uint32_t>(g_snackAreaInput) > area.target);
+            if (ImGui::Button("Review progression change")) {
+                g_status = StageSnackArea(static_cast<uint32_t>(g_snackArea), static_cast<uint32_t>(g_snackAreaInput));
+                ProgressLog("snackarea", g_status);
+            }
+            ImGui::EndDisabled();
+            if (g_snackConfirmation.active) {
+                ImGui::TextWrapped("Confirm %s: %u -> %u collected. Affects galleries; later saves can retain it.",
+                                   SnackAreaLabel(g_snackConfirmation.area, areas[g_snackConfirmation.area]).c_str(),
+                                   g_snackConfirmation.before, g_snackConfirmation.value);
+                if (ImGui::Button("Confirm collected progression")) {
+                    g_status = ConfirmSnackArea();
+                    ProgressLog("snackconfirm", g_status);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel progression change")) {
+                    g_snackConfirmation.Clear();
+                    g_status = "Collected-snack confirmation cancelled.";
+                    ProgressLog("snackcancel", g_status);
+                }
+            }
+        }
     }
 }
 
@@ -1636,6 +2212,49 @@ void UpdatePresses() {
 
 } // namespace
 
+void GalleryConditionalCallback(CpuContext* ctx) {
+    const uint32_t target = static_cast<uint32_t>(ctx->gpr[4]);
+    const uint32_t event = static_cast<uint32_t>(ctx->gpr[5]);
+    GalleryRule rule = GalleryRule::Natural;
+    if (Enabled() && event == 0x3C) {
+        ObserveGallery();
+        const auto state = ProgressState();
+        const bool active = g_galleryRules.Get(GallerySection::Pictures) != GalleryRule::Natural ||
+                            g_galleryRules.Get(GallerySection::Movies) != GalleryRule::Natural;
+        if (active && state.layout && state.inPlay && state.context && !state.cinematic && !state.movie && !state.transfer) {
+            const auto snapshot = ReadGallery();
+            for (size_t i = 0; i < snapshot.bases.size(); ++i) {
+                if (snapshot.bases[i] != target) continue;
+                const auto spec = ConditionAt(i);
+                if (spec.section == GallerySection::Pictures ? snapshot.pictures : snapshot.movies) {
+                    rule = g_galleryRules.Get(spec.section);
+                } else {
+                    g_galleryRules.Set(spec.section, GalleryRule::Natural);
+                    g_status = "Gallery override cleared: condition/link schema changed.";
+                    ProgressLog("gallery invalidated", g_status);
+                }
+                break;
+            }
+        }
+    }
+    ctx->gpr[3] = ConditionalEvent(target, event, rule,
+        [&](uint32_t base) {
+            ctx->gpr[3] = base;
+            func_80045AC8(ctx);
+            return ctx->gpr[3] != 0;
+        },
+        [&](uint32_t base) {
+            ctx->gpr[3] = base;
+            ctx->gpr[4] = Memory::Read32(base + 0x10);
+            func_8001C1C4(ctx);
+        },
+        [&](uint32_t base, uint32_t result) {
+            ctx->gpr[3] = ctx->gpr[4] = base;
+            ctx->gpr[5] = result;
+            func_80048B2C(ctx);
+        });
+}
+
 bool Enabled() noexcept {
     static const bool enabled = RuntimeConfigFile::DevTools();
     return enabled;
@@ -1694,6 +2313,24 @@ void ApplyFreecam(uint32_t camera, CpuContext* ctx) {
 
 void Draw() noexcept {
     if (!Enabled() || !kReserved) return;
+    ObserveGallery();
+    if (InPlay() && CurrentSceneId() == kGalleryScene &&
+        (g_galleryRules.Get(GallerySection::Pictures) != GalleryRule::Natural ||
+         g_galleryRules.Get(GallerySection::Movies) != GalleryRule::Natural)) {
+        const auto snapshot = ReadGallery();
+        bool cleared = false;
+        for (GallerySection section : {GallerySection::Pictures, GallerySection::Movies}) {
+            if (!(section == GallerySection::Pictures ? snapshot.pictures : snapshot.movies) &&
+                g_galleryRules.Get(section) != GalleryRule::Natural) {
+                g_galleryRules.Set(section, GalleryRule::Natural);
+                cleared = true;
+            }
+        }
+        if (cleared) {
+            g_status = "Gallery override cleared: missing/modified scene schema.";
+            ProgressLog("gallery invalidated", g_status);
+        }
+    }
     UpdatePresses();
     const bool wasSkipping = g_skipRequest.Active();
     g_skipPressed = g_skipRequest.Press(SDL_GetTicks(), SameSkipSequence());
@@ -1701,6 +2338,7 @@ void Draw() noexcept {
         g_status = SameSkipSequence() ? "The game did not accept the skip within 10 seconds; retry when skippable."
                                       : "The cinematic sequence ended.";
     UpdatePending();
+    ObservePlayerEdits();
     UpdateGod();
     UpdateMonsters();
     PollCommandFile();
@@ -1746,7 +2384,7 @@ void Draw() noexcept {
                                       : "Click here or press LB to use the menu.");
         DrawStatus();
         ImGui::Separator();
-        if (ImGui::BeginTabBar("devtabs")) {
+        if (ImGui::BeginTabBar("devtabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
             if (ImGui::BeginTabItem("Spots")) {
                 DrawSpots();
                 ImGui::EndTabItem();
@@ -1759,8 +2397,24 @@ void Draw() noexcept {
                 DrawMonsters();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Power-ups")) {
-                DrawPowerups();
+            if (ImGui::BeginTabItem("Player")) {
+                DrawPlayer();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Warps")) {
+                DrawWarps();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Gallery")) {
+                DrawGallery();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Diagnostics")) {
+                DrawDiagnostics();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Resources")) {
+                no100f_resources::Draw();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Textures")) {
@@ -1782,6 +2436,11 @@ void Draw() noexcept {
 }
 
 } // namespace no100f_devmenu
+
+extern "C" void No100f_DevmenuConditionalEvent(CpuContext* ctx) {
+    no100f_devmenu::GalleryConditionalCallback(ctx);
+}
+PPC_NATIVE_OVERRIDE_VOID(80045A3C, No100f_DevmenuConditionalEvent, (CpuContext* ctx), (ctx));
 
 // RwCameraBeginUpdate (0x80168C78) is `return camera->beginUpdate(camera)` (+0x18); native in full so the free camera
 // can replace the main camera's frame first.
