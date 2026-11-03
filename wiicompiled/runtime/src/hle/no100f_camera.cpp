@@ -13,6 +13,7 @@
 #include "abi_bridge.h"
 #include "memory.h"
 #include "hle_stubs.h"
+#include "hle/no100f_camera.h"
 #include "ppc_runtime.h"
 
 extern std::atomic<float> g_gameCameraAspect;  // display_settings.cpp
@@ -27,9 +28,8 @@ extern "C" void No100f_CameraSetViewWindow(CpuContext* ctx) {
     const uint32_t camera = ctx->gpr[3], viewWindow = ctx->gpr[4];
     float x = ReadF32(viewWindow), y = ReadF32(viewWindow + 4);
     const float aspect = g_gameCameraAspect.load(std::memory_order_relaxed);
-    // The game's 4:3 screen is stretched across the wider picture by aspect / (4/3); every screen camera (4:3, or the
-    // wider letterboxed cutscene ones) widens by that factor. Square/taller views (the shadow pass) are left alone.
-    if (aspect > 0.0f && x > 0.0f && y <= 0.7508f * x) x *= aspect * 0.75f;
+    // Widen landscape camera frusta to at least the picture aspect. Square/taller views (the shadow pass) are left alone.
+    x = No100fCamera::WidenedViewWindowWidth(x, y, aspect);
     WriteF32(camera + 0x68, x);
     WriteF32(camera + 0x6C, y);
     WriteF32(camera + 0x70, 1.0f / x);
