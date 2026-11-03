@@ -110,8 +110,16 @@ occlusion, soft cut-out fringes, translucent submission order, viewport/scissor 
 With the enhanced two-pass cut-out modes, each render pass finishes solid geometry, then cut-out fringes, then
 depth-tested translucent world draws. Clears, overlays and non-monotonic depth passes flush that ordering.
 Original-game and single-cut modes retain the game's submission order; the test checks those controls too.
-This intentionally improves inherited foliage ordering in the enhanced modes, rather than claiming a mismatch
-with console rendering. Translucent systems keep their submission order; this is not per-particle depth sorting.
+This intentionally improves inherited foliage/particle ordering in the enhanced modes, rather than claiming a
+mismatch with console rendering. Compatible direct XYZ/RGBA/ST camera-facing triangle-pair particles are stably
+sorted back-to-front across emitter batches, without changing their alpha or depth tests. This prevents distant
+ground mist from blending over a nearer cloud everywhere except where opaque scenery blocks that mist.
+Particle index views share the original vertex/uniform uploads. The GPU regression includes indexed opaque
+geometry and a raw batch containing particles on both sides of a separately submitted cloud, equal-depth
+stability, and unsupported-geometry/blend/camera/scissor barriers.
+Sorting does not cross viewport/scissor changes, camera/projection changes, other translucent geometry or
+clear/copy/pass boundaries. Non-planar, indexed, unusual-depth and frame-interpolated draws keep submission order.
+The single-cut and Original/Game controls remain unchanged.
 
 ## 4. Playtest a level
 

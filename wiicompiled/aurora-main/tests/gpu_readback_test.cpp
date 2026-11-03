@@ -258,7 +258,51 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0) {
     GXEnd();
   };
   GXSetZMode(true, GX_LEQUAL, true);
-  quad(-4.f, {0, 0, 255, 255});
+  quad(variant >= 11 ? -8.f : -4.f, {0, 0, 255, 255});
+  if (variant >= 11) {
+    std::array<std::array<float, 3>, 4> post{{{-4, 4, -4}, {0, 4, -4}, {0, -4, -4}, {-4, -4, -4}}};
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetArray(GX_VA_POS, post.data(), sizeof(post), sizeof(post[0]), true);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (unsigned index = 0; index < post.size(); ++index) {
+      GXPosition1x8(index); GXColor4u8(255, 0, 0, 255); GXTexCoord2f32(0, 0);
+    }
+    GXEnd();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetZMode(true, GX_LEQUAL, false);
+    const auto particle = [](std::vector<uint8_t>& raw, float z, std::array<u8, 4> color, bool tilt = false) {
+      unsigned vertex = 0;
+      for (const auto& xy : std::array<std::array<float, 2>, 6>{
+               {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
+        const float vz = z + (tilt && vertex == 1 ? .2f : 0.f);
+        for (const float value : {xy[0] * -z, xy[1] * -z, vz}) {
+          const auto bits = std::bit_cast<uint32_t>(value);
+          for (int shift : {24, 16, 8, 0}) raw.push_back(bits >> shift);
+        }
+        raw.insert(raw.end(), color.begin(), color.end());
+        raw.insert(raw.end(), 8, 0);
+        ++vertex;
+      }
+    };
+    const auto send = [](const std::vector<uint8_t>& raw) {
+      require(gx::fifo::submit_raw_draw(GX_TRIANGLES, GX_VTXFMT0, raw.data(), raw.size() / 24, raw.size()),
+              "Particle bridge rejected test data");
+    };
+    std::vector<uint8_t> green;
+    particle(green, -2, {0, 255, 0, 128});
+    send(green);
+    if (variant == 13) quad(-3, {255, 255, 255, 128});
+    if (variant == 14) GXSetScissor(32, 0, 32, 64);
+    if (variant == 15) {
+      const float changed[]{0.f, 1.01f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+      GXSetProjectionv(changed);
+    }
+    if (variant == 18) GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, GX_LO_COPY);
+    std::vector<uint8_t> gray;
+    particle(gray, variant == 17 ? -2.f : -6.f, {128, 128, 128, 128}, variant == 16);
+    if (variant != 12) particle(gray, variant == 17 ? -2.f : -1.f, {0, 0, 255, 128});
+    send(gray);
+  } else {
   GXSetZMode(true, GX_LEQUAL, false);
   if (variant == 4) GXSetScissor(0, 0, 32, 64);
   if (variant == 5) GXSetViewport(0.f, 0.f, 32.f, 64.f, 0.f, 1.f);
@@ -276,6 +320,7 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0) {
     GXSetZMode(variant != 7, variant == 9 ? GX_LEQUAL : variant == 10 ? GX_EQUAL : GX_ALWAYS,
                variant == 6);
     quad(variant == 10 ? -3.f : -1.f, {255, 255, 255, 255});
+  }
   }
   gx::fifo::drain();
   if (variant == 8) {
@@ -352,10 +397,27 @@ int main(int argc, char** argv) {
       }
       for (unsigned variant : {6, 7, 8, 9, 10})
         check_alpha_pixel(run_alpha_order(mode, variant), 4, {255, 255, 255});
+      for (unsigned variant : {11, 12, 13, 14, 15, 16, 17, 18}) {
+        const auto pixels = run_alpha_order(mode, variant);
+        const auto left = variant == 12 || variant == 14 ? std::array{127, 128, 0} :
+                          variant == 13 ? std::array{95, 96, 192} :
+                          variant == 17 ? std::array{63, 64, 160} :
+                          variant == 18 ? std::array{127, 128, 128} : std::array{63, 64, 128};
+        const auto right = variant == 12 ? std::array{32, 160, 95} :
+                           variant == 13 ? std::array{64, 80, 207} :
+                           variant == 18 ? std::array{64, 192, 255} :
+                           variant >= 14 ? std::array{32, 64, 191} : std::array{16, 80, 175};
+        check_alpha_pixel(pixels, 4, left);
+        check_alpha_pixel(pixels, 12, right);
+      }
     }
     check_alpha_pixel(run_alpha_order(gx::CutoutMode::TwoPassAll, 2), 4, {32, 128, 95});
-    for (const auto mode : {gx::CutoutMode::Game, gx::CutoutMode::Cut})
+    for (const auto mode : {gx::CutoutMode::Game, gx::CutoutMode::Cut}) {
       check_alpha_pixel(run_alpha_order(mode), 4, {255, 0, 0});
+      const auto particles = run_alpha_order(mode, 11);
+      check_alpha_pixel(particles, 4, {63, 64, 128});
+      check_alpha_pixel(particles, 12, {32, 64, 191});
+    }
     gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
     std::puts("Actual Aurora late foliage, fringe/cloud blending, translucent order, viewport/scissor and barriers passed");
     const auto control = run(0);

@@ -1,10 +1,44 @@
 #include "gx_test_common.hpp"
 #include "gfx/staging_map.hpp"
 #include "gx/pipeline.hpp"
+#include "gx/billboard_depth.hpp"
 
+#include <bit>
+#include <limits>
 #include <thread>
 
 using aurora::gx::g_gxState;
+
+TEST(BillboardDepth, DecodesBigEndianCameraPlaneQuadsAndRejectsOtherGeometry) {
+  std::vector<uint8_t> bytes;
+  const auto quad = [&](float z) {
+    for (const auto& xy : std::array<std::array<float, 2>, 6>{
+             {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
+      for (float value : {xy[0], xy[1], z}) {
+        const auto bits = std::bit_cast<uint32_t>(value);
+        for (int shift : {24, 16, 8, 0}) bytes.push_back(bits >> shift);
+      }
+      bytes.insert(bytes.end(), 12, 0);
+    }
+  };
+  quad(-2); quad(-8);
+  constexpr std::array<float, 4> row{0, 0, 1, 0};
+  EXPECT_EQ(aurora::gx::billboard_depths(bytes, row), (std::vector<float>{2, 8}));
+  EXPECT_EQ(aurora::gx::billboard_depths(bytes, {0, 0, 1, -3}), (std::vector<float>{5, 11}));
+  const auto valid = bytes;
+  bytes.pop_back();
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  const auto putZ = [&](size_t vertex, float z) {
+    const auto bits = std::bit_cast<uint32_t>(z);
+    for (unsigned byte = 0; byte < 4; ++byte) bytes[vertex * 24 + 8 + byte] = bits >> (24 - byte * 8);
+  };
+  putZ(1, -3);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  putZ(1, std::numeric_limits<float>::quiet_NaN());
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+}
 
 namespace {
 std::vector<u8> draw(GXPrimitive primitive, u16 count, GXVtxFmt format = GX_VTXFMT0) {

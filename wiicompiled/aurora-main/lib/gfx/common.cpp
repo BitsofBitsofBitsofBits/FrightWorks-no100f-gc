@@ -181,6 +181,10 @@ struct RenderPass {
   // Solid scene, cut-out fringes, then translucent world draws. Explicit barriers flush both tails.
   CommandList deferred;
   CommandList translucent;
+  std::optional<Viewport> deferredViewport;
+  std::optional<Viewport> translucentViewport;
+  std::optional<ClipRect> deferredScissor;
+  std::optional<ClipRect> translucentScissor;
   bool clearColor = true;
   bool clearDepth = true;
   // The resolve destination outlives the frame with no re-issue path (one-shot
@@ -523,17 +527,15 @@ void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind)
   auto& pass = g_renderPasses[g_currentRenderPass];
   auto& list = kind == DeferredDrawKind::Translucent ? pass.translucent : pass.deferred;
   // Each deferred draw carries the viewport and scissor it was recorded with.
-  const Viewport* lastViewport = nullptr;
-  const ClipRect* lastScissor = nullptr;
-  for (auto it = list.rbegin(); it != list.rend() && (!lastViewport || !lastScissor); ++it) {
-    if (!lastViewport && it->type == CommandType::SetViewport) lastViewport = &it->data.setViewport;
-    if (!lastScissor && it->type == CommandType::SetScissor) lastScissor = &it->data.setScissor;
-  }
+  auto& lastViewport = kind == DeferredDrawKind::Translucent ? pass.translucentViewport : pass.deferredViewport;
+  auto& lastScissor = kind == DeferredDrawKind::Translucent ? pass.translucentScissor : pass.deferredScissor;
   if (!lastViewport || *lastViewport != g_cachedViewport) {
     list.push_back({.type = CommandType::SetViewport, .data = Command::Data{.setViewport = g_cachedViewport}});
+    lastViewport = g_cachedViewport;
   }
   if (!lastScissor || *lastScissor != g_cachedScissor) {
     list.push_back({.type = CommandType::SetScissor, .data = Command::Data{.setScissor = g_cachedScissor}});
+    lastScissor = g_cachedScissor;
   }
   list.push_back({
       .type = CommandType::Draw,
@@ -549,10 +551,31 @@ void flush_deferred_draws() {
   if (!has_current_render_pass()) return;
   auto& pass = g_renderPasses[g_currentRenderPass];
   if (pass.deferred.empty() && pass.translucent.empty()) return;
+  const auto sortGroup = [](const Command& command) -> HashType {
+    if (command.type != CommandType::Draw || command.data.draw.type != ShaderType::GX) return 0;
+    return command.data.draw.gx.particleSortGroup;
+  };
+  for (auto first = pass.translucent.begin(); first != pass.translucent.end();) {
+    const auto group = sortGroup(*first);
+    if (group == 0) {
+      ++first;
+      continue;
+    }
+    auto last = std::find_if(std::next(first), pass.translucent.end(),
+                            [&](const Command& command) { return sortGroup(command) != group; });
+    std::stable_sort(first, last, [](const Command& left, const Command& right) {
+      return left.data.draw.gx.particleDepth > right.data.draw.gx.particleDepth;
+    });
+    first = last;
+  }
   pass.commands.insert(pass.commands.end(), pass.deferred.begin(), pass.deferred.end());
   pass.deferred.clear();
+  pass.deferredViewport.reset();
+  pass.deferredScissor.reset();
   pass.commands.insert(pass.commands.end(), pass.translucent.begin(), pass.translucent.end());
   pass.translucent.clear();
+  pass.translucentViewport.reset();
+  pass.translucentScissor.reset();
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
 }

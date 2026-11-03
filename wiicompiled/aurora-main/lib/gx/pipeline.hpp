@@ -16,6 +16,8 @@ struct DrawData {
   bool expandedPrimitive;
   GXBindGroups bindGroups;
   uint32_t dstAlpha;
+  HashType particleSortGroup;
+  float particleDepth;
 };
 
 constexpr uint32_t GXPipelineConfigVersion = 20;
