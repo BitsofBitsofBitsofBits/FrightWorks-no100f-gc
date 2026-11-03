@@ -376,17 +376,11 @@ extern "C" void DSPSendMailToDSP_8015d430(uint32_t mail)
 }
 PPC_NATIVE_OVERRIDE_VOID(800F8DAC, DSPSendMailToDSP_8015d430, (uint32_t mail), (mail));
 
-extern "C" void SoundPlayerSetVolume_800a35e0(uint32_t soundPlayer, float volume)
+extern "C" void MIXAdjustFader_800dd2a0(CpuContext* ctx)
 {
-    MusicAttenuation::SetSoundPlayerVolume(soundPlayer, volume);
+    MusicAttenuation::AdjustMixFader(ctx->gpr[3], static_cast<int32_t>(ctx->gpr[4]));
 }
-
-#if 0  // NSMBW: music ducking hooks MKW nw4r::snd::SoundPlayer::SetVolume via an MKW sound-manager pointer; not ported to NSMBW yet
-#if 0  // SPM: 0x800a35e0: no NSMBW symbol at this address
-PPC_NATIVE_OVERRIDE_VOID(800010A8, SoundPlayerSetVolume_800a35e0,
-              (uint32_t soundPlayer, float volume), (soundPlayer, volume));
-#endif
-#endif
+PPC_NATIVE_OVERRIDE_VOID(800DD2A0, MIXAdjustFader_800dd2a0, (CpuContext* ctx), (ctx));
 
 extern "C" uint32_t DSPCheckMailToDSP_8015d3fc()
 {
@@ -685,7 +679,6 @@ uint64_t Audio_HLE_DetNextEventTicks()
 
 void Audio_HLE_Poll(CpuContext* ctx)
 {
-    MusicAttenuation::TickGuest();
     if (DetClock::Enabled()) {
         AudioTickDeterministic(ctx);
         return;
