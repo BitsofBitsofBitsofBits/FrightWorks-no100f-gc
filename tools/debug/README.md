@@ -25,6 +25,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | `game-logic-debug` | Frame-rate (fps60) and gameplay bugs: fixed spawn spots, F8 dev menu (any scene, saved spots, god mode, monsters off, power-ups on/off, free camera, Textures tab), live memory (postool), particle pool/emitter counts, flicker measurement. Case: PR #14 |
 | `manual-yn-bisect` | Locked landing + in-game Y/N toast for human visual checks; fix-only PR workflow (`strip-before-pr.md`) |
 | `audio-debug` | Crackle/clicks/fuzz/stuck loops: capture, per-stage dumps, disc reference decode. Case: PR #11 |
+| `parallel-work` | Several tasks at once: worktrees and their Claude sessions, started, checked on, messaged and removed by the main checkout's session (`worktree.ps1`) |
 
 ## Tools
 
@@ -32,7 +33,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | --- | --- |
 | `play-patched.ps1` | Apply patches, build, play with the dev menu on (`NO100F_DEV_TOOLS=1`; the default `devmenu` patch only on branches from before it was built in); patches come out of the source when the game closes. `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
 | `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups]` (saves the user's settings, writes the test Config + `zz-manual` boot mod), `shot`, `stop` (settings back), `prepare` (like start, no game), `restore`, `stop-tests`. Stays inside its own checkout; `prepare`/`start` wait for the game-run lock |
-| `worktree.ps1` | Parallel work: `new -Name <n> -Branch <b> [-From origin/main] [-Build] [-NoOpen]` (a git worktree in `..\FrightWorks-worktrees\<n>` with its own Play\, links to the main checkout's Disc\, texture_pack\, toolchain\, Dependencies and `local\` folders, and a Windows Terminal tab running `claude -n <n>`), `list`, `open -Name <n>`, `remove -Name <n>` (refuses with uncommitted work or a running program; unlinks before deleting; keeps the branch) |
+| `worktree.ps1` | Parallel work (the `parallel-work` skill): `new -Name <n> -Branch <b> [-From origin/main] [-Task "goal"] [-Build] [-NoOpen]` (a git worktree in `..\FrightWorks-worktrees\<n>` with its own Play\, links to the main checkout's Disc\, texture_pack\, toolchain\, Dependencies and `local\` folders, and a Windows Terminal tab running `claude -n <n>`; `-Task` writes the goal into its TASK.md and the session starts on it), `list`, `open -Name <n> [-Continue]` (a new session that picks the task up from TASK.md, or `claude -c`; `-Name main` = the main checkout's coordinating session), `remove -Name <n>` (stops leftover dotnet build servers; refuses with uncommitted work or a running program; unlinks before deleting; keeps the branch) |
 | `kit-common.ps1` | Dot-sourced by the scripts: `Get-/Stop-CheckoutGames <root>` (only games started from that checkout) and the game-run lock (`Enter-/Exit-GameLock`, `%LOCALAPPDATA%\FrightWorks-kit\game-run.lock`): one checkout runs the game for a test at a time, builds run in parallel, the user's own game is never waited for or closed |
 | `build-translator.ps1` | Rebuild the translator after switching to/from a branch that changes `wiicompiled\translator` (then build without `-SkipTranslate`) |
 | `dol.py` | `callers` / `func` / `dis` / `name` on `game/main.dol` with MAP names (needs `capstone`) |

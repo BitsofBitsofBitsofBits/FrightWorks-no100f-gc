@@ -196,26 +196,41 @@ useful:
 ## 10. Working on several branches at once
 
 Each task can get its own git worktree: a second folder with its own branch, build and `Play\`, sharing the big
-read-only folders (disc files, HD pack, toolchain) with the main checkout through links.
+read-only folders (disc files, HD pack, toolchain) with the main checkout through links. Each worktree gets its own
+Claude Code session in a Windows Terminal tab; one session in the main checkout, named `main`, coordinates them (the
+`parallel-work` skill).
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer
+powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name main
+powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer -Task "Implement #55"
 powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 list
+powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name installer
 powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name installer
 ```
 
+- `open -Name main` opens a tab in the main checkout running the coordinating session. Ask it to start, check on or
+  finish tasks; it runs the commands below and can message the other sessions.
 - `new` creates `..\FrightWorks-worktrees\<name>` from `origin/main` (or checks out an existing branch) and opens a
-  Windows Terminal tab there running Claude Code (`-NoOpen` to skip; `open -Name <name>` later). Its first build must be
-  a full one: `toolsuild-no100f.ps1` without `-SkipTools`/`-SkipTranslate` (or `new ... -Build`).
+  tab there running `claude -n <name>` (`-NoOpen` to skip). With `-Task`, the goal goes into the worktree's `TASK.md`
+  and the session starts on it. Its first build must be a full one: `toolsuild-no100f.ps1` without
+  `-SkipTools`/`-SkipTranslate` (or `new ... -Build`).
+- `open -Name <name>` starts a closed session again: a new conversation that picks the task up from `TASK.md`
+  (`-Continue` to resume the last conversation instead).
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
+- To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
+  (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its
+  own settings.
 - Builds can run side by side. Game runs take turns: `manual-session prepare/start` and `play-patched.ps1` wait while
   another checkout's test has the game open. Scripts only close the game they started from their own checkout; your
   own game (launcher or `Play\` in the main checkout) is never closed by a test.
 - Never delete a worktree folder by hand: `Disc`, `texture_pack`, `toolchain` there are links, and some delete tools
-  follow links into the main checkout. `remove` unlinks them first; it refuses while the worktree has uncommitted work.
+  follow links into the main checkout. `remove` unlinks them first; it refuses while the worktree has uncommitted work
+  or a program running from it (leftover dotnet build servers it stops itself), and while its Claude session runs:
+  close that tab first.
 
 ## Claude Code skills
 
 `.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
 (graphics and state bugs), `game-logic-debug` (60 fps, timing and gameplay bugs, dev menu, postool),
-`manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) and `audio-debug` (crackle, clicks, fuzz).
+`manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) `audio-debug` (crackle, clicks, fuzz) and `parallel-work`
+(worktrees and their sessions, run from the main session).
