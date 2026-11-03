@@ -262,11 +262,29 @@ sealed class MainForm : Form
                          double.TryParse(b, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) && x == y;
     }
 
+    // F10's resolutions (settings_overlay.cpp kResolutions), written the way F10 writes them; the game takes no others.
+    static readonly (string text, string raw)[] Resolutions =
+    {
+        ("Auto (screen size)", "0"), ("0.5x (240p)", "0.5"), ("0.75x (360p)", "0.75"), ("1x (480p)", "1"),
+        ("1.5x (720p)", "1.5"), ("2x (960p)", "2"), ("2.25x (1080p)", "2.25"), ("3x (1440p)", "3"),
+        ("4x (1920p)", "4"), ("4.5x (4K)", "4.5"), ("6x (2880p)", "6"), ("8x (3840p)", "8"),
+    };
+
+    // F10's rule (LimitResolutionForFrameRate): frame interpolation above 60 fps allows up to 4x; the game turns 6x and
+    // 8x into 4x at start.
+    static bool AboveCap(string resolution) => SameValue(resolution, "6") || SameValue(resolution, "8");
+
+    // [video] frame_interpolation_fps as the game reads it: 0, 120 or 180 (240 from older versions = 180), else off.
+    static int InterpolationFps(GameConfig c) => c.Get("video", "frame_interpolation_fps")?.Trim() switch
+    {
+        "120" => 120, "180" or "240" => 180, _ => 0,
+    };
+
     void BuildDisplay(FlowLayoutPanel body)
     {
         var cfg = new GameConfig(configPath);
         var table = Table();
-        void Row(string label, string key, (string text, string raw)[] options, string fallback)
+        void Row(string label, string key, (string text, string raw)[] options, string fallback, Action<GameConfig>? changed = null)
         {
             var box = new ThemedCombo();
             foreach (var o in options) box.Items.Add(o.text);
@@ -277,14 +295,46 @@ sealed class MainForm : Form
             {
                 var c = new GameConfig(configPath);
                 c.Set("video", key, options[box.SelectedIndex].raw);
+                changed?.Invoke(c);
                 c.Save();
             };
             table.Controls.Add(FieldLabel(label));
             table.Controls.Add(box);
         }
         Row("Window", "display_mode", new[] { ("Borderless fullscreen", "\"borderless\""), ("Window", "\"windowed\""), ("Exclusive fullscreen", "\"exclusive\"") }, "borderless");
-        Row("Resolution", "resolution_multiplier", new[] { ("720p", "1.5"), ("1080p", "2.25"), ("4K", "4.5"), ("Your screen's size", "0") }, "2.25");
-        Row("Picture shape", "aspect_mode", new[] { ("Original 4:3", "0"), ("Widescreen 16:9", "1"), ("Fill the screen", "2"), ("Cinematic 2.39:1", "3") }, "3");
+
+        // Resolution: refilled when frame interpolation crosses 60 fps. A missing or unknown value is the game's 1080p.
+        var resolutionBox = new ThemedCombo();
+        var shownResolutions = Resolutions;
+        bool filling = false;
+        void FillResolutions(GameConfig c)
+        {
+            bool capped = InterpolationFps(c) > 60;
+            shownResolutions = capped ? Resolutions.Where(r => !AboveCap(r.raw)).ToArray() : Resolutions;
+            var current = c.Get("video", "resolution_multiplier") ?? "2.25";
+            if (!Resolutions.Any(r => SameValue(r.raw, current))) current = "2.25";
+            if (capped && AboveCap(current)) current = "4";
+            filling = true;
+            resolutionBox.Items.Clear();
+            foreach (var r in shownResolutions) resolutionBox.Items.Add(r.text);
+            resolutionBox.SelectedIndex = Array.FindIndex(shownResolutions, r => SameValue(r.raw, current));
+            filling = false;
+        }
+        FillResolutions(cfg);
+        resolutionBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (filling) return;
+            var c = new GameConfig(configPath);
+            c.Set("video", "resolution_multiplier", shownResolutions[resolutionBox.SelectedIndex].raw);
+            c.Save();
+        };
+        table.Controls.Add(FieldLabel("Resolution"));
+        table.Controls.Add(resolutionBox);
+
+        // Without aspect_mode the game goes by the older keys (main.cpp): force_16_9 = 16:9, widescreen = false = 4:3,
+        // else fill the screen.
+        string aspectFallback = cfg.Get("video", "force_16_9") == "true" ? "1" : cfg.Get("video", "widescreen") == "false" ? "0" : "2";
+        Row("Picture shape", "aspect_mode", new[] { ("Original 4:3", "0"), ("Widescreen 16:9", "1"), ("Fill the screen", "2"), ("Cinematic 2.39:1", "3") }, aspectFallback);
         Row("Frame rate", "fps60", new[] { ("30 fps (original)", "false"), ("60 fps", "true") }, "false");
         Row("HD textures", "texture_replacements", new[] { ("On", "true"), ("Off (original textures)", "false") }, "true");
         Row("Anti-aliasing", "msaa", new[] { ("Off", "1"), ("2x MSAA", "2"), ("4x MSAA", "4"), ("8x MSAA", "8") }, "1");
@@ -293,8 +343,23 @@ sealed class MainForm : Form
         Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Controls.Add(table);
-        body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 opens the same " +
-                               "settings, F11 switches between fullscreen and a window, and F2 saves a screenshot."));
+        body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
+                               "resolution, picture shape, window and frame interpolation settings too, and more (sound, controls); " +
+                               "F11 switches between fullscreen and a window, and F2 saves a screenshot."));
+
+        // Experimental: F10's Smoothness > Frame interpolation. Going above 60 fps at 6x or 8x drops the resolution to
+        // 4x, as F10 does.
+        body.Controls.Add(Title("Experimental"));
+        table = Table();  // Row adds to this one now
+        Row("Frame interpolation", "frame_interpolation_fps", new[] { ("Off", "0"), ("120 FPS", "120"), ("180 FPS", "180") },
+            InterpolationFps(cfg).ToString(), c =>
+            {
+                if (InterpolationFps(c) > 60 && AboveCap(c.Get("video", "resolution_multiplier") ?? "")) c.Set("video", "resolution_multiplier", "4");
+                FillResolutions(c);
+            });
+        body.Controls.Add(table);
+        body.Controls.Add(Note("Draws extra frames between the game's own for smoother motion. Experimental: you might see visual " +
+                               "glitches. At 120 or 180 FPS the resolution goes up to 4x (1920p)."));
     }
 
     void BuildControls(FlowLayoutPanel body)

@@ -213,7 +213,7 @@ static class LauncherLayoutTests
                 Call(displayTab, "OnKeyDown", new KeyEventArgs(Keys.Space));
                 Call(displayTab, "OnKeyUp", new KeyEventArgs(Keys.Space));
                 Application.DoEvents();
-                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 10);
+                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 11);
                 Check(display.Visible, "Space did not select the Display tab");
                 var window = Descendants(display).OfType<ComboBox>().First();
                 window.SelectedIndex = 1;
