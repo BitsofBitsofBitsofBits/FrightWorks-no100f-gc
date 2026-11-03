@@ -162,6 +162,8 @@ sealed class PlankButton : Button
                  ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
         BackColor = Color.Transparent;
         UseVisualStyleBackColor = false;
+        // ButtonBase assumes its own painter fills the rectangle; our plank leaves transparent corners.
+        SetStyle(ControlStyles.Opaque, false);
         UseMnemonic = false;
         Text = text;
         Primary = primary;

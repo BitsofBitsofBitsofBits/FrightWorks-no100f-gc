@@ -215,7 +215,8 @@ useful:
   `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
   This builds the launcher and checks Settings/Display, Controls, Mods and Extras at normal, minimum and smaller
   window sizes, reopening and growing/shrinking layouts, long mod names, nested scrolling, dropdown widths, keyboard
-  button activation, and preservation of custom HDR and unknown config values. It creates a disposable portable
+  button activation, transparent button corners (normal, hover, pressed and disabled, including the gradient-backed
+  close button), and preservation of custom HDR and unknown config values. It creates a disposable portable
   fixture and page screenshots only in the output directory; it never starts the game or uses the player's data.
   It also moves its own test window across existing monitors and back, logging actual DPI transitions without
   changing display settings. An optional trailing zero-based monitor index selects the starting monitor.

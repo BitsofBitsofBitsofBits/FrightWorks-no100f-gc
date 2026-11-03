@@ -71,6 +71,59 @@ static class LauncherLayoutTests
                 int regionChanges = 0;
                 foreach (Control board in scene.Controls) board.RegionChanged += (_, _) => regionChanges++;
 
+                Call(form, "ShowBoard", "settings");
+                selectTab(false);
+                var buttonBoard = scene.Controls.Cast<Control>().Single(c => c.Visible);
+                var tabButtons = Descendants(buttonBoard).OfType<Button>().Where(b => b.Text is "Display" or "Controls").ToArray();
+                var tabStrip = tabButtons[0].Parent!;
+                using (var strip = new Bitmap(tabStrip.Width, tabStrip.Height))
+                {
+                    tabStrip.DrawToBitmap(strip, new Rectangle(Point.Empty, tabStrip.Size));
+                    strip.Save(Path.Combine(output, "button-borders.png"));
+                }
+                foreach (var button in Descendants(buttonBoard).OfType<Button>().Where(b => b.Visible).ToArray())
+                {
+                    Check(!(bool)Call(button, "GetStyle", ControlStyles.Opaque)!, $"{button.Text}: background painting is suppressed");
+                    using var parentBackground = new Bitmap(button.Parent!.Width, button.Parent.Height);
+                    using (var graphics = Graphics.FromImage(parentBackground))
+                    {
+                        graphics.Clear(Color.Magenta);
+                        using var paint = new PaintEventArgs(graphics, button.Parent.ClientRectangle);
+                        Call(button.Parent, "OnPaintBackground", paint);
+                        Call(button.Parent, "OnPaint", paint);
+                    }
+                    void CheckCorners(string state)
+                    {
+                        Check(!(bool)Call(button, "GetStyle", ControlStyles.Opaque)!, $"{button.Text} ({state}): background painting is suppressed");
+                        using var bitmap = new Bitmap(button.Width, button.Height);
+                        using (var graphics = Graphics.FromImage(bitmap))
+                        {
+                            graphics.Clear(Color.Magenta);
+                            using var paint = new PaintEventArgs(graphics, button.ClientRectangle);
+                            Call(button, "OnPaintBackground", paint);
+                            Call(button, "OnPaint", paint);
+                        }
+                        bitmap.Save(Path.Combine(output, $"button-{button.Text}-{state}.png"));
+                        foreach (var corner in new[] { Point.Empty, new Point(button.Width - 1, 0),
+                                     new Point(0, button.Height - 1), new Point(button.Width - 1, button.Height - 1) })
+                        {
+                            var expected = parentBackground.GetPixel(button.Left + corner.X, button.Top + corner.Y);
+                            Check(bitmap.GetPixel(corner.X, corner.Y).ToArgb() == expected.ToArgb(),
+                                $"{button.Text} ({state}): rectangular border at {corner}; got {bitmap.GetPixel(corner.X, corner.Y)}, expected {expected}");
+                        }
+                    }
+                    CheckCorners("normal");
+                    Call(button, "OnMouseEnter", EventArgs.Empty);
+                    CheckCorners("hover");
+                    Call(button, "OnMouseLeave", EventArgs.Empty);
+                    Call(button, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, button.Width / 2, button.Height / 2, 0));
+                    CheckCorners("pressed");
+                    Call(button, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, -1, -1, 0));
+                    button.Enabled = false;
+                    CheckCorners("disabled");
+                    button.Enabled = true;
+                }
+
                 void Validate(string name, bool controls = false)
                 {
                     Call(form, "ShowBoard", name);
@@ -80,6 +133,8 @@ static class LauncherLayoutTests
                     var body = (Panel)board.GetType().GetField("Body")!.GetValue(board)!;
                     Check(scene.ClientRectangle.Contains(board.Bounds), $"{name}: board escapes the window after scaling");
                     Check(!body.HorizontalScroll.Visible, $"{name}: horizontal scrollbar at {form.ClientSize}");
+                    foreach (var button in Descendants(board).OfType<Button>().Where(b => b.Visible))
+                        Check(!(bool)Call(button, "GetStyle", ControlStyles.Opaque)!, $"{name}: button background painting was suppressed after layout/scaling");
                     foreach (var panel in Descendants(body).OfType<ScrollableControl>().Where(p => p.Visible && p.AutoScroll))
                         Check(!panel.HorizontalScroll.Visible, $"{name}: nested horizontal scrollbar");
                     foreach (var child in Descendants(body).Where(c => c.Visible && c.Parent is FlowLayoutPanel))
