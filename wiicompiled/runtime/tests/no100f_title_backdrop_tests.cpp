@@ -19,6 +19,9 @@ static std::vector<uint8_t> Model() {
     chunk(0xC0, 0x1A, 0x580);
     chunk(0xDC, 0xF, 0x564);
     chunk(0xE8, 1, 0x3F4);
+    chunk(0x53C, 6, 0x44);
+    chunk(0x548, 1, 4);
+    Write32(bytes.data() + 0x554, 0x1106);
     chunk(0x598, 3, 0xA8);
     chunk(0x5A4, 0x50E, 0x9C);
     std::memcpy(bytes.data() + 0x564, "text_title", 11);
@@ -66,11 +69,18 @@ int main() {
         const auto* g = model.data() + 0xF4;
         const auto* source = original.data() + 0xF4;
         Require(std::memcmp(g + kColors, source + 28, 24 * 4) == 0, "Retain ALL original prelighting");
-        Require(std::memcmp(g + kUvs, source + 124, 24 * 8) == 0, "Retain ALL original texture coordinates");
+        for (unsigned i = 0; i < 24; ++i) {
+            Require(ReadFloat(g + kUvs + i * 8) == ReadFloat(source + 124 + i * 8) + 1,
+                    "Normalize original wrapped U without changing its image mapping");
+            Require(Read32(g + kUvs + i * 8 + 4) == Read32(source + 128 + i * 8),
+                    "Retain all original V coordinates");
+        }
         Require(std::memcmp(g + kTriangleData, source + 316, 12 * 8) == 0, "Retain ALL original triangles");
         Require(std::memcmp(g + kPositions, source + 436, 24 * 12) == 0, "Retain ALL original positions");
         Require(std::memcmp(g + kNormals, source + 724, 24 * 12) == 0, "Retain ALL original normals");
         const size_t growth = kGeometrySize - 0x3F4;
+        Require(std::memcmp(model.data() + 0x4E8 + growth, original.data() + 0x4E8, 0x598 - 0x4E8) == 0,
+                "Retain the original material stream; configure the loaded texture at runtime");
         const size_t binmesh = 0x5A4 + growth;
         const size_t indices = binmesh + 32;
         Require(std::memcmp(model.data() + indices, original.data() + 0x5C4, 34 * 4) == 0,
@@ -78,7 +88,8 @@ int main() {
         for (unsigned i = 0; i < kVertices; ++i) {
             if (i >= 24) {
                 const float u = ReadFloat(g + kUvs + i * 8);
-                Require(u <= -0.879f || u >= -0.121f, "Wings sample forest edges, not the central logo");
+                Require(u <= 0.123f || u >= 0.877f, "Wings sample forest edges, not the central logo");
+                Require(u >= 0 && u <= 1, "Keep samples inside the normalized texture interval");
                 Require(std::fabs(ReadFloat(g + kPositions + i * 12 + 8)) >= 1.0f,
                         "New panels never overlap the original center");
             }
@@ -95,12 +106,17 @@ int main() {
                                 ReadFloat(g + kPositions + base * 12 + 8);
             const float uvWidth = std::fabs(ReadFloat(g + kUvs + (base + 1) * 8) - ReadFloat(g + kUvs + base * 8));
             Require(std::fabs(width / 2.0f - uvWidth / 0.9999f) < 0.00001f, "Keep original forest texel density");
+            const bool right = (quad / kWingPanels) % 2;
             if (quad % kWingPanels) {
-                const bool right = (quad / kWingPanels) % 2;
                 const unsigned a = base + (right ? 0 : 1), b = base - 4 + (right ? 1 : 0);
                 Require(std::fabs(ReadFloat(g + kPositions + a * 12 + 8) -
                                   ReadFloat(g + kPositions + b * 12 + 8)) < 0.00001f, "No gaps between panels");
                 Require(Read32(g + kUvs + a * 8) == Read32(g + kUvs + b * 8), "Match texture coordinates at joins");
+            } else {
+                const unsigned side = quad / (kWingPanels * 2);
+                const unsigned originalEdge = side == 0 ? (right ? 5 : 4) : (right ? 2 : 0);
+                Require(Read32(g + kUvs + (base + (right ? 0 : 1)) * 8) ==
+                        Read32(g + kUvs + originalEdge * 8), "Match the original U at the first join");
             }
         }
         unsigned triangles = 0;
@@ -126,12 +142,16 @@ int main() {
         for (size_t size = 0; size < original.size(); ++size)
             Require(BuildModel(original.data(), size).empty(), "Reject every truncated model");
         for (size_t offset : {size_t(0), size_t(0xC0), size_t(0xDC), size_t(0xE8), size_t(0x598),
+                              size_t(0x53C), size_t(0x548), size_t(0x554),
                               size_t(0x5A4), size_t(0x564), size_t(0x5BC)}) {
             auto incompatible = original;
             incompatible[offset] ^= 1;
             Require(BuildModel(incompatible.data(), incompatible.size()).empty(), "Preserve incompatible mods");
         }
         auto invalid = original;
+        WriteFloat(invalid.data() + 0xF4 + 124, -1.5f);
+        Require(BuildModel(invalid.data(), invalid.size()).empty(), "Retain models with a different U domain");
+        invalid = original;
         Write32(invalid.data() + 0xF4 + 436, 0x7FC00000);
         Require(BuildModel(invalid.data(), invalid.size()).empty(), "Reject nonfinite geometry even with fast-math");
         std::cout << "Title backdrop tests passed\n";

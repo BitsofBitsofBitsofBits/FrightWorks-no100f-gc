@@ -52,6 +52,8 @@ inline bool Matches(const uint8_t* model, size_t size) {
     };
     if (!chunk(0, 0x10, 0x684) || !chunk(0xC0, 0x1A, 0x580) ||
         !chunk(0xDC, 0xF, 0x564) || !chunk(0xE8, 1, 0x3F4) ||
+        !chunk(0x53C, 6, 0x44) || !chunk(0x548, 1, 4) ||
+        Read32(model + 0x554) != 0x1106 ||
         !chunk(0x598, 3, 0xA8) || !chunk(0x5A4, 0x50E, 0x9C) ||
         std::memcmp(model + 0x564, "text_title\0", 11) != 0) return false;
     const uint8_t* g = model + 0xF4;
@@ -63,6 +65,10 @@ inline bool Matches(const uint8_t* model, size_t size) {
     // Runtime sources use fast-math; inspect exponent bits rather than a foldable isfinite.
     for (size_t offset = 124; offset < 316; offset += 4)
         if ((Read32(g + offset) & 0x7F800000u) == 0x7F800000u) return false;
+    for (unsigned i = 0; i < 24; ++i) {
+        const float u = ReadFloat(g + 124 + i * 8);
+        if (u < -1 || u > 0) return false;
+    }
     for (size_t offset = 412; offset < 1012; offset += 4) {
         if (offset == 428 || offset == 432) continue;
         if ((Read32(g + offset) & 0x7F800000u) == 0x7F800000u) return false;
@@ -73,7 +79,9 @@ inline bool Matches(const uint8_t* model, size_t size) {
 }
 
 // Keep the entire original title box and add narrow front/back panels outside its edges. The forest and
-// logo share one texture: mirror ONLY the outer 12%, alternating each panel so joins stay continuous.
+// logo share one texture: mirror a 12% forest strip, alternating each panel so joins stay continuous.
+// Normalize U from [-1, 0] to [0, 1] for the runtime's title-only edge addressing, retaining its image
+// mapping without filtering the opposite forest edge into the mirrored joins.
 // Panel width and sampled UV width match, retaining the original texel density rather than smearing it.
 // Eight panels per edge nearly triple the box width and remain off-screen in the 4:3 title view.
 // All model/texture content is read from the player's data; only procedural geometry is shipped here.
@@ -87,6 +95,8 @@ inline std::vector<uint8_t> BuildModel(const uint8_t* model, size_t size) {
     Write32(g + 8, kVertices);
     std::memcpy(g + kColors, source + 28, 24 * 4);
     std::memcpy(g + kUvs, source + 124, 24 * 8);
+    for (unsigned i = 0; i < 24; ++i)
+        WriteFloat(g + kUvs + i * 8, ReadFloat(source + 124 + i * 8) + 1);
     std::memcpy(g + kTriangleData, source + 316, 12 * 8);
     std::memcpy(g + kMorph, source + 412, 24);
     std::memcpy(g + kPositions, source + 436, 24 * 12);
@@ -115,8 +125,8 @@ inline std::vector<uint8_t> BuildModel(const uint8_t* model, size_t size) {
             const bool innerTextureEdge = ((panel + (rightEdge ? column : 1 - column)) % 2) == 0;
             const float u0 = ReadFloat(source + 124 + left * 8);
             const float u1 = ReadFloat(source + 124 + right * 8);
-            const float u = rightEdge ? u1 - (innerTextureEdge ? 0 : (u1 - u0) * 0.12f)
-                                      : u0 + (innerTextureEdge ? 0 : (u1 - u0) * 0.12f);
+            const float sample = innerTextureEdge ? 0 : 0.12f;
+            const float u = (rightEdge ? u1 - (u1 - u0) * sample : u0 + (u1 - u0) * sample) + 1;
             WriteFloat(g + kUvs + index * 8, u);
             std::memcpy(g + kUvs + index * 8 + 4, source + 128 + edge * 8, 4);
         }
