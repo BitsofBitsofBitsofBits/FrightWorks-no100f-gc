@@ -412,6 +412,10 @@ target_include_directories(mkw_nand_save_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_compile_features(mkw_nand_save_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_nand_save_tests COMMAND mkw_nand_save_tests)
 
+add_executable(mkw_audio_poll_clock_tests "${CMAKE_CURRENT_LIST_DIR}/tests/audio_poll_clock_tests.cpp")
+target_compile_features(mkw_audio_poll_clock_tests PRIVATE cxx_std_17)
+add_test(NAME mkw_audio_poll_clock_tests COMMAND mkw_audio_poll_clock_tests)
+
 add_executable(mkw_nand_settings_tests "${CMAKE_CURRENT_LIST_DIR}/tests/nand_settings_tests.cpp")
 find_package(Threads REQUIRED)
 target_link_libraries(mkw_nand_settings_tests PRIVATE Threads::Threads)
@@ -428,6 +432,10 @@ add_executable(no100f_window_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_windo
 target_include_directories(no100f_window_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_window_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_window_tests COMMAND no100f_window_tests)
+
+add_executable(no100f_ax_address_sync_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_ax_address_sync_tests.cpp")
+target_compile_features(no100f_ax_address_sync_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_ax_address_sync_tests COMMAND no100f_ax_address_sync_tests)
 
 # The input expression engine is self-contained, so it can be exercised without
 # linking the runtime or SDL.

@@ -43,6 +43,15 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
+The GameCube audio runtime preserves a pending complete voice-address reset when subsequent loop, end,
+current or looping updates arrive before synchronization. This avoids dropping the reset during movie
+restarts; ordinary partial updates retain the original SDK behavior. This is a targeted synchronization
+correction, not a guarantee that every intermittent audio issue is resolved.
+
+Window-interaction stalls are separate: GameCube audio is generated on the game thread, and the
+original Bink code can switch to silence when its audio-servicing timeout expires. The address
+synchronization correction does not make audio continue through a blocked window event loop.
+
 ![The launcher](docs/launcher.png)
 
 ## Building
@@ -58,6 +67,12 @@ powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
 
 The game builds to `Play\`; the package goes to `dist\`. Packaging expects the HD texture pack in
 `texture_pack\ScoobyHD` (not in git).
+
+Audio polling retains elapsed host time, including
+fractional microseconds, rather than dropping time after a 100 ms stall. Catch-up work remains
+bounded per tick, and the original Bink safety thresholds are unchanged. This timing correction
+does not guarantee that every historical audio failure is resolved. After changing the native AX
+overrides, rebuild without `-SkipTranslate` so translated calls use the corrected setters.
 
 ## Credits
 
