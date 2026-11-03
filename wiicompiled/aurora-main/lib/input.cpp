@@ -1,4 +1,5 @@
 #include "input.hpp"
+#include <aurora/window_owner.hpp>
 #include "internal.hpp"
 
 #include "magic_enum.hpp"
@@ -535,7 +536,11 @@ void persist_controller_for_player(uint32_t player, const GameController* contro
   save_port_preferences();
 }
 
-void initialize() noexcept {
+void initialize() {
+  if (window_owner::enabled() && !window_owner::is_owner()) {
+    window_owner::call([] { initialize(); });
+    return;
+  }
   /* Make sure we initialize everything input related now, this will automatically add all of the connected controllers
    * as expected */
   ASSERT(SDL_Init(SDL_INIT_HAPTIC | SDL_INIT_JOYSTICK | SDL_INIT_GAMEPAD), "Failed to initialize SDL subsystems: {}",

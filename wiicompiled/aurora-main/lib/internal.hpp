@@ -132,9 +132,9 @@ extern char g_gameName[4];
 
 // wait_for_frame_worker() joins the DONE phase (ImGui, surface, sealing another frame need this).
 // wait_for_frame_worker_sealed() joins only SEALED, which is what the FIFO drain uses.
-void wait_for_frame_worker() noexcept;
-std::chrono::nanoseconds wait_for_frame_worker_sealed() noexcept;
-bool wait_for_frame_worker_for(std::chrono::microseconds timeout) noexcept;
+void wait_for_frame_worker();
+std::chrono::nanoseconds wait_for_frame_worker_sealed();
+bool wait_for_frame_worker_for(std::chrono::microseconds timeout);
 std::recursive_mutex& renderer_gpu_mutex() noexcept;
 
 template <typename T>

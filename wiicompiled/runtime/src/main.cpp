@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <aurora/window_owner.hpp>
+#include "audio_backend.h"
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -1648,12 +1650,26 @@ int RuntimeMain(int argc, char** argv) {
         // Shutdown fiber system
         Fiber::GuestFiberManager::Shutdown();
         WindowPlacementPersistence::Flush(true);
+        if (aurora::window_owner::enabled()) AudioBackend::Instance().Shutdown();
+        aurora_shutdown();
+        DiscordPresence::Shutdown();
+        SetRuntimeExitCodeImpl(0);
+        ShutdownProcessTranscript();
+        return 0;
+    } catch (const aurora::window_owner::CloseRequested&) {
+        aurora::window_owner::begin_shutdown();
+        no100f_recorder::FinishForExit();
+        Fiber::GuestFiberManager::Shutdown();
+        settings_overlay::ReleaseControllers();
+        WindowPlacementPersistence::Flush(true);
+        AudioBackend::Instance().Shutdown();
         aurora_shutdown();
         DiscordPresence::Shutdown();
         SetRuntimeExitCodeImpl(0);
         ShutdownProcessTranscript();
         return 0;
     } catch (const Memory::AccessViolation& ex) {
+        if (aurora::window_owner::enabled()) aurora::window_owner::begin_shutdown();
         std::cerr << "Runtime error: " << ex.what() << std::endl;
         DumpAccessViolationReport(ex, currentEntryLabel);
         std::ostringstream details;
@@ -1666,11 +1682,13 @@ int RuntimeMain(int argc, char** argv) {
         SetRuntimeExitCodeImpl(1);
         Fiber::GuestFiberManager::Shutdown();
         WindowPlacementPersistence::Flush(true);
+        if (aurora::window_owner::enabled()) AudioBackend::Instance().Shutdown();
         aurora_shutdown();
         DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
         return 1;
     } catch (const std::exception& ex) {
+        if (aurora::window_owner::enabled()) aurora::window_owner::begin_shutdown();
         std::cerr << "Runtime error: " << ex.what() << std::endl;
         SystemBridge::DumpCpuState(TryGetCpuContext());
         ShowRuntimeFatalPopup("a runtime exception occurred", ex.what());
@@ -1678,6 +1696,7 @@ int RuntimeMain(int argc, char** argv) {
         SetRuntimeExitCodeImpl(1);
         Fiber::GuestFiberManager::Shutdown();
         WindowPlacementPersistence::Flush(true);
+        if (aurora::window_owner::enabled()) AudioBackend::Instance().Shutdown();
         aurora_shutdown();
         DiscordPresence::Shutdown();
         ShutdownProcessTranscript();
@@ -1692,6 +1711,17 @@ extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** 
 }
 #else
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    try {
+        return aurora::window_owner::run([=] { return RuntimeMain(argc, argv); });
+    } catch (const std::exception& error) {
+        std::cerr << "[runtime] window owner failed: " << error.what() << '\n';
+        ShowRuntimeFatalPopup("the window owner failed", error.what());
+        WriteFatalLogImpl("window_owner", error.what());
+        SetRuntimeExitCodeImpl(1);
+        return 1;
+    }
+#endif
     return RuntimeMain(argc, argv);
 }
 #endif

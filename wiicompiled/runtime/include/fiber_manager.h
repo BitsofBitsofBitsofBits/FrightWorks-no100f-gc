@@ -1,4 +1,5 @@
 #pragma once
+#include <exception>
 
 #include <atomic>
 #include <cstdint>
@@ -124,6 +125,7 @@ private:
     static bool s_initialized;
     // Stored CPU context pointer for fiber switches
     static thread_local CpuContext* s_cpuContext;
+    static thread_local std::exception_ptr s_ownerException;
 
     static void PurgePendingFibers();
 };

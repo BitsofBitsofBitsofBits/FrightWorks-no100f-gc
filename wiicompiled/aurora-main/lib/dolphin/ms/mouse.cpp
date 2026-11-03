@@ -2,6 +2,7 @@
 #include <SDL3/SDL_mouse.h>
 
 #include "../../input.hpp"
+#include <aurora/window_owner_sdl.hpp>
 
 extern "C" {
 static MSStatus gStatus{};

@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <sys/stat.h>
+#include <aurora/window_owner_sdl.hpp>
 
 namespace {
 constexpr int32_t k_mappingsFileVersion = 3;

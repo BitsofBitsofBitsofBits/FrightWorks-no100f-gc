@@ -35,6 +35,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
+#include <aurora/window_owner_sdl.hpp>
 
 #include <array>
 #include <algorithm>

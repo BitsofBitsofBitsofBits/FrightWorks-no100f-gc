@@ -5,6 +5,7 @@
 #include "host_context.h"
 #include "runtime_log.h"
 #include "system_bridge.h"
+#include <aurora/window_owner.hpp>
 
 // Defined in hle/os/os_sleep.cpp; the sleep-timer table is file-local there.
 
@@ -24,6 +25,7 @@ void* GuestFiberManager::s_schedulerFiber = nullptr;
 uint32_t GuestFiberManager::s_currentGuestThread = 0;
 bool GuestFiberManager::s_initialized = false;
 thread_local CpuContext* GuestFiberManager::s_cpuContext = nullptr;
+thread_local std::exception_ptr GuestFiberManager::s_ownerException;
 
 void GuestFiberManager::PurgePendingFibers() {
     std::vector<void*> toDelete;
@@ -196,6 +198,7 @@ void GuestFiberManager::Initialize() {
     }
     
     s_currentGuestThread = 0;
+    s_ownerException = nullptr;
     s_initialized = true;
 }
 
@@ -452,6 +455,11 @@ void GuestFiberManager::SwitchToThread(uint32_t guestThreadAddr, CpuContext* cpu
             s_currentGuestThread = 0;
         }
     }
+    if (s_ownerException) {
+        const auto error = s_ownerException;
+        s_ownerException = nullptr;
+        std::rethrow_exception(error);
+    }
 }
 
 uint32_t GuestFiberManager::GetCurrentGuestThread() {
@@ -614,26 +622,36 @@ void GuestFiberManager::FiberProc(void* param)
     cpu->pc = entryPoint;
     cpu->srr0 = entryPoint;
     
-    // Create a CpuContextScope for this fiber
-    CpuContextScope scope(cpu);
-    
-    // SPM has no NSMBW EGG::Thread::start entry at 0x802BA860.
-
-
-    // The deferral loop above yields to the scheduler and therefore can resume
-    // with registers from a different guest fiber in the shared CpuContext.
-    cpu->gpr[3] = entryArg;
-    cpu->pc = entryPoint;
-    cpu->srr0 = entryPoint;
-
-    
-    // Call the translated thread entry function
-    const auto* info = TranslatedFunctionRegistry::FindByAddressPtr(entryPoint);
-    if (info) {
-        InvokeIndirectCpu(entryPoint, cpu);
-    } else {
-        RT_LOG(RT_TAG_OS) << "Thread entry 0x" << std::hex << entryPoint
-                  << " not found in registry!" << std::dec << std::endl;
+    std::exception_ptr ownerException;
+    {
+        CpuContextScope scope(cpu);
+        cpu->gpr[3] = entryArg;
+        cpu->pc = entryPoint;
+        cpu->srr0 = entryPoint;
+        const auto* info = TranslatedFunctionRegistry::FindByAddressPtr(entryPoint);
+        try {
+            if (info) {
+                InvokeIndirectCpu(entryPoint, cpu);
+            } else {
+                RT_LOG(RT_TAG_OS) << "Thread entry 0x" << std::hex << entryPoint
+                          << " not found in registry!" << std::dec << std::endl;
+            }
+        } catch (...) {
+            if (!aurora::window_owner::enabled()) throw;
+            ownerException = std::current_exception();
+        }
+    }
+    if (ownerException) {
+        {
+            std::lock_guard lock(s_mutex);
+            fiber->terminated = true;
+            fiber->state = ThreadState::MORIBUND;
+            s_currentGuestThread = 0;
+        }
+        s_ownerException = ownerException;
+        // Teardown must unwind on the scheduler stack, never delete the active guest fiber.
+        HostContext::Switch(s_schedulerFiber);
+        std::terminate();
     }
     
     // Thread entry functions normally return into OSExitThread on hardware.

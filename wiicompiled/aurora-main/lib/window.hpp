@@ -40,7 +40,7 @@ SDL_Window* get_sdl_window();
 SDL_Renderer* get_sdl_renderer();
 bool is_paused() noexcept;
 bool is_presentable() noexcept;
-void pump_events() noexcept;
+void pump_events();
 bool native_resize_pending() noexcept;
 bool native_window_size_matches(uint32_t width, uint32_t height) noexcept;
 void set_surface_ready(bool ready) noexcept;

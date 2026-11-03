@@ -256,11 +256,14 @@ if (AURORA_ENABLE_GX)
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR})
 
     add_library(imgui_backends STATIC
-      ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
+      ${PROJECT_SOURCE_DIR}/lib/imgui_sdl_owner.cpp
       ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
       ${imgui_SOURCE_DIR}/backends/imgui_impl_wgpu.cpp
     )
     target_compile_definitions(imgui_backends PRIVATE IMGUI_IMPL_WEBGPU_BACKEND_DAWN)
+    target_compile_definitions(imgui_backends PRIVATE
+      IMGUI_SDL_OWNER_SOURCE="${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp")
+    target_include_directories(imgui_backends PRIVATE ${PROJECT_SOURCE_DIR}/include)
     target_link_libraries(imgui_backends PRIVATE imgui ${AURORA_SDL3_TARGET} dawn::webgpu_dawn)
     target_link_libraries(imgui PUBLIC imgui_backends)
 
