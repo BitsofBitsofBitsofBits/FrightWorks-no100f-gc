@@ -24,7 +24,7 @@ public static class RecWin {
 '@ -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Windows.Forms
 [RecWin]::SetProcessDPIAware() | Out-Null
-$g = Get-Process 'Scooby-Doo Refrightened' -ErrorAction Stop | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
+$g = Get-Process 'FrightWorks Game' -ErrorAction Stop | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
 $h = $g.MainWindowHandle
 [RecWin]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 500

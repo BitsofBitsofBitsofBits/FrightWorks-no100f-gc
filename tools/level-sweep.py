@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PLAY, DISC = ROOT / "Play", ROOT / "Disc" / "DATA" / "files"
-EXE = "Scooby-Doo Refrightened.exe"
+EXE = "FrightWorks Game.exe"
 
 
 def all_levels():

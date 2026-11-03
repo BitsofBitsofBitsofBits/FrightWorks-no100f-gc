@@ -7,6 +7,13 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include "netplay_lobby.h"
 #include "netplay_ui.h"
 #include "settings_overlay.h"
+#include "overlay_theme.h"
+#include "build_info.h"
+#include "no100f_credits.h"
+#include "no100f_devmenu.h"
+#include "no100f_game_state.h"
+#include "no100f_recorder.h"
+#include "memory.h"
 #include "audio_backend.h"
 #include "aurora_events.h"
 #include "controller_button_names.h"
@@ -24,6 +31,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_misc.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
@@ -32,16 +40,20 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cfloat>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <limits>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -272,11 +284,19 @@ std::string NativeBindingConfig(uint32_t binding) {
 }
 
 
+// The settings board fades in and takes keyboard/gamepad focus when it opens.
+Clock::time_point g_panelOpenedAt{};
+bool g_panelFocusPending = false;
+
 void SetTopBarVisible(bool visible) {
     if (g_topBarVisible == visible) {
         return;
     }
     g_topBarVisible = visible;
+    if (visible) {
+        g_panelOpenedAt = Clock::now();
+        g_panelFocusPending = true;
+    }
 }
 
 void ApplyConfiguredMappings() {
@@ -347,7 +367,7 @@ void DrawWiiRemoteAccelerometer(uint32_t port) {
     // and it falls back to a nominal zero point, leaving a small per-axis bias;
     // measured here with the remote at rest.
     if (WiiRemoteInput::IsAccelCalibrating()) {
-        ImGui::ProgressBar(WiiRemoteInput::AccelCalibrationProgress(), ImVec2(220.0f, 0.0f), "Hold still...");
+        ImGui::ProgressBar(WiiRemoteInput::AccelCalibrationProgress(), ImVec2(OverlayTheme::Px(220.0f), 0.0f), "Hold still...");
     } else if (ImGui::Button("Calibrate (remote lying flat, buttons up)")) {
         WiiRemoteInput::StartAccelCalibration(port);
     }
@@ -373,10 +393,10 @@ void DrawWiiRemoteAccelerometer(uint32_t port) {
 
 // Wii Remotes (Bluetooth) menu: driver switch, pairing help, continuous scanning and the port's controller kind.
 void DrawWiiRemoteSettings(uint32_t selectedGamePort) {
-    if (!ImGui::BeginMenu("Wii Remotes (Bluetooth)")) {
+    if (!ImGui::CollapsingHeader("Wii Remotes (Bluetooth)")) {
         return;
     }
-    if (ImGui::Checkbox("Use Wii Remotes / Wii U Pro Controllers", &g_wiiRemotesEnabled)) {
+    if (OverlayTheme::Toggle("Use Wii Remotes / Wii U Pro Controllers", &g_wiiRemotesEnabled)) {
         RuntimeConfigFile::SetWiiRemotesEnabled(g_wiiRemotesEnabled);
     }
     if (ImGui::IsItemHovered()) {
@@ -385,7 +405,7 @@ void DrawWiiRemoteSettings(uint32_t selectedGamePort) {
     ImGui::TextDisabled("Pairing: Windows Settings > Bluetooth > Add device, then press 1+2");
     ImGui::TextDisabled("(or the red SYNC button) on the remote. Leave the PIN empty.");
     ImGui::TextDisabled("A remote that was paired before also needs to be turned on with 1+2/SYNC.");
-    if (ImGui::Checkbox("Keep scanning for Wii Remotes (like Dolphin's Continuous Scanning)",
+    if (OverlayTheme::Toggle("Keep scanning for Wii Remotes (like Dolphin's Continuous Scanning)",
                         &g_wiiContinuousScan)) {
         RuntimeConfigFile::SetWiiContinuousScanEnabled(g_wiiContinuousScan);
     }
@@ -459,8 +479,6 @@ void DrawWiiRemoteSettings(uint32_t selectedGamePort) {
         kind == WiiRemoteInput::Kind::RemoteWithClassic) {
         DrawWiiRemoteAccelerometer(selectedGamePort);
     }
-
-    ImGui::EndMenu();
 }
 
 const char* KeyBindingName(int scancode) {
@@ -574,7 +592,7 @@ void DrawRebindPrompt() {
                 ? "Press a keyboard key."
                 : "Press a keyboard key or click a mouse button.");
         ImGui::TextUnformatted("Release any held input first. Backspace or Delete clears the mapping.");
-        ImGui::TextUnformatted("Escape can be bound. F10 is reserved for settings.");
+        ImGui::TextUnformatted("Escape can be bound. F1, F2 and F10 are reserved.");
         const float remaining = std::chrono::duration<float>(g_rebind.deadline - Clock::now()).count();
         ImGui::Text("Unmapped in %d seconds", std::max(0, static_cast<int>(std::ceil(remaining))));
         const bool clear = ImGui::Button("Clear mapping");
@@ -589,7 +607,8 @@ void DrawRebindPrompt() {
             int count = 0;
             const bool* keys = SDL_GetKeyboardState(&count);
             for (int i = 1; i < std::min(count, static_cast<int>(SDL_SCANCODE_COUNT)) && g_rebind.active; ++i) {
-                if (keys[i] && !g_rebind.keys[i] && i != SDL_SCANCODE_F10) CompleteRebind(i);
+                if (keys[i] && !g_rebind.keys[i] && i != SDL_SCANCODE_F10 && i != SDL_SCANCODE_F1 &&
+                    i != SDL_SCANCODE_F2) CompleteRebind(i);
                 g_rebind.keys[i] = keys[i];
             }
             const uint32_t mouse = SDL_GetMouseState(nullptr, nullptr);
@@ -619,7 +638,7 @@ void DrawRebindPrompt() {
 }
 
 void DrawKeyBinding(const char* label, int scancode, RebindKind kind, uint16_t target,
-                    float width = 220.0f) {
+                    float width = OverlayTheme::Px(220.0f)) {
     const std::string caption = std::string(KeyBindingName(scancode)) + "##binding";
     if (ImGui::Button(caption.c_str(), ImVec2(width, 0.0f))) BeginRebind(kind, target, label);
     ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
@@ -632,7 +651,7 @@ bool DrawKeyboardSettings(uint32_t port) {
     auto* buttons = PADGetKeyButtonBindings(port, &count);
     bool enabled = buttons != nullptr;
     bool usePreset = false;
-    if (ImGui::Checkbox("Keyboard and mouse", &enabled)) {
+    if (OverlayTheme::Toggle("Keyboard and mouse", &enabled)) {
         PADSetKeyboardActive(port, enabled);
         PADSerializeMappings();
         buttons = PADGetKeyButtonBindings(port, &count);
@@ -641,7 +660,7 @@ bool DrawKeyboardSettings(uint32_t port) {
         });
     }
     if (!enabled) return false;
-    ImGui::TextDisabled("Replaces the gamepad on this port. F10 opens settings.");
+    ImGui::TextDisabled("Works together with a gamepad on this port. F10 opens settings.");
     if (ImGui::Button("Use WASD + mouse preset") || usePreset) {
         const std::array<int, PAD_BUTTON_COUNT> keys = {
             PAD_KEY_MOUSE_LEFT, SDL_SCANCODE_SPACE, SDL_SCANCODE_E, SDL_SCANCODE_Q,
@@ -661,15 +680,15 @@ bool DrawKeyboardSettings(uint32_t port) {
             PADSetKeyAxisBinding(port, {axes[i], mappings[i].padAxis, 1});
         PADSerializeMappings();
     }
-    ImGui::SeparatorText("Button mapping");
+    OverlayTheme::SectionTitle("Keys");
     for (uint32_t i = 0; i < count; ++i) {
         int key = buttons[i].scancode;
         ImGui::PushID(static_cast<int>(i));
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(OverlayTheme::Px(220.0f));
         DrawKeyBinding(PADGetButtonName(buttons[i].padButton), key, RebindKind::KeyboardButton, buttons[i].padButton);
         ImGui::PopID();
     }
-    ImGui::SeparatorText("Stick and trigger mapping");
+    OverlayTheme::SectionTitle("Stick and trigger keys");
     uint32_t axisCount = 0;
     auto* axes = PADGetKeyAxisBindings(port, &axisCount);
     for (uint32_t i = 0; i < axisCount; ++i) {
@@ -678,7 +697,7 @@ bool DrawKeyboardSettings(uint32_t port) {
         const char* direction = PADGetAxisDirectionLabel(axes[i].padAxis);
         const std::string label = std::string(PADGetAxisName(axes[i].padAxis)) + " " +
                                   (direction != nullptr ? direction : "");
-        ImGui::SetNextItemWidth(220.0f);
+        ImGui::SetNextItemWidth(OverlayTheme::Px(220.0f));
         DrawKeyBinding(label.c_str(), key, RebindKind::KeyboardAxis, axes[i].padAxis);
         ImGui::PopID();
     }
@@ -696,8 +715,8 @@ int ExpressionResizeCallback(ImGuiInputTextCallbackData* data) {
 }
 
 void DrawExpressionSettings() {
-    ImGui::SeparatorText("Expressions (Dolphin syntax)");
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 440.0f);
+    OverlayTheme::SectionTitle("Expressions (Dolphin syntax)");
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + OverlayTheme::Px(440.0f));
     ImGui::TextDisabled(
         "Optional. An expression overrides nothing: its result is combined with the "
         "button mapping above. Operators ! & | ^ and functions if, min, max, clamp, "
@@ -743,7 +762,7 @@ void DrawExpressionSettings() {
     for (size_t i = 0; i < InputBindings::kControls.size(); ++i) {
         ImGui::PushID(static_cast<int>(i) + 2000);
         std::string& text = buffers[i];
-        ImGui::SetNextItemWidth(300.0f);
+        ImGui::SetNextItemWidth(OverlayTheme::Px(300.0f));
         if (ImGui::InputText(InputBindings::kControls[i].label, text.data(), text.capacity() + 1,
                              ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackResize,
                              ExpressionResizeCallback, &text)) {
@@ -762,8 +781,8 @@ void DrawExpressionSettings() {
 }
 
 void DrawRumbleSettings() {
-    ImGui::SeparatorText("Vibration");
-    if (ImGui::Checkbox("Controller vibration", &g_rumbleEnabled)) {
+    OverlayTheme::SectionTitle("Vibration");
+    if (OverlayTheme::Toggle("Controller vibration", &g_rumbleEnabled)) {
         PAD_HLE_SetRumbleEnabled(g_rumbleEnabled);
         RuntimeConfigFile::SetRumbleEnabled(g_rumbleEnabled);
         if (!g_rumbleEnabled) {
@@ -780,10 +799,43 @@ void DrawRumbleSettings() {
     }
 }
 
+// The Xbox's Black / White buttons ([controller] xbox_black / xbox_white): any pad button, trigger or stick direction.
+// The pad button sends only Black / White, not the GameCube button it is mapped to.
+void DrawXboxButtonSettings() {
+    using namespace OverlayTheme;
+    const float labelWidth = Px(210);
+    const float controlWidth = std::max(Px(200), std::min(Px(320), ImGui::GetContentRegionAvail().x - labelWidth));
+    static constexpr const char* kActions[] = {"Black (sneak)", "White (soap bubble)"};
+    for (size_t action = 0; action < 2; ++action) {
+        const std::string current = RuntimeConfigFile::XboxButton(action);
+        const auto* currentItem = ControllerNames::FindNativeButton(current);
+        const auto label = [](const ControllerNames::NativeButtonItem& item) {
+            return item.nativeButton == PAD_NATIVE_BUTTON_DISABLED ? "Off" : item.label;
+        };
+        RowLabel(kActions[action], labelWidth, controlWidth);
+        ImGui::PushID(static_cast<int>(action));
+        if (ImGui::BeginCombo("##xboxbutton", currentItem != nullptr ? label(*currentItem) : current.c_str())) {
+            for (const auto& item : kNativeButtons) {
+                if (item.nativeButton == PAD_NATIVE_BUTTON_INVALID) continue;  // "Default" means nothing here
+                const bool selected = currentItem == &item;
+                if (ImGui::Selectable(label(item), selected)) RuntimeConfigFile::SetXboxButton(action, item.configName);
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopID();
+    }
+    Hint("The chosen pad button sends only Black or White. Hints in the game name it from the next level load.");
+}
+
+void DrawGamepadSettings(uint32_t selectedGamePort);
+
+// Controls page: the port, then its gamepad and its keyboard in two sections of their own. Both drive the same port
+// at the same time (aurora PADRead adds the keys on top of the gamepad).
 void DrawControllerSettings() {
-    ImGui::TextUnformatted("Every connected gamepad controls Mario (player 1), mapped for its type.");
-    ImGui::TextDisabled("Pick the controller type or remap buttons in the launcher's Controls page.");
-    ImGui::Separator();
+    using namespace OverlayTheme;
+    SectionTitle("Controls");
+    Hint("Every connected gamepad controls Scooby (player 1), mapped for its type. The keyboard works at the same time.");
     for (int port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
         const std::string label = "Port " + std::to_string(port + 1);
         ImGui::RadioButton(label.c_str(), &g_controllerPort, port);
@@ -791,40 +843,67 @@ void DrawControllerSettings() {
             ImGui::SameLine();
         }
     }
-
+    static bool keyboardSection = false;
+    const ImVec2 plank(Px(270), Px(40));
+    if (Plank("GAMEPAD##controls", !keyboardSection, plank)) keyboardSection = false;
+    ImGui::SameLine();
+    if (Plank("KEYBOARD AND MOUSE##controls", keyboardSection, plank)) keyboardSection = true;
     ImGui::Separator();
     const uint32_t selectedGamePort = static_cast<uint32_t>(g_controllerPort);
-    if (DrawKeyboardSettings(selectedGamePort)) {
-        return;
+    if (keyboardSection) {
+        DrawKeyboardSettings(selectedGamePort);
+    } else {
+        DrawGamepadSettings(selectedGamePort);
+    }
+}
+
+void DrawGamepadSettings(uint32_t selectedGamePort) {
+    // hle/no100f_xbox_layout.h: works on top of the button mapping below, which stays as it is.
+    if (bool xboxLayout = RuntimeConfigFile::XboxOriginalLayout();
+        OverlayTheme::Toggle("Original Xbox controls", &xboxLayout)) {
+        RuntimeConfigFile::SetXboxOriginalLayout(xboxLayout);
+    }
+    OverlayTheme::Hint("On: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, LT gum, "
+                       "RT run, White soap bubble (LB), Black sneak (RB), Start pause; Black and White work together "
+                       "with the triggers. The hints say so too from the next level load. Off (GameCube): B head smash and "
+                       "back, X dig, Z + L bubble, Z + R sneak. Gamepads only; the button mapping below stays in GameCube "
+                       "buttons either way.");
+    if (RuntimeConfigFile::XboxOriginalLayout()) {
+        DrawXboxButtonSettings();
     }
     ImGui::Separator();
     const char* currentName = PADGetName(selectedGamePort);
     ImGui::Text("Assigned: %s", currentName != nullptr ? currentName : "None");
-    if (ImGui::MenuItem("Unassign controller")) {
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Unassign")) {
         PADClearPort(selectedGamePort);
         g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
+    }
+    const uint32_t controllerCount = PADCount();
+    if (controllerCount == 0) {
+        ImGui::TextDisabled("No controller connected");
+    } else {
+        ImGui::SetNextItemWidth(OverlayTheme::Px(320.0f));
+        if (ImGui::BeginCombo("##assign", "Assign a connected controller...")) {
+            for (uint32_t index = 0; index < controllerCount; ++index) {
+                const char* name = PADGetNameForControllerIndex(index);
+                ImGui::PushID(static_cast<int>(index));
+                if (ImGui::Selectable(name != nullptr ? name : "Unknown controller")) {
+                    PADSetPortForIndex(index, selectedGamePort);
+                    g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
+                    ApplyConfiguredMappings();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
     }
     ImGui::Separator();
     controller_mapping_wizard::DrawSetupList();
     DrawWiiRemoteSettings(selectedGamePort);
-    const uint32_t controllerCount = PADCount();
+    DrawRumbleSettings();  // above the mapping, and shown with no controller connected too
     if (controllerCount == 0) {
-        ImGui::TextDisabled("No controller connected");
         return;
-    }
-
-    if (ImGui::BeginMenu("Assign connected controller")) {
-        for (uint32_t index = 0; index < controllerCount; ++index) {
-            const char* name = PADGetNameForControllerIndex(index);
-            ImGui::PushID(static_cast<int>(index));
-            if (ImGui::MenuItem(name != nullptr ? name : "Unknown controller")) {
-                PADSetPortForIndex(index, selectedGamePort);
-                g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
-                ApplyConfiguredMappings();
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndMenu();
     }
 
     uint32_t mappingCount = 0;
@@ -856,8 +935,10 @@ void DrawControllerSettings() {
         altRowExpanded.fill(false);
     }
 
-    ImGui::SeparatorText("Presets");
-    if (ImGui::Button("GameCube")) {
+    OverlayTheme::SectionTitle("Presets");
+    // GameCube and Original Xbox both restore the default mapping; Original Xbox then switches the layout on.
+    const auto restoreDefaults = [&](bool xboxLayout) {
+        RuntimeConfigFile::SetXboxOriginalLayout(xboxLayout);
         const uint32_t port = static_cast<uint32_t>(g_controllerPort);
         PADRestoreDefaultMapping(port);
         uint32_t restoredCount = 0;
@@ -874,6 +955,13 @@ void DrawControllerSettings() {
         altRowExpanded.fill(false);
         PADSerializeMappings();
         mappings = PADGetButtonMappings(port, &mappingCount);
+    };
+    if (ImGui::Button("GameCube")) {
+        restoreDefaults(false);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Original Xbox")) {
+        restoreDefaults(true);
     }
     const auto applyPreset = [&](const std::array<const char*, PAD_BUTTON_COUNT>& preset) {
         const uint32_t port = static_cast<uint32_t>(g_controllerPort);
@@ -899,7 +987,7 @@ void DrawControllerSettings() {
         applyPreset(kPlayStationPreset);
     }
 
-    ImGui::SeparatorText("Button mapping");
+    OverlayTheme::SectionTitle("Button mapping");
     ImGui::TextDisabled("LT / L2 = left trigger. RT / R2 = right trigger.");
     ImGui::TextDisabled("LB / L1 = left shoulder. RB / R1 = right shoulder.");
     ImGui::TextDisabled("Click a binding, then press an input. No input for 10 seconds clears it.");
@@ -982,59 +1070,51 @@ void DrawControllerSettings() {
         ImGui::PopID();
     }
     DrawExpressionSettings();
-    DrawRumbleSettings();
 }
 
 void DrawAudioSettings() {
-    ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::SliderInt("Master", &g_audioVolumePercent, 0, 100, "%d%%")) {
+    using namespace OverlayTheme;
+    const float labelWidth = Px(210);
+    const float controlWidth = std::max(Px(200), std::min(Px(320), ImGui::GetContentRegionAvail().x - labelWidth));
+    SectionTitle("Volume");
+    RowLabel("Master", labelWidth, controlWidth);
+    if (ImGui::SliderInt("##master", &g_audioVolumePercent, 0, 100, "%d%%")) {
         const float volume = static_cast<float>(g_audioVolumePercent) / 100.0f;
         AudioBackend::Instance().SetMasterVolume(volume);
         RuntimeConfigFile::SetAudioVolume(volume);
     }
-    if (ImGui::SliderInt("Music", &g_musicVolumePercent, 0, 100, "%d%%")) {
+    RowLabel("Music", labelWidth, controlWidth);
+    if (ImGui::SliderInt("##music", &g_musicVolumePercent, 0, 100, "%d%%")) {
         const float volume = static_cast<float>(g_musicVolumePercent) / 100.0f;
         MusicAttenuation::SetMusicVolume(volume);
         RuntimeConfigFile::SetMusicVolume(volume);
     }
-    if (ImGui::SliderInt("Sound Effects", &g_soundEffectsVolumePercent, 0, 100, "%d%%")) {
+    RowLabel("Sound effects", labelWidth, controlWidth);
+    if (ImGui::SliderInt("##sfx", &g_soundEffectsVolumePercent, 0, 100, "%d%%")) {
         const float volume = static_cast<float>(g_soundEffectsVolumePercent) / 100.0f;
         MusicAttenuation::SetSoundEffectsVolume(volume);
         RuntimeConfigFile::SetSoundEffectsVolume(volume);
     }
-    if (ImGui::SliderInt("UI", &g_uiVolumePercent, 0, 100, "%d%%")) {
+    RowLabel("Menus", labelWidth, controlWidth);
+    if (ImGui::SliderInt("##ui", &g_uiVolumePercent, 0, 100, "%d%%")) {
         const float volume = static_cast<float>(g_uiVolumePercent) / 100.0f;
         MusicAttenuation::SetUiVolume(volume);
         RuntimeConfigFile::SetUiVolume(volume);
     }
-    if (ImGui::SliderInt("Voices", &g_voicesVolumePercent, 0, 100, "%d%%")) {
+    RowLabel("Voices", labelWidth, controlWidth);
+    if (ImGui::SliderInt("##voices", &g_voicesVolumePercent, 0, 100, "%d%%")) {
         const float volume = static_cast<float>(g_voicesVolumePercent) / 100.0f;
         MusicAttenuation::SetVoicesVolume(volume);
         RuntimeConfigFile::SetVoicesVolume(volume);
     }
-    const float labelColumn = ImGui::GetCursorPosX() + ImGui::CalcItemWidth();
-    if (ImGui::Checkbox("Mute", &g_audioMuted)) {
+
+    SectionTitle("Mute");
+    if (Toggle("Mute all sound", &g_audioMuted)) {
         AudioBackend::Instance().SetMuted(g_audioMuted);
         RuntimeConfigFile::SetAudioMuted(g_audioMuted);
     }
-    ImGui::SameLine();
-    DrawKeyBinding("Mute shortcut", g_muteHotkey, RebindKind::MuteHotkey, 0,
-                   std::max(60.0f, labelColumn - ImGui::GetCursorPosX()));
-    ImGui::Separator();
-    if (ImGui::Checkbox("Mix audio on a worker thread", &g_audioMixWorker)) {
-        // Applies immediately: SetMixWorkerEnabled joins any in-flight mix
-        // before switching, so the change never lands mid-frame.
-        AxDspHle::SetMixWorkerEnabled(g_audioMixWorker);
-        RuntimeConfigFile::SetAudioMixWorker(g_audioMixWorker);
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-            "Runs the AX/DSP voice mix off the game thread. Turn this off if you "
-            "suspect an audio problem; the mix then runs inline as it used to.");
-    }
-    ImGui::Separator();
-    if (ImGui::Checkbox("Mute game music while external media is playing",
-                        &g_attenuateMusicWhenMediaPlays)) {
+    DrawKeyBinding("Mute shortcut (click, then press a key)", g_muteHotkey, RebindKind::MuteHotkey, 0, Px(160));
+    if (Toggle("Mute game music while other media plays", &g_attenuateMusicWhenMediaPlays)) {
         MusicAttenuation::SetEnabled(g_attenuateMusicWhenMediaPlays);
         RuntimeConfigFile::SetAttenuateMusicWhenMediaPlays(g_attenuateMusicWhenMediaPlays);
     }
@@ -1047,18 +1127,31 @@ void DrawAudioSettings() {
 #endif
     if (g_attenuateMusicWhenMediaPlays) {
         if (MusicAttenuation::IsExternalMediaPlaying()) {
-            ImGui::TextDisabled("External media is playing; game music is muted.");
+            Hint("External media is playing; game music is muted.");
         } else if (!MusicAttenuation::IsMediaControlInitializationComplete()) {
-            ImGui::TextDisabled("Checking external audio...");
+            Hint("Checking external audio...");
         } else if (!MusicAttenuation::IsMediaControlAvailable()) {
 #if defined(__APPLE__)
-            ImGui::TextDisabled("External audio detection unavailable (requires macOS 14.2 or later).");
+            Hint("External audio detection unavailable (requires macOS 14.2 or later).");
 #else
-            ImGui::TextDisabled("Media controls are unavailable.");
+            Hint("Media controls are unavailable.");
 #endif
         } else {
-            ImGui::TextDisabled("No external media is currently playing.");
+            Hint("No external media is currently playing.");
         }
+    }
+
+    SectionTitle("Advanced");
+    if (Toggle("Mix audio on a worker thread", &g_audioMixWorker)) {
+        // Applies immediately: SetMixWorkerEnabled joins any in-flight mix
+        // before switching, so the change never lands mid-frame.
+        AxDspHle::SetMixWorkerEnabled(g_audioMixWorker);
+        RuntimeConfigFile::SetAudioMixWorker(g_audioMixWorker);
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+            "Runs the AX/DSP voice mix off the game thread. Turn this off if you "
+            "suspect an audio problem; the mix then runs inline as it used to.");
     }
 }
 
@@ -1096,7 +1189,7 @@ void DrawLanPlaySettings() {
     }
     static char entry[128] = {};
     static std::string result;
-    ImGui::SetNextItemWidth(260.0f);
+    ImGui::SetNextItemWidth(OverlayTheme::Px(260.0f));
     const bool submitted = ImGui::InputTextWithHint("##add-device", "Tailscale name or address", entry, sizeof(entry),
                                                     ImGuiInputTextFlags_EnterReturnsTrue);
     ImGui::SameLine();
@@ -1109,37 +1202,58 @@ void DrawLanPlaySettings() {
     }
 }
 
-void DrawGraphicsSettings() {
+void DrawVideoSettings() {
+    using namespace OverlayTheme;
     g_displayMode = static_cast<int>(aurora_get_display_mode());
-    // NSMBW: the aspect (original 4:3, 16:9, fill) lives in the Aspect menu (DisplaySettings).
-    struct EffectFlag {
-        const char* label;
-        uint32_t flag;
-    };
-    static constexpr std::array<EffectFlag, 1> kEffectFlags = {{
-        {"Disable bloom", 0x10u},
-    }};
+    const float labelWidth = Px(210);
+    const float controlWidth = std::max(Px(200), std::min(Px(320), ImGui::GetContentRegionAvail().x - labelWidth));
 
-    for (const auto& effect : kEffectFlags) {
-        bool disabled = (g_disabledPostProcessingPaths & effect.flag) != 0;
-        if (ImGui::Checkbox(effect.label, &disabled)) {
-            if (disabled) {
-                g_disabledPostProcessingPaths |= effect.flag;
-            } else {
-                g_disabledPostProcessingPaths &= ~effect.flag;
-            }
-            RuntimeGameGraphicsOptions::SetDisabledPostProcessingPaths(g_disabledPostProcessingPaths);
-            RuntimeConfigFile::SetDisabledPostProcessingPaths(g_disabledPostProcessingPaths);
+    SectionTitle("Picture");
+    const auto resolutionIt = std::find_if(kResolutions.begin(), kResolutions.end(), [](const ResolutionItem& item) {
+        return std::fabs(item.scale - g_resolutionScale) < 0.001f;
+    });
+    RowLabel("Resolution", labelWidth, controlWidth);
+    if (ImGui::BeginCombo("##resolution", resolutionIt != kResolutions.end() ? resolutionIt->label : "Custom")) {
+        for (const auto& resolution : kResolutions) {
+            const bool selected = std::fabs(resolution.scale - g_resolutionScale) < 0.001f;
+            ImGui::BeginDisabled(IsHighFrameRateMode() && IsHighResolutionScale(resolution.scale));
+            if (ImGui::Selectable(resolution.label, selected)) SetResolutionScale(resolution.scale);
+            ImGui::EndDisabled();
+            if (selected) ImGui::SetItemDefaultFocus();
         }
+        ImGui::EndCombo();
     }
-    ImGui::TextDisabled("Applied when the next scene renderer is created.");
-    ImGui::Separator();
+    uint32_t pictureWidth = 0;
+    uint32_t pictureHeight = 0;
+    AuroraGetPictureSize(&pictureWidth, &pictureHeight);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%ux%u", pictureWidth, pictureHeight);
+
+    const DisplaySettings::Settings display = DisplaySettings::Current();
+    const auto aspectIt = std::find_if(kAspects.begin(), kAspects.end(), [&](const AspectItem& item) {
+        return item.mode == display.aspect;
+    });
+    RowLabel("Picture shape", labelWidth, controlWidth);
+    if (ImGui::BeginCombo("##aspect", aspectIt != kAspects.end() ? aspectIt->label : "Custom")) {
+        for (const auto& aspect : kAspects) {
+            const bool selected = aspect.mode == display.aspect;
+            if (ImGui::Selectable(aspect.label, selected)) SetAspectMode(aspect.mode);
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    // The game reads 4:3 versus widescreen once, at boot.
+    if ((display.aspect != DisplaySettings::kAspect4x3) != DisplaySettings::GameWidescreen()) {
+        Hint("Switching between 4:3 and widescreen takes effect after a restart.");
+    }
+
     static constexpr const char* kDisplayModes[] = {
-        "Windowed",
+        "Window",
         "Borderless fullscreen",
         "Exclusive fullscreen",
     };
-    if (ImGui::Combo("Display mode", &g_displayMode, kDisplayModes, static_cast<int>(std::size(kDisplayModes)))) {
+    RowLabel("Display mode", labelWidth, controlWidth);
+    if (ImGui::Combo("##displaymode", &g_displayMode, kDisplayModes, static_cast<int>(std::size(kDisplayModes)))) {
         const auto mode = static_cast<AuroraDisplayMode>(g_displayMode);
         aurora_set_display_mode(mode);
         const AuroraDisplayMode activeMode = aurora_get_display_mode();
@@ -1150,17 +1264,17 @@ void DrawGraphicsSettings() {
         }
     }
     if (g_displayMode == AURORA_DISPLAY_MODE_EXCLUSIVE) {
-        ImGui::TextDisabled(
-            "Requests the closest native-resolution display mode to the output frame "
-            "rate (60 Hz, or the frame interpolation target).");
+        Hint("Requests the closest native-resolution display mode to the output frame rate (60 Hz, or the frame "
+             "interpolation target).");
     }
+
+    SectionTitle("Smoothness");
     constexpr std::array<const char*, 3> kFrameInterpolationModes{
         "Off", "120 FPS", "180 FPS",
     };
-    const char* currentFrameInterpolationMode =
-        kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)];
     bool frameInterpolationModeChanged = false;
-    if (ImGui::BeginCombo("Frame interpolation (experimental)", currentFrameInterpolationMode)) {
+    RowLabel("Frame interpolation", labelWidth, controlWidth);
+    if (ImGui::BeginCombo("##interpolation", kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)])) {
         for (int mode = 0; mode < static_cast<int>(kFrameInterpolationModes.size()); ++mode) {
             const bool selected = g_frameInterpolationMode == mode;
             if (ImGui::Selectable(kFrameInterpolationModes[static_cast<size_t>(mode)], selected)) {
@@ -1183,52 +1297,69 @@ void DrawGraphicsSettings() {
             aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
         }
     }
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
-    ImGui::TextDisabled("Frame interpolation is experimental, you might find visual artifacts");
-    ImGui::PopTextWrapPos();
+    Hint("Experimental: you might see visual artifacts.");
+    if (Toggle("Show FPS", &g_showFps)) {
+        RuntimeConfigFile::SetShowFps(g_showFps);
+    }
 #if defined(__APPLE__)
     const bool metalFxSupported = aurora_is_metalfx_spatial_supported();
     ImGui::BeginDisabled(!metalFxSupported);
-    if (ImGui::Checkbox("MetalFX spatial upscaling", &g_metalFxSpatialUpscaling)) {
+    if (Toggle("MetalFX spatial upscaling", &g_metalFxSpatialUpscaling)) {
         aurora_set_metalfx_spatial(g_metalFxSpatialUpscaling);
         RuntimeConfigFile::SetMetalFxSpatialUpscaling(g_metalFxSpatialUpscaling);
     }
     ImGui::EndDisabled();
     switch (aurora_get_metalfx_status()) {
     case AURORA_METALFX_ACTIVE:
-        ImGui::TextDisabled("Active: upscaling the game image before the overlay.");
+        Hint("Active: upscaling the game image before the overlay.");
         break;
     case AURORA_METALFX_NOT_UPSCALING:
-        ImGui::TextDisabled("Choose a lower internal resolution to use MetalFX.");
+        Hint("Choose a lower internal resolution to use MetalFX.");
         break;
     case AURORA_METALFX_UNSUPPORTED:
-        ImGui::TextDisabled("Requires macOS 13+, Metal, and a MetalFX-capable GPU.");
+        Hint("Requires macOS 13+, Metal, and a MetalFX-capable GPU.");
         break;
     case AURORA_METALFX_ERROR:
-        ImGui::TextDisabled("Unavailable after a renderer error; toggle off and on to retry.");
+        Hint("Unavailable after a renderer error; toggle off and on to retry.");
         break;
     case AURORA_METALFX_DISABLED:
-        if (metalFxSupported) {
-            ImGui::TextDisabled("Render below output resolution for sharper lower-cost output.");
-        } else {
-            ImGui::TextDisabled("MetalFX spatial upscaling is unavailable on this device.");
-        }
+        Hint(metalFxSupported ? "Render below output resolution for sharper lower-cost output."
+                              : "MetalFX spatial upscaling is unavailable on this device.");
         break;
     }
 #endif
-    if (ImGui::Checkbox("Disable copy filter", &g_disableCopyFilter)) {
+
+    SectionTitle("Advanced");
+    struct EffectFlag {
+        const char* label;
+        uint32_t flag;
+    };
+    static constexpr std::array<EffectFlag, 1> kEffectFlags = {{
+        {"Disable bloom", 0x10u},
+    }};
+    for (const auto& effect : kEffectFlags) {
+        bool disabled = (g_disabledPostProcessingPaths & effect.flag) != 0;
+        if (Toggle(effect.label, &disabled)) {
+            if (disabled) {
+                g_disabledPostProcessingPaths |= effect.flag;
+            } else {
+                g_disabledPostProcessingPaths &= ~effect.flag;
+            }
+            RuntimeGameGraphicsOptions::SetDisabledPostProcessingPaths(g_disabledPostProcessingPaths);
+            RuntimeConfigFile::SetDisabledPostProcessingPaths(g_disabledPostProcessingPaths);
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(from the next scene)");
+    if (Toggle("Disable copy filter", &g_disableCopyFilter)) {
         aurora_set_disable_copy_filter(g_disableCopyFilter);
         RuntimeConfigFile::SetDisableCopyFilter(g_disableCopyFilter);
     }
-    if (ImGui::Checkbox("Skip draws while shaders compile", &g_skipUnreadyPipelines)) {
+    if (Toggle("Skip draws while shaders compile", &g_skipUnreadyPipelines)) {
         aurora_set_skip_unready_pipelines(g_skipUnreadyPipelines);
         RuntimeConfigFile::SetSkipUnreadyPipelines(g_skipUnreadyPipelines);
     }
-    if (ImGui::Checkbox("Show FPS", &g_showFps)) {
-        RuntimeConfigFile::SetShowFps(g_showFps);
-    }
-    ImGui::Separator();
-    ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
+    ImGui::TextDisabled("Graphics API: %s", GraphicsApiDisplayName());
 }
 
 // The last frames' times (the UI's frame is the presented one), for the graph.
@@ -1288,7 +1419,7 @@ void DrawFpsOverlay() {
 
     const ImGuiIO& io = ImGui::GetIO();
     constexpr float kMargin = 10.0f;
-    const float top = g_topBarVisible ? ImGui::GetFrameHeight() + kMargin : kMargin;
+    const float top = kMargin;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - kMargin, top), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.55f);
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize |
@@ -1329,7 +1460,7 @@ void DrawShaderCompilationStatus() {
     }
 
     constexpr float kMargin = 10.0f;
-    const float top = g_topBarVisible ? ImGui::GetFrameHeight() + kMargin : kMargin;
+    const float top = kMargin;
     ImGui::SetNextWindowPos(ImVec2(kMargin, top), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(7.0f, 4.0f));
@@ -1370,9 +1501,8 @@ void DrawStartupScreen() {
         // The credits, in the game's own fonts when the game folder is readable (it always is once
         // the game can start), else in the overlay's font.
         constexpr const char* kTitle = "FrightWorks: Night of 100 Frights";
-        constexpr const char* kCredit =
-            "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. A Scooby-Doo! Night of 100 Frights PC recomp, "
-            "built on WiiCompiled's code.";
+        static const std::string kCredit =
+            no100f_credits::Line() + ". A Scooby-Doo! Night of 100 Frights PC recomp, built on WiiCompiled's code.";
         // At the bottom of the screen.
         constexpr const char* kReport = "";
         // Scooby-Doo! Unmasked's own font, read from the game folder (font/papermarioset_US.bfn).
@@ -1495,7 +1625,7 @@ void DrawStartupScreen() {
                 GameLayout::DrawText(list, view, *pmFont, u, 0.0f, cardY - 22.0f + bob, Fit(u, 17.0f), 0x3A2A18FFu,
                                      0x3A2A18FFu, 1.0f, 1, 1);
                 // How to reach the settings, along the card's bottom edge.
-                const auto hint = GameLayout::Utf16("F10 = settings menu   F11 = fullscreen / window");
+                const auto hint = GameLayout::Utf16("F10 = settings   F11 = fullscreen / window   F2 = screenshot");
                 GameLayout::DrawText(list, view, *pmFont, hint, 0.0f, cardY - hh + 16.0f + bob, Fit(hint, 12.0f),
                                      0x6A5A48FFu, 0x6A5A48FFu, 1.0f, 1, 1);
             }
@@ -1558,7 +1688,7 @@ void DrawStartupScreen() {
             const float wrapWidth = std::min(viewport->Size.x - 48.0f, 640.0f);
             ImGui::SetCursorPos(ImVec2((viewport->Size.x - wrapWidth) * 0.5f, startY + titleSize.y * 2.0f));
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
-            ImGui::TextUnformatted(kCredit);
+            ImGui::TextUnformatted(kCredit.c_str());
             ImGui::PopTextWrapPos();
             startY = ImGui::GetCursorPosY();
             const ImVec2 reportSize = ImGui::CalcTextSize(kReport);
@@ -1596,137 +1726,342 @@ void UpdateBootShaderState() {
 }
 
 void DrawExitPrompt() {
-    constexpr const char* kTitle = "Exit";
+    using namespace OverlayTheme;
+    constexpr const char* kTitle = "Quit the game?";
     if (g_exitPromptOpen && !ImGui::IsPopupOpen(kTitle)) ImGui::OpenPopup(kTitle);
-    if (!ImGui::BeginPopupModal(kTitle, &g_exitPromptOpen, ImGuiWindowFlags_AlwaysAutoResize)) return;
-    ImGui::TextUnformatted("Quit the game?");
-    if (ImGui::Button("Exit", ImVec2(120.0f, 0.0f))) ExitForAuroraWindowClose();
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) g_exitPromptOpen = false;
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(22), Px(18)));
+    const bool open = ImGui::BeginPopupModal(kTitle, &g_exitPromptOpen,
+                                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar);
+    ImGui::PopStyleVar();
+    if (!open) return;
+    ImGui::PushFont(Heading());
+    ImGui::TextColored(Vec(Colour::Lime), "QUIT THE GAME?");
+    ImGui::PopFont();
+    Hint("Progress since your last save is lost.");
+    ImGui::Dummy(ImVec2(0, Px(4)));
+    if (Plank("QUIT##confirm", true, ImVec2(Px(140), Px(42)))) ExitForAuroraWindowClose();
+    ImGui::SameLine(0.0f, Px(10));
+    if (Plank("CANCEL##cancel", false, ImVec2(Px(140), Px(42)))) g_exitPromptOpen = false;
     if (!g_exitPromptOpen) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 
+// F1 opens the project page. F2 saves the next game frame (without the overlay) as a PNG in a
+// Screenshots folder beside the launcher: above data/ in a release, else the game exe's folder.
+constexpr const char* kProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+std::string g_noticeText;
+Clock::time_point g_noticeUntil{};
+std::filesystem::path g_lastScreenshot;
+
+void ShowNotice(std::string text) {
+    g_noticeText = std::move(text);
+    g_noticeUntil = Clock::now() + std::chrono::milliseconds(2500);
+}
+
+// The settings board (F10): pages on the left as planks, the page's settings on the right, Resume / Quit at the top
+// and the keys + build ID at the bottom. LB / RB change the page with a controller.
+enum class Page { Video, Audio, Controls, LanPlay, About };
+struct PageItem {
+    Page page;
+    const char* label;
+};
+constexpr std::array<PageItem, 5> kPages = {{
+    {Page::Video, "Video"}, {Page::Audio, "Audio"}, {Page::Controls, "Controls"}, {Page::LanPlay, "LAN Play"},
+    {Page::About, "About"},
+}};
+Page g_page = Page::Video;
+
+void DrawAboutPage() {
+    using namespace OverlayTheme;
+    SectionTitle("FrightWorks: Night of 100 Frights");
+    ImGui::TextUnformatted(no100f_credits::Line().c_str());
+    Hint("A native PC port of Scooby-Doo! Night of 100 Frights (GameCube), built on WiiCompiled and Aurora. "
+         "It runs your own copy of the game.");
+    if (ImGui::Button("Open the project page (F1)")) {
+        if (!SDL_OpenURL(kProjectUrl)) ShowNotice(std::string("Couldn't open ") + kProjectUrl);
+    }
+    SectionTitle("This build");
+    ImGui::Text("Version %s", BuildInfo::Version());
+    if (!BuildInfo::Release() && BuildInfo::Commit()[0] != '\0') {
+        ImGui::Text("Branch %s, commit %s", BuildInfo::Branch(), BuildInfo::Commit());
+        if (BuildInfo::Changes()[0] != '\0') {
+            ImGui::Text("Uncommitted changes (+%s)", BuildInfo::Changes());
+        }
+        Hint("A test build: mention this line when you report a bug.");
+    }
+    ImGui::TextDisabled("Graphics API: %s", GraphicsApiDisplayName());
+    if (no100f_devmenu::Enabled()) {
+        ImGui::TextColored(Vec(Colour::Lime), "Developer tools are on: F8 opens the dev menu, F3 records a video.");
+    }
+    SectionTitle("Keys");
+    const std::array<std::pair<const char*, const char*>, 7> keys = {{
+        {"F10 / Esc / Back", "Settings (this board) / back to the game (Back = the controller's Back / Select)"},
+        {"F11", "Fullscreen or window"},
+        {"F2", "Screenshot (Screenshots folder beside the launcher)"},
+        {"F1", "Project page in your browser"},
+        {"F8", "Dev menu (with developer tools on in the launcher)"},
+        {"F3", "Start / stop a video (with developer tools on; Videos folder, needs ffmpeg)"},
+        {"LB / RB", "Change the page here with a controller"},
+    }};
+    if (ImGui::BeginTable("##keys", 2, ImGuiTableFlags_SizingFixedFit)) {
+        for (const auto& [key, what] : keys) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextColored(Vec(Colour::Lime), "%s", key);
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(what);
+        }
+        ImGui::EndTable();
+    }
+}
+
+void DrawPage(Page page) {
+    switch (page) {
+    case Page::Video: DrawVideoSettings(); break;
+    case Page::Audio:
+        DrawAudioSettings();
+        DrawRebindPrompt();
+        break;
+    case Page::Controls:
+        DrawControllerSettings();
+        DrawRebindPrompt();
+        break;
+    case Page::LanPlay: DrawLanPlaySettings(); break;
+    case Page::About: DrawAboutPage(); break;
+    }
+}
+
 void DrawTopBar() {
+    using namespace OverlayTheme;
     if (!g_topBarVisible) {
         return;
     }
-
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::GetBackgroundDrawList()->AddRectFilled(viewport->Pos,
-        ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y),
-        IM_COL32(0, 0, 0, 70));
-    constexpr float kHintMargin = 10.0f;
-    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x + viewport->Size.x * 0.5f,
-                                 viewport->Pos.y + ImGui::GetFrameHeight() + kHintMargin),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    if (ImGui::Begin("Settings input hint", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoFocusOnAppearing)) {
-        for (const char* line : {"Settings open - game controls disabled.",
-                                 "Press F10 to return to the game."}) {
-            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - ImGui::CalcTextSize(line).x) * 0.5f);
-            ImGui::TextUnformatted(line);
+    const float fade = std::clamp(std::chrono::duration<float>(Clock::now() - g_panelOpenedAt).count() / 0.14f, 0.0f, 1.0f);
+
+    // Dim the game, darker towards the edges.
+    ImDrawList* background = ImGui::GetBackgroundDrawList();
+    const ImVec2 v0 = viewport->Pos;
+    const ImVec2 v1(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y);
+    background->AddRectFilled(v0, v1, Col(Colour::Ink, 0.45f * fade));
+    const float band = viewport->Size.y * 0.25f;
+    background->AddRectFilledMultiColor(v0, ImVec2(v1.x, v0.y + band), Col(Colour::Ink, 0.45f * fade),
+                                        Col(Colour::Ink, 0.45f * fade), Col(Colour::Ink, 0.0f), Col(Colour::Ink, 0.0f));
+    background->AddRectFilledMultiColor(ImVec2(v0.x, v1.y - band), v1, Col(Colour::Ink, 0.0f), Col(Colour::Ink, 0.0f),
+                                        Col(Colour::Ink, 0.45f * fade), Col(Colour::Ink, 0.45f * fade));
+
+    const float margin = Px(20);
+    const ImVec2 size(std::min(viewport->Size.x - margin * 2, std::clamp(viewport->Size.x * 0.74f, Px(760), Px(1120))),
+                      std::min(viewport->Size.y - margin * 2, std::clamp(viewport->Size.y * 0.82f, Px(520), Px(860))));
+    const ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f);
+    ImGui::SetNextWindowPos(ImVec2(center.x, center.y + (1.0f - fade) * Px(16)), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    if (g_panelFocusPending) {
+        ImGui::SetNextWindowFocus();
+        g_panelFocusPending = false;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, fade);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(22), Px(18)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                                        ImGuiWindowFlags_NoScrollWithMouse;
+    const bool open = ImGui::Begin("FrightWorks settings", nullptr, kFlags);
+    ImGui::PopStyleVar(2);
+    if (open) {
+        ImDrawList* list = ImGui::GetWindowDrawList();
+        const ImVec2 p0 = ImGui::GetWindowPos();
+        const ImVec2 p1(p0.x + ImGui::GetWindowWidth(), p0.y + ImGui::GetWindowHeight());
+        Board(list, p0, p1, Px(16));
+
+        // Header: the title sign on the left, Resume / Quit on the right.
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImFont* title = Title();
+        OutlinedText(list, title, origin, Col(Colour::Lime), Col(Colour::Ink), Px(3), "FRIGHTWORKS");
+        const float titleWidth = title->CalcTextSizeA(title->FontSize, FLT_MAX, 0.0f, "FRIGHTWORKS").x;
+        ImFont* heading = Heading();
+        OutlinedText(list, heading,
+                     ImVec2(origin.x + titleWidth + Px(16), origin.y + title->FontSize - heading->FontSize - Px(2)),
+                     Col(Colour::Cream), Col(Colour::Ink), Px(2), "SETTINGS");
+        const ImVec2 plank(Px(150), Px(42));
+        const float right = ImGui::GetWindowContentRegionMax().x;
+        ImGui::SetCursorPos(ImVec2(right - plank.x * 2 - Px(10), ImGui::GetCursorPosY()));
+        if (Plank("RESUME##resume", true, plank)) {
+            SetTopBarVisible(false);
         }
+        ImGui::SameLine(0.0f, Px(10));
+        if (Plank("QUIT GAME##quit", false, plank)) {
+            g_exitPromptOpen = true;
+        }
+        ImGui::SetCursorScreenPos(ImVec2(origin.x, std::max(origin.y + title->FontSize, ImGui::GetCursorScreenPos().y) + Px(14)));
+
+        // Pages + content.
+        const float footer = ImGui::GetFontSize() + Px(18);
+        const float bodyHeight = ImGui::GetContentRegionAvail().y - footer;
+        const float tabsWidth = Px(176);
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+            const int count = static_cast<int>(kPages.size());
+            int index = static_cast<int>(g_page);
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) g_page = kPages[(index + count - 1) % count].page;
+            if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) g_page = kPages[(index + 1) % count].page;
+        }
+        ImGui::BeginGroup();
+        for (const auto& item : kPages) {
+            std::string label = item.label;
+            std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c) { return std::toupper(c); });
+            if (Plank(label.c_str(), g_page == item.page, ImVec2(tabsWidth, Px(46)))) g_page = item.page;
+        }
+        ImGui::EndGroup();
+        ImGui::SameLine(0.0f, Px(18));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Vec(Colour::Field, 0.72f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, Px(12));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(18), Px(14)));
+        if (ImGui::BeginChild("##page", ImVec2(0.0f, bodyHeight),
+                              ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened)) {
+            ImGui::PushID(static_cast<int>(g_page));
+            DrawPage(g_page);
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+
+        // Footer: keys on the left, the build on the right.
+        ImGui::PushFont(Small());
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + Px(6));
+        const float footerY = ImGui::GetCursorPosY();
+        const std::array<std::pair<const char*, const char*>, 5> footerKeys = {{
+            {"Esc / F10 / Back", "back to the game"}, {"LB / RB", "page"}, {"F2", "screenshot"}, {"F11", "fullscreen"},
+            {"F1", "project page"},
+        }};
+        for (size_t i = 0; i < footerKeys.size(); ++i) {
+            if (i > 0) ImGui::SameLine(0.0f, Px(16));
+            ImGui::TextColored(Vec(Colour::Lime), "%s", footerKeys[i].first);
+            ImGui::SameLine(0.0f, Px(5));
+            ImGui::TextDisabled("%s", footerKeys[i].second);
+        }
+        const char* build = BuildInfo::Id();
+        const float buildWidth = ImGui::CalcTextSize(build).x;
+        if (ImGui::GetItemRectMax().x + Px(20) < p0.x + right - buildWidth) {
+            ImGui::SetCursorPos(ImVec2(right - buildWidth, footerY));
+            ImGui::TextDisabled("%s", build);
+        }
+        ImGui::PopFont();
     }
     ImGui::End();
-    if (!ImGui::BeginMainMenuBar()) return;
-
-    ImGui::TextUnformatted("FrightWorks: Night of 100 Frights");
-    ImGui::Separator();
-    const auto resolutionIt = std::find_if(kResolutions.begin(), kResolutions.end(), [](const ResolutionItem& item) {
-        return std::fabs(item.scale - g_resolutionScale) < 0.001f;
-    });
-    const char* resolutionLabel = resolutionIt != kResolutions.end() ? resolutionIt->label : "Custom";
-    const std::string resolutionMenuLabel = std::string("Resolution: ") + resolutionLabel;
-    if (ImGui::BeginMenu(resolutionMenuLabel.c_str())) {
-        for (const auto& resolution : kResolutions) {
-            const bool selected = std::fabs(resolution.scale - g_resolutionScale) < 0.001f;
-            const bool disabled = IsHighFrameRateMode() && IsHighResolutionScale(resolution.scale);
-            ImGui::BeginDisabled(disabled);
-            const bool clicked = ImGui::MenuItem(resolution.label, nullptr, selected);
-            ImGui::EndDisabled();
-            if (clicked) {
-                SetResolutionScale(resolution.scale);
-            }
-        }
-        uint32_t pictureWidth = 0;
-        uint32_t pictureHeight = 0;
-        AuroraGetPictureSize(&pictureWidth, &pictureHeight);
-        ImGui::Separator();
-        ImGui::TextDisabled("Rendering %ux%u", pictureWidth, pictureHeight);
-        ImGui::EndMenu();
-    }
-
-    const DisplaySettings::Settings display = DisplaySettings::Current();
-    const auto aspectIt = std::find_if(kAspects.begin(), kAspects.end(), [&](const AspectItem& item) {
-        return item.mode == display.aspect;
-    });
-    const std::string aspectMenuLabel =
-        std::string("Aspect: ") + (aspectIt != kAspects.end() ? aspectIt->label : "Custom");
-    if (ImGui::BeginMenu(aspectMenuLabel.c_str())) {
-        for (const auto& aspect : kAspects) {
-            if (ImGui::MenuItem(aspect.label, nullptr, aspect.mode == display.aspect)) {
-                SetAspectMode(aspect.mode);
-            }
-        }
-        // The game reads 4:3 versus widescreen once, at boot.
-        if ((display.aspect != DisplaySettings::kAspect4x3) != DisplaySettings::GameWidescreen()) {
-            ImGui::Separator();
-            ImGui::TextDisabled("Switching between 4:3 and widescreen takes effect after a restart.");
-        }
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Graphics")) {
-        DrawGraphicsSettings();
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("Controller settings")) {
-        DrawControllerSettings();
-        // Nest capture under this menu so opening/closing the modal preserves
-        // the settings popup and its current port and scroll position.
-        DrawRebindPrompt();
-        ImGui::EndMenu();
-    }
-
-    if (ImGui::BeginMenu("LAN Play")) {
-        DrawLanPlaySettings();
-        ImGui::EndMenu();
-    }
-
-    const std::string audioLabel = g_audioMuted
-        ? "Audio: Muted"
-        : "Audio: " + std::to_string(g_audioVolumePercent) + "%";
-    // Keep the popup ID stable while the Master slider changes the visible
-    // label. Without the ### suffix, ImGui treats every new percentage as a
-    // different menu and closes the popup on the first drag update.
-    const std::string audioMenuLabel = audioLabel + "###AudioSettingsMenu";
-    if (ImGui::BeginMenu(audioMenuLabel.c_str())) {
-        DrawAudioSettings();
-        DrawRebindPrompt();
-        ImGui::EndMenu();
-    }
-
-    const ImGuiStyle& style = ImGui::GetStyle();
-    const float hideWidth = ImGui::CalcTextSize("Hide (F10)").x + style.FramePadding.x * 2.0f;
-    const float exitWidth = ImGui::CalcTextSize("X").x + style.FramePadding.x * 2.0f;
-    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),
-                                  ImGui::GetWindowWidth() - hideWidth - exitWidth - style.ItemSpacing.x - 8.0f));
-    if (ImGui::MenuItem("Hide (F10)")) {
-        SetTopBarVisible(false);
-    }
-    if (ImGui::MenuItem("X")) {
-        g_exitPromptOpen = true;
-    }
-    ImGui::EndMainMenuBar();
+    ImGui::PopStyleVar();
 }
 
 bool IsToggleKey(const SDL_Event& event, SDL_Scancode code) {
     return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == code;
+}
+
+void TakeScreenshot() {
+    const auto exeDir = RuntimeConfigFile::ExecutableDirectory();
+    if (!exeDir) {
+        ShowNotice("Screenshot failed: game folder not found");
+        return;
+    }
+    std::filesystem::path root = *exeDir;
+    if (root.filename() == "data") root = root.parent_path();
+    const std::filesystem::path folder = root / "Screenshots";
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char stamp[32] = {};
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &local);
+    const std::string base = std::string("FrightWorks_") + stamp;
+    std::filesystem::path file = folder / (base + ".png");
+    // Two presses in one second: the first file may not be written yet, so skip its name too.
+    for (int n = 2; file == g_lastScreenshot || std::filesystem::exists(file, ec); ++n) {
+        file = folder / (base + "_" + std::to_string(n) + ".png");
+    }
+    g_lastScreenshot = file;
+    aurora_request_screenshot(RuntimeConfigFile::PathToUtf8(file).c_str());
+}
+
+// Developer tools on: "DEV" and the build ID in the bottom-left corner, so screenshots and recordings say which build
+// they came from. Drawn in its own full-screen ImGui window, AURORA_CAPTURE_STAMP_WINDOW: F2/F3 captures keep it when
+// they leave the menus out ([game] capture_overlay off), which is what the first line here tells aurora.
+void DrawDevMark() {
+    using namespace OverlayTheme;
+    if (!no100f_devmenu::Enabled()) {
+        aurora_set_capture_overlay(AURORA_CAPTURE_OVERLAY_NONE);
+        return;
+    }
+    aurora_set_capture_overlay(RuntimeConfigFile::CaptureOverlay() ? AURORA_CAPTURE_OVERLAY_ALL
+                                                                   : AURORA_CAPTURE_OVERLAY_STAMP);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    const bool visible = ImGui::Begin(AURORA_CAPTURE_STAMP_WINDOW, nullptr, kFlags);
+    ImGui::PopStyleVar();
+    if (!visible) {
+        ImGui::End();
+        return;
+    }
+    ImDrawList* list = ImGui::GetWindowDrawList();
+    list->PushClipRectFullScreen();
+    ImFont* heading = Heading();
+    ImFont* small = Small();
+    const char* build = BuildInfo::Id();
+    const ImVec2 buildSize = small->CalcTextSizeA(small->FontSize, FLT_MAX, 0.0f, build);
+    const ImVec2 devSize = heading->CalcTextSizeA(heading->FontSize, FLT_MAX, 0.0f, "DEV");
+    const float margin = Px(10);
+    const float left = viewport->Pos.x + margin;
+    const float bottom = viewport->Pos.y + viewport->Size.y - margin;
+    const ImVec2 devPos(left, bottom - devSize.y + Px(2));
+    const ImVec2 buildPos(devPos.x + devSize.x + Px(8), bottom - buildSize.y);
+    list->AddRectFilled(ImVec2(left - Px(6), std::min(devPos.y, buildPos.y) - Px(4)),
+                        ImVec2(buildPos.x + buildSize.x + Px(8), bottom + Px(4)), Col(Colour::Ink, 0.55f), Px(8));
+    OutlinedText(list, heading, devPos, Col(Colour::Lime), Col(Colour::Ink), Px(2), "DEV");
+    list->AddText(small, small->FontSize, buildPos, Col(Colour::Cream, 0.9f), build);
+    list->PopClipRect();
+    ImGui::End();
+}
+
+void DrawNotice() {
+    if (const int result = aurora_take_screenshot_result(); result != 0) {
+        ShowNotice(result > 0 ? "Screenshot saved: Screenshots\\" + RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename())
+                              : std::string("Screenshot failed (see the log)"));
+    }
+    if (std::string recorder = no100f_recorder::TakeNotice(); !recorder.empty()) {
+        ShowNotice(std::move(recorder));
+    }
+    if (g_noticeText.empty() || Clock::now() >= g_noticeUntil) {
+        return;
+    }
+    constexpr float kMargin = 10.0f;
+    const ImGuiIO& io = ImGui::GetIO();
+    // Above the DEV mark when it shares the corner.
+    const float bottom = no100f_devmenu::Enabled()
+                             ? io.DisplaySize.y - kMargin - OverlayTheme::Heading()->FontSize - OverlayTheme::Px(14)
+                             : io.DisplaySize.y - kMargin;
+    ImGui::SetNextWindowPos(ImVec2(kMargin, bottom), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize |
+                                        ImGuiWindowFlags_NoDecoration |
+                                        ImGuiWindowFlags_NoFocusOnAppearing |
+                                        ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoMove |
+                                        ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("Notice", nullptr, kFlags)) {
+        ImGui::TextUnformatted(g_noticeText.c_str());
+    }
+    ImGui::End();
 }
 
 bool IsMouseActivity(const SDL_Event& event) {
@@ -1744,8 +2079,8 @@ bool IsMouseActivity(const SDL_Event& event) {
 // Runs on the thread that pumps SDL events (the same one that calls Draw), so
 // the SDL cursor calls are safe here.
 void UpdateCursorAutoHide() {
-    const bool shouldHide =
-        !g_topBarVisible && Clock::now() - g_lastMouseActivity >= kCursorAutoHideDelay;
+    const bool shouldHide = !g_topBarVisible && !no100f_devmenu::IsOpen() &&
+                            Clock::now() - g_lastMouseActivity >= kCursorAutoHideDelay;
     if (shouldHide == g_cursorHidden) {
         return;
     }
@@ -1774,7 +2109,7 @@ void PersistDisplayModeIfChanged() {
 
 void ApplyInputBlockState() {
     const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
-                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible();
+                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible() || no100f_devmenu::BlocksInput();
     PADBlockInput(blocked);
     InputBindings::SetInputBlocked(blocked);
 }
@@ -1815,6 +2150,28 @@ void InitializeRuntimeSettings() noexcept {
     InputBindings::SetInputBlocked(false);
 }
 
+// The controller's Back / Select / Create button has no GameCube button, so the game never sees it: it opens and
+// closes F10 like the key. Not while a mapping uses it (F10's PlayStation preset puts Z there, or a remap / Black /
+// White does), so a bound Back still only does its job.
+bool BackButtonBound() {
+    for (uint32_t port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
+        for (const bool alt : {false, true}) {
+            uint32_t count = 0;
+            const PADButtonMapping* mappings = alt ? PADGetAltButtonMappings(port, &count) : PADGetButtonMappings(port, &count);
+            for (uint32_t i = 0; mappings != nullptr && i < count; ++i) {
+                if (mappings[i].nativeButton == SDL_GAMEPAD_BUTTON_BACK) return true;
+            }
+        }
+    }
+    if (RuntimeConfigFile::XboxOriginalLayout()) {
+        for (size_t action = 0; action < 2; ++action) {
+            const NativeButtonItem* native = FindNativeButton(RuntimeConfigFile::XboxButton(action));
+            if (native != nullptr && native->nativeButton == SDL_GAMEPAD_BUTTON_BACK) return true;
+        }
+    }
+    return false;
+}
+
 void HandleEvents(const AuroraEvent* events) noexcept {
     if (!events) {
         return;
@@ -1827,6 +2184,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             continue;
         }
         controller_mapping_wizard::HandleSdlEvent(ev->sdl);
+        if (!g_rebind.active) no100f_devmenu::HandleSdlEvent(ev->sdl);
         if (g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_BACKSPACE) ||
                                 IsToggleKey(ev->sdl, SDL_SCANCODE_DELETE))) {
             CompleteRebind(g_rebind.kind == RebindKind::Controller ? PAD_NATIVE_BUTTON_DISABLED
@@ -1842,7 +2200,16 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             g_displayMode = static_cast<int>(aurora_get_display_mode());
             RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(g_displayMode)]));
         }
-        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
+        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F1)) {
+            if (!SDL_OpenURL(kProjectUrl)) ShowNotice(std::string("Couldn't open ") + kProjectUrl);
+        }
+        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F2)) {
+            TakeScreenshot();
+        }
+        const bool backButton = ev->sdl.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+                                ev->sdl.gbutton.button == SDL_GAMEPAD_BUTTON_BACK && !controller_mapping_wizard::IsActive() &&
+                                !BackButtonBound();
+        if (!g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_F10) || backButton)) {
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();
         }
@@ -1945,6 +2312,301 @@ void ReleaseControllers() noexcept {
     if (queued) SDL_Delay(120);
 }
 
+namespace {
+
+// The hotkey guide: a small board in the bottom-right corner while the game shows its title screen and menus, so
+// players find F10 and the other keys. Fades out for the attract demo, movies (intro, credits, trailers), in play,
+// and while F10 or the dev menu is open. A menu like the others: in F2/F3 captures only with [game] capture_overlay.
+float g_hotkeyGuideAlpha = 0.0f;
+
+// Scales the alpha of everything drawn into `list` since vertex `first` (fading a panel in and out).
+void FadeVertices(ImDrawList* list, int first, float alpha) {
+    if (alpha >= 1.0f) return;
+    for (int i = first; i < list->VtxBuffer.Size; ++i) {
+        ImU32& col = list->VtxBuffer[i].col;
+        const auto a = static_cast<ImU32>(static_cast<float>((col >> IM_COL32_A_SHIFT) & 0xFF) * alpha);
+        col = (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+    }
+}
+
+// A controller button picture from the button icon pack in use (button_icons/<family>/<config name>.png), cropped to
+// its visible part; no id when the pack has none for that button. Loaded once per file (ImGui textures can't be
+// freed, but there are only a few: three families, a handful of buttons).
+struct ButtonIcon {
+    ImTextureID id{};
+    ImVec2 uv0{0, 0}, uv1{1, 1};
+    float aspect = 1.0f;  // width / height of the visible part
+};
+
+const ButtonIcon& LoadButtonIcon(const std::string& folder, const char* button) {
+    static std::unordered_map<std::string, ButtonIcon> cache;
+    const std::string path = folder + "/" + button + ".png";
+    if (const auto it = cache.find(path); it != cache.end()) return it->second;
+    ButtonIcon icon;
+    uint32_t w = 0, h = 0;
+    if (uint8_t* rgba = aurora_load_png_rgba(path.c_str(), &w, &h)) {
+        uint32_t x0 = w, y0 = h, x1 = 0, y1 = 0;
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x)
+                if (rgba[(static_cast<size_t>(y) * w + x) * 4 + 3] > 16) {
+                    x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x + 1), y1 = std::max(y1, y + 1);
+                }
+        if (x1 > x0 && y1 > y0) {
+            icon.id = aurora_imgui_add_texture(w, h, rgba);
+            icon.uv0 = ImVec2(float(x0) / float(w), float(y0) / float(h));
+            icon.uv1 = ImVec2(float(x1) / float(w), float(y1) / float(h));
+            icon.aspect = float(x1 - x0) / float(y1 - y0);
+        }
+        std::free(rgba);
+    }
+    return cache.emplace(path, icon).first->second;
+}
+
+// One row of a guide card: its key or button pictures (side by side), then what it does. Without all the pictures:
+// a key shows `key` in gold lettering, a controller button shows `key` on a little button-shaped chip.
+struct GuideRow {
+    std::string key;
+    std::string what;
+    bool button = false;
+    std::vector<ButtonIcon> icons;
+
+    bool HasIcons() const {
+        return !icons.empty() && std::all_of(icons.begin(), icons.end(), [](const ButtonIcon& i) { return i.id != ImTextureID{}; });
+    }
+};
+
+float IconsWidth(const GuideRow& row, float iconSize) {
+    float width = 0;
+    for (const ButtonIcon& icon : row.icons) width += iconSize * icon.aspect;
+    return width + OverlayTheme::Px(4) * static_cast<float>(row.icons.size() - 1);
+}
+
+struct GuideCard {
+    const char* title = "";
+    std::vector<GuideRow> rows;
+    // Filled by MeasureCard.
+    float keyWidth = 0, rowHeight = 0, iconSize = 0;
+    ImVec2 size;
+};
+
+void MeasureCard(GuideCard& card) {
+    using namespace OverlayTheme;
+    ImFont* heading = Heading();
+    ImFont* body = Body();
+    ImFont* small = Small();
+    const bool pictures = std::any_of(card.rows.begin(), card.rows.end(),
+                                      [](const GuideRow& r) { return r.button || r.HasIcons(); });
+    card.iconSize = std::round(body->FontSize + Px(8));
+    card.rowHeight = pictures ? card.iconSize + Px(5) : body->FontSize + Px(5);
+    float whatWidth = 0;
+    card.keyWidth = 0;
+    for (const GuideRow& row : card.rows) {
+        float keyWidth;
+        if (row.HasIcons()) keyWidth = IconsWidth(row, card.iconSize);
+        else if (!row.button) keyWidth = heading->CalcTextSizeA(body->FontSize, FLT_MAX, 0.0f, row.key.c_str()).x;
+        else keyWidth = small->CalcTextSizeA(small->FontSize, FLT_MAX, 0.0f, row.key.c_str()).x + Px(14);
+        card.keyWidth = std::max(card.keyWidth, keyWidth);
+        whatWidth = std::max(whatWidth, body->CalcTextSizeA(body->FontSize, FLT_MAX, 0.0f, row.what.c_str()).x);
+    }
+    const ImVec2 title = heading->CalcTextSizeA(heading->FontSize, FLT_MAX, 0.0f, card.title);
+    const float pad = Px(14), gap = Px(14);
+    card.size = ImVec2(pad * 2 + std::max(title.x, card.keyWidth + gap + whatWidth),
+                       pad * 2 + title.y + Px(6) + card.rowHeight * static_cast<float>(card.rows.size()));
+}
+
+void DrawCard(ImDrawList* list, const GuideCard& card, ImVec2 min) {
+    using namespace OverlayTheme;
+    ImFont* heading = Heading();
+    ImFont* body = Body();
+    ImFont* small = Small();
+    const float pad = Px(14), gap = Px(14);
+    Board(list, min, ImVec2(min.x + card.size.x, min.y + card.size.y), Px(12));
+    OutlinedText(list, heading, ImVec2(min.x + pad, min.y + pad), Col(Colour::Lime), Col(Colour::Ink), Px(2), card.title);
+    float y = min.y + pad + heading->FontSize + Px(6);
+    for (const GuideRow& row : card.rows) {
+        const float x = min.x + pad, mid = y + card.rowHeight * 0.5f;
+        if (row.HasIcons()) {
+            float left = x;
+            for (const ButtonIcon& icon : row.icons) {
+                const float w = card.iconSize * icon.aspect;
+                list->AddImage(icon.id, ImVec2(left, mid - card.iconSize * 0.5f),
+                               ImVec2(left + w, mid + card.iconSize * 0.5f), icon.uv0, icon.uv1);
+                left += w + Px(4);
+            }
+        } else if (!row.button) {
+            list->AddText(heading, body->FontSize, ImVec2(x, mid - body->FontSize * 0.5f + Px(1)), Col(Colour::Gold),
+                          row.key.c_str());
+        } else {
+            const ImVec2 text = small->CalcTextSizeA(small->FontSize, FLT_MAX, 0.0f, row.key.c_str());
+            const ImVec2 chipMin(x, mid - card.iconSize * 0.42f), chipMax(x + text.x + Px(14), mid + card.iconSize * 0.42f);
+            list->AddRectFilled(chipMin, chipMax, Col(Colour::Purple), card.iconSize * 0.3f);
+            list->AddRect(chipMin, chipMax, Col(Colour::Ink), card.iconSize * 0.3f, 0, Px(2));
+            list->AddText(small, small->FontSize, ImVec2(x + Px(7), mid - text.y * 0.5f), Col(Colour::Cream), row.key.c_str());
+        }
+        list->AddText(body, body->FontSize, ImVec2(x + card.keyWidth + gap, mid - body->FontSize * 0.5f),
+                      Col(Colour::Cream), row.what.c_str());
+        y += card.rowHeight;
+    }
+}
+
+// The pad's Back button and left bumper by family (the pack folder ends in xbox, playstation or nintendo), for when
+// the pack has no picture of them.
+bool FolderIs(const std::string& folder, std::string_view family) {
+    return folder.size() >= family.size() && folder.compare(folder.size() - family.size(), family.size(), family) == 0;
+}
+const char* BackLabel(const std::string& folder) {
+    if (FolderIs(folder, "playstation")) return "Share";
+    if (FolderIs(folder, "nintendo")) return "Minus";
+    return "View";
+}
+const char* LeftBumperLabel(const std::string& folder) {
+    if (FolderIs(folder, "playstation")) return "L1";
+    if (FolderIs(folder, "nintendo")) return "L";
+    return "LB";
+}
+
+// The guide cards in the bottom-right corner on the title screen and main menu: HOTKEYS (keyboard), and CONTROLLER
+// to its left while a controller is connected, drawn with that controller's button icons. Both fade out for the
+// attract demo, movies (intro, credits, trailers), in play, and while F10 or the dev menu is open. Menus like the
+// others: in F2/F3 captures only with [game] capture_overlay.
+void DrawHotkeyGuide() {
+    using namespace OverlayTheme;
+    uint32_t mode = 0, state = 0, movie = 0;
+    const bool show = !StartupScreenVisible() && !g_topBarVisible && !no100f_devmenu::IsOpen() &&
+                      Memory::TryRead32(no100f_game_state::kModeAddress, mode) &&
+                      Memory::TryRead32(no100f_game_state::kStateAddress, state) &&
+                      Memory::TryRead32(no100f_game_state::kMovieAddress, movie) &&
+                      no100f_game_state::IsMainMenu(mode, state, movie);
+    const float step = ImGui::GetIO().DeltaTime / 0.3f;
+    g_hotkeyGuideAlpha = std::clamp(g_hotkeyGuideAlpha + (show ? step : -step), 0.0f, 1.0f);
+    if (g_hotkeyGuideAlpha <= 0.0f) return;
+
+    const bool dev = no100f_devmenu::Enabled();
+    // Keycaps from button_icons/keyboard/<key>.png (staged with the controller icons); gold names without them.
+    static const std::string keyFolder = RuntimeConfigFile::PathToUtf8(
+        RuntimeConfigFile::ApplicationDataDirectory() / "button_icons" / "keyboard");
+    const auto key = [](const char* name, const char* what, std::initializer_list<const char*> files) {
+        GuideRow row{name, what};
+        for (const char* file : files) row.icons.push_back(LoadButtonIcon(keyFolder, file));
+        return row;
+    };
+    GuideCard keys;
+    keys.title = "Hotkeys";
+    keys.rows = {key("F10 / Esc", "Settings", {"f10", "escape"}), key("F11", "Fullscreen or window", {"f11"}),
+                 key("F2", "Screenshot", {"f2"}), key("F1", "Project page", {"f1"})};
+    if (dev) {
+        keys.rows.push_back(key("F8", "Dev menu", {"f8"}));
+        keys.rows.push_back(key("F3", "Record a video", {"f3"}));
+    }
+    MeasureCard(keys);
+
+    char folderBuffer[1024] = {};
+    const size_t folderLength = aurora_get_button_icon_folder(folderBuffer, sizeof(folderBuffer));
+    GuideCard pad;
+    pad.title = "Controller";
+    if (folderLength > 0 && folderLength < sizeof(folderBuffer)) {
+        const std::string folder(folderBuffer, folderLength);
+        if (!BackButtonBound()) pad.rows.push_back({BackLabel(folder), "Settings", true, {LoadButtonIcon(folder, "back")}});
+        if (dev) {
+            pad.rows.push_back({LeftBumperLabel(folder), "Dev menu focus on / off", true,
+                                {LoadButtonIcon(folder, "left_shoulder")}});
+        }
+    }
+    if (!pad.rows.empty()) MeasureCard(pad);
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = Px(16), rise = (1.0f - g_hotkeyGuideAlpha) * Px(12);  // slides up a little as it fades in
+    const float bottom = viewport->Pos.y + viewport->Size.y - margin + rise;
+    const ImVec2 keysMin(viewport->Pos.x + viewport->Size.x - margin - keys.size.x, bottom - keys.size.y);
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    if (ImGui::Begin("##HotkeyGuide", nullptr, kFlags)) {
+        ImDrawList* list = ImGui::GetWindowDrawList();
+        list->PushClipRectFullScreen();
+        const int firstVertex = list->VtxBuffer.Size;
+        DrawCard(list, keys, keysMin);
+        if (!pad.rows.empty()) DrawCard(list, pad, ImVec2(keysMin.x - Px(14) - pad.size.x, bottom - pad.size.y));
+        FadeVertices(list, firstVertex, g_hotkeyGuideAlpha);
+        list->PopClipRect();
+    }
+    ImGui::End();
+}
+
+// The credits pill: while the game's credits movie plays (from the main menu, the title screen's idle loop or the end
+// of the game), "FrightWorks by ..." in the bottom-right corner, over the black bar beside the 4:3 movie.
+float g_creditsPillAlpha = 0.0f;
+
+void DrawCreditsPill() {
+    using namespace OverlayTheme;
+    uint32_t movie = 0;
+    const bool show = !StartupScreenVisible() && !g_topBarVisible &&
+                      no100f_game_state::g_creditsMovie.load(std::memory_order_relaxed) &&
+                      Memory::TryRead32(no100f_game_state::kMovieAddress, movie) && movie != 0;
+    const float step = ImGui::GetIO().DeltaTime / 0.5f;
+    g_creditsPillAlpha = std::clamp(g_creditsPillAlpha + (show ? step : -step), 0.0f, 1.0f);
+    if (g_creditsPillAlpha <= 0.0f) return;
+
+    // FRIGHTWORKS  Made by <author>
+    //              with the help of <helper 1>
+    //                               <helper 2> ...
+    constexpr const char* kName = "FrightWorks";
+    constexpr const char* kHelp = "with the help of ";
+    static const std::string by = std::string("Made by ") + no100f_credits::kAuthor;
+    ImFont* heading = Heading();
+    ImFont* body = Body();
+    const auto textWidth = [body](const char* text) { return body->CalcTextSizeA(body->FontSize, FLT_MAX, 0.0f, text).x; };
+    const ImVec2 nameSize = heading->CalcTextSizeA(heading->FontSize, FLT_MAX, 0.0f, kName);
+    const float padX = Px(14), padY = Px(7), gap = Px(8), lineHeight = body->FontSize + Px(3);
+    const float helpWidth = textWidth(kHelp);
+    float textBlock = textWidth(by.c_str());
+    for (const char* helper : no100f_credits::kHelpers) textBlock = std::max(textBlock, helpWidth + textWidth(helper));
+    const size_t lines = 1 + std::size(no100f_credits::kHelpers);
+    const float firstLine = std::max(nameSize.y, lineHeight);
+    const float height = padY * 2 + firstLine + lineHeight * static_cast<float>(lines - 1);
+    const float width = padX * 2 + nameSize.x + gap + textBlock;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = Px(16);
+    const ImVec2 min(viewport->Pos.x + viewport->Size.x - margin - width, viewport->Pos.y + viewport->Size.y - margin - height);
+    const ImVec2 max(min.x + width, min.y + height);
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    if (ImGui::Begin("##CreditsPill", nullptr, kFlags)) {
+        ImDrawList* list = ImGui::GetWindowDrawList();
+        list->PushClipRectFullScreen();
+        const int firstVertex = list->VtxBuffer.Size;
+        const float rounding = Px(14);
+        list->AddRectFilled(min, max, Col(Colour::Ink, 0.72f), rounding);
+        list->AddRect(min, max, Col(Colour::Lime, 0.35f), rounding, 0, Px(1));
+        OutlinedText(list, heading, ImVec2(min.x + padX, min.y + padY + (firstLine - nameSize.y) * 0.5f + Px(1)),
+                     Col(Colour::Lime), Col(Colour::Ink), Px(2), kName);
+        const float textX = min.x + padX + nameSize.x + gap;
+        float y = min.y + padY + (firstLine - body->FontSize) * 0.5f;
+        list->AddText(body, body->FontSize, ImVec2(textX, y), Col(Colour::Cream), by.c_str());
+        bool first = true;
+        for (const char* helper : no100f_credits::kHelpers) {
+            y += lineHeight;
+            if (first) list->AddText(body, body->FontSize, ImVec2(textX, y), Col(Colour::CreamDim), kHelp);
+            list->AddText(body, body->FontSize, ImVec2(textX + helpWidth, y), Col(Colour::Cream), helper);
+            first = false;
+        }
+        FadeVertices(list, firstVertex, g_creditsPillAlpha);
+        list->PopClipRect();
+    }
+    ImGui::End();
+}
+
+} // namespace
+
 void Draw() noexcept {
     // Wait for the frame worker's DONE phase: it has replayed the previous frame's ImGui draw lists
     // and started the next ImGui frame, so all overlay callers can now safely issue ImGui commands.
@@ -1963,7 +2625,16 @@ void Draw() noexcept {
     }
     NetplayUi::Draw();
     DrawFpsOverlay();
+    if (no100f_devmenu::Enabled()) {
+        no100f_recorder::Update();
+    }
+    DrawNotice();
+    DrawDevMark();
+    DrawHotkeyGuide();
+    DrawCreditsPill();
+    no100f_recorder::DrawIndicator();
     DrawTopBar();
+    no100f_devmenu::Draw();
     DrawExitPrompt();
     controller_mapping_wizard::Draw();
     ApplyInputBlockState();

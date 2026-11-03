@@ -5,20 +5,22 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>Scooby-Doo Refrightened Launcher</AssemblyName>
+    <AssemblyName>FrightWorks</AssemblyName>
     <RootNamespace>ScoobyReMasked</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.0.2</Version>
+    <Version>1.0.4</Version>
     <Product>FrightWorks: Night of 100 Frights</Product>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>embedded</DebugType>
-    <ApplicationIcon>refrightened.ico</ApplicationIcon>
+    <ApplicationIcon>frightworks.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="art\header.jpg" LogicalName="ScoobyReMasked.header.jpg" />
-    <EmbeddedResource Include="art\shaggy_scooby.png" LogicalName="ScoobyReMasked.shaggy_scooby.png" />
-    <EmbeddedResource Include="title.ttf" LogicalName="ScoobyReMasked.title.ttf" Condition="Exists('title.ttf')" />
+    <EmbeddedResource Include="art\mansion.png" LogicalName="ScoobyReMasked.mansion.png" />
+    <EmbeddedResource Include="art\mansion.json" LogicalName="ScoobyReMasked.mansion.json" />
+    <EmbeddedResource Include="art\dog.png" LogicalName="ScoobyReMasked.dog.png" />
+    <EmbeddedResource Include="art\ghost.png" LogicalName="ScoobyReMasked.ghost.png" />
+    <EmbeddedResource Include="fonts\LuckiestGuy-Regular.ttf" LogicalName="ScoobyReMasked.LuckiestGuy-Regular.ttf" />
   </ItemGroup>
 </Project>

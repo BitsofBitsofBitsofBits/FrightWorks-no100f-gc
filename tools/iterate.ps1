@@ -16,7 +16,7 @@ if (-not $NoBuild) {
     }
 }
 $play = Join-Path $root 'Play'; $log = Join-Path $root 'build-logs\boot.log'
-$p = Start-Process (Join-Path $play 'Scooby-Doo Refrightened.exe') -WorkingDirectory $play -RedirectStandardError $log -RedirectStandardOutput "$log.out" -PassThru
+$p = Start-Process (Join-Path $play 'FrightWorks Game.exe') -WorkingDirectory $play -RedirectStandardError $log -RedirectStandardOutput "$log.out" -PassThru
 $null = $p.WaitForExit($Seconds * 1000)
 $alive = -not $p.HasExited
 if ($alive -and $Capture) { & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'capture-window.ps1') -Seconds 1 -Out (Join-Path $root 'build-logs\boot.png') | Select -Last 1 }

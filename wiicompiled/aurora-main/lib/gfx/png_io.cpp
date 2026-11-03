@@ -3,6 +3,7 @@
 #include "png_io.hpp"
 
 #include <fstream>
+#include <vector>
 
 #include "dds_io.hpp"
 #include "png.h"
@@ -112,4 +113,51 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
   *width = tex->width;
   *height = tex->height;
   return out;
+}
+
+namespace {
+void writePngData(png_structp png, png_bytep data, size_t length) {
+  auto* out = static_cast<std::ofstream*>(png_get_io_ptr(png));
+  out->write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(length));
+  if (!*out) {
+    png_error(png, "file write failed!");
+  }
+}
+
+void flushPngData(png_structp png) { static_cast<std::ofstream*>(png_get_io_ptr(png))->flush(); }
+} // namespace
+
+// Screenshots: write tightly packed 8-bit RGB rows (top row first) as a PNG. path is UTF-8.
+extern "C" bool aurora_write_png_rgb(const char* path, const uint8_t* rgb, uint32_t width, uint32_t height) {
+  std::ofstream out(std::filesystem::u8path(path), std::ios::binary | std::ios::trunc);
+  if (!out) {
+    return false;
+  }
+  png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+  if (!png) {
+    return false;
+  }
+  png_infop info = png_create_info_struct(png);
+  if (!info) {
+    png_destroy_write_struct(&png, nullptr);
+    return false;
+  }
+  // No locals after the setjmp (see load_png_file).
+  std::vector<png_bytep> rows(height);
+  for (uint32_t y = 0; y < height; ++y) {
+    rows[y] = const_cast<png_bytep>(rgb + static_cast<size_t>(y) * width * 3);
+  }
+  if (setjmp(png_jmpbuf(png))) {
+    png_destroy_write_struct(&png, &info);
+    return false;
+  }
+  png_set_write_fn(png, &out, writePngData, flushPngData);
+  png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT,
+               PNG_FILTER_TYPE_DEFAULT);
+  png_write_info(png, info);
+  png_write_image(png, rows.data());
+  png_write_end(png, nullptr);
+  png_destroy_write_struct(&png, &info);
+  out.close();
+  return !out.fail();
 }

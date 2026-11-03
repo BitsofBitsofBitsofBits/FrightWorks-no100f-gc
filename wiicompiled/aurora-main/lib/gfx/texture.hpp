@@ -1,6 +1,7 @@
 #pragma once
 #include <dolphin/gx.h>
 
+#include <string>
 #include <utility>
 
 #include "common.hpp"
@@ -46,6 +47,9 @@ struct TextureRef {
   u32 gxFormat;
   bool hasArbitraryMips = false;
   bool isReplacement = false;
+  // Dev menu (F8): the texture's replacement file name without extension, for the texture log (static
+  // textures only; empty for EFB copies and other runtime textures).
+  std::string debugKey;
 
   TextureRef(wgpu::Texture texture, wgpu::TextureView sampleTextureView, wgpu::TextureView attachmentTextureView,
              wgpu::Extent3D size, wgpu::TextureFormat format, uint32_t mipCount, u32 gxFormat)

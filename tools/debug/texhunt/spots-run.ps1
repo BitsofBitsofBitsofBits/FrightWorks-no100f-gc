@@ -1,5 +1,6 @@
 # spots-run.ps1 -Boot h001 -Ids T001,T002 -Mode orig|hd|clean: boot a scene, go to each saved dev-menu spot, screenshot.
-# Needs the dev menu build in Play\. Restores Config (Config.user.toml), zz-manual and the texture link afterwards.
+# Needs the dev menu build in Play\. Runs with the test config (manual-session prepare, HD set by -Mode); afterwards
+# the texture link is removed and manual-session restore puts your settings back and removes zz-manual.
 # Spots saved with the free camera on get its pose, so when every wanted spot has one the run jumps straight to them.
 # Otherwise (the game camera only turns at certain points) it goes through ALL of the scene's spots in saved order
 # (devmenu_spots.txt) up to the last wanted one, and shoots only the wanted ones (-Pass seconds at the others).
@@ -10,10 +11,11 @@ param([string]$Boot = 'h001', [string]$Ids = '', [string]$Mode = 'hd', [int]$Set
       [string]$Branch = '', [string]$Pack = '')
 $label = if ($Tag) { "$Mode-$Tag" } else { $Mode }  # file name suffix: <spot>-<Mode>[-<Tag>].png
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $play = Join-Path $root 'Play'
-$exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
+$exe = Join-Path $play 'FrightWorks Game.exe'
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'
 $cfg = Join-Path $play 'UserData\Config.toml'
 $cmdFile = Join-Path $play 'devmenu.txt'
@@ -26,6 +28,7 @@ if ($Branch) {
     if ($LASTEXITCODE -ne 0) { throw "dev menu build of $Branch failed" }
 }
 $start = [DateTime]::Now
+$linked = $false  # only a link this script made is removed (builds stage the HD pack there as a real folder)
 $idList = @($Ids -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 # this scene's spot names in saved order (line: SCENE x y z yaw [cam=...] name)
 $camSpots = @()
@@ -61,33 +64,29 @@ function Run-Cmd($line, $timeout = 90) {
 }
 
 try {
-    & powershell -ExecutionPolicy Bypass -File $ms start -Boot $Boot | Out-Null
-    & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
-    # stop can miss the copy start just launched: make sure none is left before ours
-    $t = [DateTime]::Now
-    while ((Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
-        Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Milliseconds 500
-    }
+    & powershell -ExecutionPolicy Bypass -File $ms prepare -Boot $Boot | Out-Null  # saves your settings, writes boot mod + Config
+    if ($LASTEXITCODE -ne 0) { throw 'manual-session prepare failed (game running?)' }
     # manual-session's boot mod only sets BOOT: add the hub intro skip (as hunt.ps1 does) or the shots catch the cutscene
     if ($Boot -eq 'h001') {
         & python (Join-Path $root 'tools\debug\texhunt\skipintro.py') (Join-Path $play 'UserData\mods\zz-manual') | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'skipintro.py failed' }
     }
-    # the user's own config, plus the boot mod manual-session left; only the HD setting changes
-    Copy-Item (Join-Path $root 'tools\debug\local\Config.user.toml') $cfg -Force
+    # the test config manual-session wrote; only the HD setting changes
     $hdOn = $Mode -ne 'orig'
     $text = [IO.File]::ReadAllText($cfg) -replace '(?m)^texture_replacements\s*=[^\r\n]*\r?\n', ''
     $text = [regex]::Replace($text, '(?m)^\[video\][ \t]*\r?\n', "[video]`r`ntexture_replacements = $(if ($hdOn) { 'true' } else { 'false' })`r`n")
     [IO.File]::WriteAllText($cfg, $text)
-    if ($hdOn) {
-        if (Test-Path $link) { throw "$link exists" }
+    if ($hdOn -and $Mode -eq 'hd' -and -not $Pack -and (Test-Path $link)) {
+        # the build staged texture_pack\ScoobyHD here already: play that
+    } elseif ($hdOn) {
+        if (Test-Path $link) { throw "$link exists (move the staged pack away to test another one)" }
         $target = if ($Mode -eq 'clean') { Join-Path $root 'autotest\texhunt\cleanpack' }
                   elseif ($Pack -and [IO.Path]::IsPathRooted($Pack)) { $Pack }
                   elseif ($Pack) { Join-Path $root "autotest\texhunt\$Pack" }
                   else { Join-Path $root 'texture_pack\ScoobyHD' }
         if (-not (Test-Path $target -PathType Container)) { throw "no pack folder $target" }
         New-Item -ItemType Junction -Path $link -Target $target | Out-Null
+        $linked = $true
     }
     Remove-Item $logFile, $cmdFile -ErrorAction SilentlyContinue
     $game = Start-Process -FilePath $exe -WorkingDirectory $play -PassThru
@@ -110,11 +109,10 @@ try {
     }
     & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
 } finally {
-    Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep 1
-    if (Test-Path $link) { [IO.Directory]::Delete($link, $false) }
-    Remove-Item -Recurse -Force (Join-Path $play 'UserData\mods\zz-manual') -ErrorAction SilentlyContinue
-    Copy-Item (Join-Path $root 'tools\debug\local\Config.user.toml') $cfg -Force
+    if ($linked) { [IO.Directory]::Delete($link, $false) }  # the junction only
+    & powershell -ExecutionPolicy Bypass -File $ms restore | Out-Null  # your settings back, zz-manual removed
     Remove-Item $cmdFile -ErrorAction SilentlyContinue
     "restored"
 }

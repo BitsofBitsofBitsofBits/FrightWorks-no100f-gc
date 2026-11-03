@@ -4,6 +4,7 @@
 param([Parameter(Mandatory)][string]$Label, [string]$Boot = 'h001', [string]$Spot = '', [switch]$Hd, [string]$Pack = '',
       [int]$Interp = 0, [string]$Modes = '0,3', [int]$Rounds = 3)
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $cmd = Join-Path $root 'Play\devmenu.txt'
@@ -46,8 +47,8 @@ try {
         }
     }
 } finally {
-    Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
-    if (-not $look.WaitForExit(30000)) { Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
+    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+    if (-not $look.WaitForExit(30000)) { Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
     Get-Content $out | Select-String 'restored' | ForEach-Object Line
     Remove-Item $out -ErrorAction SilentlyContinue
 }

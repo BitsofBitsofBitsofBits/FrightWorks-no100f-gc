@@ -29,6 +29,7 @@ extern "C" unsigned g_spmAudit[8];
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -598,6 +599,16 @@ std::vector<PatchTarget> find_patch_targets(const void* dest) {
 
 namespace {
 
+// Dev menu (F8): name the texture by its replacement key for the texture log (the shared magenta highlight
+// texture is renamed for whichever key Find highlights).
+static void note_debug_key(const gfx::TextureHandle& handle, const GXTexObj_& obj) noexcept {
+  if (!handle || (!handle->debugKey.empty() && !gfx::texture_replacement::is_highlight_handle(handle))) {
+    return;
+  }
+  const auto name = gfx::texture_replacement::build_texture_replacement_name(obj);
+  handle->debugKey = name.substr(0, name.rfind('.'));
+}
+
 gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
   ZoneScoped;
   static const bool spmTexNoCache = std::getenv("SPM_TEX_NOCACHE") != nullptr;
@@ -654,6 +665,7 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
     handle = gfx::new_static_texture_2d(obj.width(), obj.height(), obj.mip_count(), obj.format(),
                                         {static_cast<const uint8_t*>(obj.data), dataSize}, false, nameStr);
   }
+  note_debug_key(handle, obj);
   if (canCacheUpload) {
     store_cached_texture(obj, handle);
     if (canUseSourceCache) {
@@ -723,6 +735,7 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
                                    {converted.data.data(), converted.data.size()}, false, "GX Static Palette Texture");
     handle->hasArbitraryMips = converted.hasArbitraryMips;
   }
+  note_debug_key(handle, obj);
   if (!obj.no_cache() && !tlut.no_cache()) {
     store_cached_texture(obj, handle, tlut.tlutObjId, tlut.tlutDataVersion);
     if (canUseSourceCache) {
@@ -1190,6 +1203,119 @@ void invalidate_static_texture_cache() noexcept {
   g_gxState.stateDirty = true;
 }
 
+// Dev menu (F8): a revision bump alone lets the source caches re-prove their old handles, so drop them all and
+// every texture goes through find_replacement again (texture highlight on/off).
+static void drop_static_texture_caches() noexcept;
+
+// Dev menu (F8): while the dev menu's Find highlights a texture, every distinct GX state it is drawn with goes
+// to devmenu_drawstate.txt (working directory = Play): alpha compare, blending, depth test/write.
+static std::vector<std::string> s_drawStatesLogged;
+
+static void log_highlight_draw_state(const ShaderInfo& info) noexcept {
+  for (u32 i = 0; i < MaxTextures; ++i) {
+    if (!info.sampledTextures.test(i) || !gfx::texture_replacement::is_highlight_handle(g_gxState.textures[i].ref)) {
+      continue;
+    }
+    const auto& s = g_gxState;
+    const auto& ac = s.alphaCompare;
+    char line[256];
+    std::snprintf(line, sizeof line,
+                  "texmap %u | alpha compare %d %u op %d %d %u | blend mode %d src %d dst %d | z test %d func %d write %d "
+                  "before-tex %d | color write %d alpha write %d",
+                  i, ac.comp0, ac.ref0, ac.op, ac.comp1, ac.ref1, s.blendMode, s.blendFacSrc, s.blendFacDst,
+                  s.depthCompare, s.depthFunc, s.depthUpdate, s.zCompLocBeforeTex, s.colorUpdate, s.alphaUpdate);
+    if (s_drawStatesLogged.size() >= 32 ||
+        std::find(s_drawStatesLogged.begin(), s_drawStatesLogged.end(), line) != s_drawStatesLogged.end()) {
+      return;
+    }
+    s_drawStatesLogged.emplace_back(line);
+    if (FILE* f = std::fopen("devmenu_drawstate.txt", "a")) {
+      std::fprintf(f, "%s\n", line);
+      std::fclose(f);
+    }
+    return;
+  }
+}
+
+// Dev menu (F8): texture log. While the dev menu's log is on, the first draw of each texture key with each
+// distinct sampler and GX state in each scene appends a row to devmenu_texlog.csv (working directory = Play).
+// Static textures only (EFB copies have no key). width/height = the game's texture, file_* = what was uploaded
+// (the replacement when replacement = 1).
+static const char* gx_name(u32 v, std::initializer_list<const char*> names) noexcept {
+  return v < names.size() ? names.begin()[v] : "?";
+}
+
+static void log_texture_draw_states(const ShaderInfo& info) noexcept {
+  static uint32_t generation = UINT32_MAX;
+  static std::string scene;
+  static absl::flat_hash_set<std::string> logged;
+  if (const uint32_t g = gfx::texture_replacement::texture_log_generation(); g != generation) {
+    generation = g;
+    scene = gfx::texture_replacement::texture_log_scene();
+  }
+  if (scene.empty()) {
+    return;
+  }
+  const auto& s = g_gxState;
+  const auto& ac = s.alphaCompare;
+  const std::initializer_list<const char*> compare{"never", "less", "equal", "lequal", "greater", "nequal", "gequal", "always"};
+  const std::initializer_list<const char*> factor{"zero", "one", "clr", "invclr", "srcalpha", "invsrcalpha", "dstalpha", "invdstalpha"};
+  const std::initializer_list<const char*> filter{"near", "linear", "near_mip_near", "lin_mip_near", "near_mip_lin", "lin_mip_lin"};
+  const std::initializer_list<const char*> wrap{"clamp", "repeat", "mirror"};
+  for (u32 i = 0; i < MaxTextures; ++i) {
+    const auto& bind = s.textures[i];
+    if (!info.sampledTextures.test(i) || !bind || bind.ref->debugKey.empty()) {
+      continue;
+    }
+    const auto& ref = *bind.ref;
+    const auto& obj = bind.texObj;
+    char row[640];
+    std::snprintf(row, sizeof row,
+                  "%s,%s,%d,%u,%u,%u,%s,%s,%s,%s,%u,%.3f,%.3f,%.3f,%s,%u,%s,%s,%u,%s,%s,%s,%d,%s,%d,%d,%d,%d,%u,%u,%u",
+                  scene.c_str(), ref.debugKey.c_str(), ref.isReplacement ? 1 : 0, i, obj.width(), obj.height(),
+                  gx_name(obj.wrap_s(), wrap), gx_name(obj.wrap_t(), wrap), gx_name(obj.min_filter(), filter),
+                  gx_name(obj.mag_filter(), filter), obj.has_mips() ? obj.mip_count() : 1u, obj.min_lod(), obj.max_lod(),
+                  obj.lod_bias(), gx_name(ac.comp0, compare), static_cast<u32>(ac.ref0),
+                  gx_name(ac.op, {"and", "or", "xor", "xnor"}), gx_name(ac.comp1, compare), static_cast<u32>(ac.ref1),
+                  gx_name(s.blendMode, {"none", "blend", "logic", "subtract"}), gx_name(s.blendFacSrc, factor),
+                  gx_name(s.blendFacDst, factor), s.depthCompare ? 1 : 0, gx_name(s.depthFunc, compare),
+                  s.depthUpdate ? 1 : 0, s.zCompLocBeforeTex ? 1 : 0, s.colorUpdate ? 1 : 0, s.alphaUpdate ? 1 : 0,
+                  ref.size.width, ref.size.height, ref.mipCount);
+    if (!logged.insert(row).second) {
+      continue;
+    }
+    const bool fresh = !std::filesystem::exists("devmenu_texlog.csv");
+    if (FILE* f = std::fopen("devmenu_texlog.csv", "a")) {
+      if (fresh) {
+        std::fputs("scene,key,replacement,texmap,width,height,wrap_s,wrap_t,min_filter,mag_filter,mips,min_lod,max_lod,"
+                   "lod_bias,alpha_comp0,alpha_ref0,alpha_op,alpha_comp1,alpha_ref1,blend_mode,blend_src,blend_dst,"
+                   "z_test,z_func,z_write,z_before_tex,color_write,alpha_write,file_width,file_height,file_mips\n",
+                   f);
+      }
+      std::fprintf(f, "%s\n", row);
+      std::fclose(f);
+    }
+  }
+}
+
+static void drop_static_texture_caches() noexcept {
+  s_textureObjectCaches.clear();
+  s_tlutObjectCaches.clear();
+  s_staticTextureSourceCache.clear();
+  s_staticPaletteTextureSourceCache.clear();
+  s_texObjSourceKeys.clear();
+  s_texObjPaletteSourceKeys.clear();
+  s_texObjSourceKeyMemo.reset();
+  s_texObjPaletteSourceKeyMemo.reset();
+  clear_static_source_front_cache();
+  for (auto& entry : s_textureResolveIdentityCache) {
+    entry.valid = false;
+    entry.binding.reset();
+  }
+  ++s_textureCacheStamps;  // so the bump below isn't skipped
+  invalidate_static_texture_cache();
+}
+
 void clear_copy_texture_cache() noexcept {
   g_gxState.copyTextures.clear();
   g_gxState.copyTextureCache.clear();
@@ -1368,9 +1494,25 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
   return nullptr;
 }
 
+// The button prompt set changed. The prompt atlas's guest bytes did not, so the source caches (checked against those
+// bytes) would keep handing out the old set's texture: drop their replacement textures (texture_replacement keeps its
+// own cache of the others) and bump the revision so the per-object caches resolve again.
+static void drop_replacement_texture_sources() noexcept {
+  const auto isReplacement = [](const auto& item) { return item.second.handle && item.second.handle->isReplacement; };
+  absl::erase_if(s_staticTextureSourceCache, isReplacement);
+  absl::erase_if(s_staticPaletteTextureSourceCache, isReplacement);
+  clear_static_source_front_cache();
+  ++s_textureCacheStamps;
+  invalidate_static_texture_cache();
+}
+
 void resolve_sampled_textures(const ShaderInfo& info) noexcept {
   ZoneScoped;
-  if (gfx::texture_replacement::take_button_icon_style_change()) invalidate_static_texture_cache();
+  if (gfx::texture_replacement::take_button_icon_style_change()) drop_replacement_texture_sources();
+  if (gfx::texture_replacement::take_highlight_change()) {
+    drop_static_texture_caches();
+    s_drawStatesLogged.clear();
+  }
 
   for (u32 i = 0; i < MaxTextures; ++i) {
     if (!info.sampledTextures.test(i)) {
@@ -1501,6 +1643,8 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
       s_lastStaticSourceNoCopyRevision[i] = 0;
     }
   }
+  log_highlight_draw_state(info);
+  log_texture_draw_states(info);
 }
 
 static inline wgpu::BlendFactor to_blend_factor(GXBlendFactor fac, bool isDst, bool alphaComponent) {

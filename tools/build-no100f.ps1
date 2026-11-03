@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
 $root = Split-Path -Parent $PSScriptRoot            # <project>\tools -> <project>
+$userPath = $env:PATH                               # step 3 scrubs PATH; staging Play\UserData needs Python + magick
 $wc = Join-Path $root 'wiicompiled'
 $toolchain = Join-Path $root 'toolchain'
 $logs = Join-Path $root 'build-logs'
@@ -107,6 +108,8 @@ if (-not $SkipTranslate) {
 }
 
 # 3. Configure and compile with the portable toolchain on a scrubbed PATH
+# git stays reachable for the build ID (runtime/cmake/build_info.cmake: branch, commit, uncommitted changes).
+$git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 $env:PATH = Get-MkwToolchainPath $toolchain
 $bin = Join-Path $toolchain 'llvm-mingw\bin'
 $build = Join-Path $wc 'native-build'
@@ -117,19 +120,23 @@ $configure = Get-MkwNativeConfigureArguments `
     -CxxCompiler (Join-Path $bin 'x86_64-w64-mingw32-clang++.exe') `
     -ResourceCompiler (Join-Path $bin 'x86_64-w64-mingw32-windres.exe') `
     -DependenciesDirectory (Join-Path $wc 'Dependencies') `
-    -AdditionalArguments @("-DMKW_TRANSLATED_COMPILE_JOBS=$Jobs")
+    -AdditionalArguments (@("-DMKW_TRANSLATED_COMPILE_JOBS=$Jobs") + $(if ($git) { "-DMKW_GIT_EXECUTABLE=$($git.Source.Replace('\', '/'))" }))
 $cmake = Join-Path $toolchain 'CMake\bin\cmake.exe'
 Invoke-Step 'configure' $cmake $configure $wc
 if ($ConfigureOnly) { Set-Status 'configure only: done'; exit 0 }
 Invoke-Step 'compile' $cmake @('--build', $build, '--target', 'WiiCompiled', '--parallel', "$Jobs") $wc
 Set-Status "DONE: $build\WiiCompiled.exe"
-$playExe = Join-Path $root 'Play\Scooby-Doo Refrightened.exe'
+$playExe = Join-Path $root 'Play\FrightWorks Game.exe'
 # Only the game running from Play\ holds the file; the launcher shares its process name.
-Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $playExe } | Stop-Process -Force
+Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $playExe } | Stop-Process -Force
 Start-Sleep -Seconds 1
 Copy-Item -LiteralPath (Join-Path $build 'WiiCompiled.exe') -Destination $playExe -Force
 # The runtime DLLs (SDL3, Dawn, DXC, libc++ ...) and Dolphin's free dsp_coef.bin sit next to the build output.
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -eq '.dll' -or $_.Name -eq 'dsp_coef.bin' } |
     Copy-Item -Destination (Join-Path $root 'Play') -Force
-Set-Status 'copied to Play\Scooby-Doo Refrightened.exe (+ runtime DLLs)'
+Set-Status 'copied to Play\FrightWorks Game.exe (+ runtime DLLs)'
+# Like a release: the HD pack and the button prompt icons in Play\UserData (only what changed is copied or rebuilt).
+$env:PATH = $userPath
+& (Join-Path $PSScriptRoot 'stage-userdata.ps1') -UserData (Join-Path $root 'Play\UserData')
+Set-Status 'Play\UserData: HD pack + button icons staged'
 

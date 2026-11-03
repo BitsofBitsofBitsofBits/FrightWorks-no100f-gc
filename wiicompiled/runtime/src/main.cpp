@@ -80,6 +80,8 @@
 #include "hle_stubs.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
+#include "build_info.h"
+#include "overlay_theme.h"
 #include "runtime_product.h"
 #include "recomp_mod_loader.h"
 #include <aurora/aurora.h>
@@ -1459,6 +1461,10 @@ int RuntimeMain(int argc, char** argv) {
         // This is required for GX commands (like texture loading) to work.
         AuroraConfig auroraConfig = {};
         auroraConfig.appName = RuntimeProduct::Active().displayName.data();
+        // The in-game menus' fonts and colours (F10 settings, F8 dev menu).
+        auroraConfig.imGuiInitCallback = &OverlayTheme::Initialize;
+        RT_LOG(RT_TAG_RUNTIME) << "FrightWorks build " << BuildInfo::Id()
+                               << (RuntimeConfigFile::DevTools() ? " (dev tools on)" : "") << std::endl;
         const auto applicationDataDirectory = RuntimeConfigFile::ApplicationDataDirectory();
         const auto rendererCacheDirectory = applicationDataDirectory / "Cache";
         std::error_code rendererPathError;

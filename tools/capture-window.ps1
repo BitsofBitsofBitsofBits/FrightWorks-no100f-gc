@@ -1,4 +1,4 @@
-# Starts Play\Scooby-Doo Refrightened.exe, waits, saves a PNG of the game window only (PrintWindow, no desktop input), stops it.
+# Starts Play\FrightWorks Game.exe, waits, saves a PNG of the game window only (PrintWindow, no desktop input), stops it.
 # Usage: capture-window.ps1 [-Seconds 20] [-Out <png>] [-Every N]   (-Every: a shot every N s as <out>-<s>s.png)
 param([int]$Seconds = 20, [string]$Out = '', [int]$Every = 0)
 $root = Split-Path -Parent $PSScriptRoot
@@ -27,7 +27,7 @@ public static class Win {
 "@
 [Win]::SetProcessDPIAware() | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $root 'autotest') | Out-Null
-$p = Start-Process (Join-Path $root 'Play\Scooby-Doo Refrightened.exe') -WorkingDirectory (Join-Path $root 'Play') -PassThru `
+$p = Start-Process (Join-Path $root 'Play\FrightWorks Game.exe') -WorkingDirectory (Join-Path $root 'Play') -PassThru `
     -RedirectStandardOutput "$Out.log" -RedirectStandardError "$Out.err.log"
 function Shot([string]$file) {
     $p.Refresh()

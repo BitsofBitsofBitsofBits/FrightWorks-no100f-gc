@@ -29,6 +29,11 @@ static class Program
         ApplicationConfiguration.Initialize();
         // "--shots <dir>": draw every page to <dir>\<page>.png and exit. "--selftest": build every page, then exit 0.
         int shots = Array.IndexOf(args, "--shots");
+        if (shots < 0 && !args.Contains("--selftest"))
+        {
+            var (root, game) = MainForm.FindGame();
+            RefrightenedImport.Offer(root, game, MainForm.AppTitle);
+        }
         var form = new MainForm(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null);
         if (args.Contains("--selftest")) { form.Shown += (_, _) => form.Close(); }
         Application.Run(form);

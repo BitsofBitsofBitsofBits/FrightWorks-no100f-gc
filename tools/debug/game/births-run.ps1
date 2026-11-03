@@ -1,6 +1,6 @@
 # Particle births per emitter at fps60 off/on per level (needs tools\debug\patches\postool.patch: postool "births").
 # births-run.ps1 [-Levels i004,i001] [-Seconds 10]   (powershell -File passes "a,b" as one string: split here)  -> autotest\manual\births\<level>-fps60<bool>.txt
-# Restores the user's setup at the end (removes zz-manual, copies tools\debug\local\Config.user.toml back).
+# Runs with the test config (manual-session prepare); at the end manual-session restore puts your settings back.
 param([string[]]$Levels = @('i004', 'i001', 'h001', 'e001', 'h002'), [int]$Seconds = 10)
 $Levels = $Levels | ForEach-Object { $_ -split ',' } | Where-Object { $_ -match '^[a-z]\d{3}$' }
 if (-not $Levels) { throw 'no valid level names (expected like i004)' }
@@ -8,14 +8,14 @@ $root = Resolve-Path "$PSScriptRoot\..\..\.."
 Set-Location $root
 $out = Join-Path $root 'autotest\manual\births'
 New-Item -ItemType Directory -Force $out | Out-Null
-$exe = Join-Path $root 'Play\Scooby-Doo Refrightened.exe'
+$exe = Join-Path $root 'Play\FrightWorks Game.exe'
 $cfg = Join-Path $root 'Play\UserData\Config.toml'
-function Stop-Game { Stop-Process -Name 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue; Start-Sleep 1 }
+function Stop-Game { Stop-Process -Name 'FrightWorks Game' -ErrorAction SilentlyContinue; Start-Sleep 1 }
 try {
   foreach ($lvl in $Levels) {
     Stop-Game
-    powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot $lvl -AllPowerups | Out-Null
-    Stop-Game
+    powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare -Boot $lvl -AllPowerups | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'manual-session prepare failed' }
     foreach ($fps in @('false', 'true')) {
       (Get-Content $cfg) -replace '^fps60 = .*', "fps60 = $fps" | Set-Content $cfg
       Remove-Item -Recurse Play\postool, Play\postool.txt -ErrorAction SilentlyContinue
@@ -44,8 +44,7 @@ try {
   }
 } finally {
   Stop-Game
-  Remove-Item -Recurse -Force Play\UserData\mods\zz-manual -ErrorAction SilentlyContinue
-  Copy-Item tools\debug\local\Config.user.toml $cfg -Force
+  powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 restore | Out-Null
   Remove-Item -Recurse Play\postool, Play\postool.txt -ErrorAction SilentlyContinue
   'restored user setup'
 }

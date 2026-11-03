@@ -4,7 +4,7 @@
 # functions are compiled once into mkw_base_shared; only callers whose direct
 # ABI differs between profiles receive small base/RR variants.
 
-# Scooby-Doo: Re-Masked ships no game data: the translator's data_sections_init.cpp and its blobs are not compiled;
+# FrightWorks ships no game data: the translator's data_sections_init.cpp and its blobs are not compiled;
 # src/hle/scooby_dol_loader.cpp loads the sections from the player's disc instead.
 # Crash-report symbolization table emitted by generate-data-init. The stub
 # (deliberately outside the globbed src/ tree so it is never picked up twice)
@@ -68,6 +68,34 @@ endfunction()
 
 add_library(mkw_runtime_common OBJECT ${SOURCES})
 mkw_configure_object_target(mkw_runtime_common)
+
+# FrightWorks: the build ID (version + git branch/commit/changes, build_info.h), refreshed on every build, and the
+# in-game menu fonts (overlay_theme.cpp), both generated into the build tree. The build runs on a scrubbed PATH, so
+# git is looked up here (tools/build-no100f.ps1 passes MKW_GIT_EXECUTABLE; the standard installs are hints).
+find_program(MKW_GIT_EXECUTABLE git HINTS "$ENV{ProgramW6432}/Git/cmd" "$ENV{ProgramFiles}/Git/cmd"
+             "$ENV{LOCALAPPDATA}/Programs/Git/cmd")
+set(MKW_BUILD_INFO_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.cpp")
+add_custom_target(mkw_build_info
+    COMMAND "${CMAKE_COMMAND}" "-DREPO=${MKW_RUNTIME_SOURCE_DIR}/../.." "-DOUT=${MKW_BUILD_INFO_SOURCE}"
+            "-DGIT_EXECUTABLE=${MKW_GIT_EXECUTABLE}" -P "${MKW_RUNTIME_SOURCE_DIR}/cmake/build_info.cmake"
+    BYPRODUCTS "${MKW_BUILD_INFO_SOURCE}"
+    COMMENT "Build ID"
+    VERBATIM)
+set(MKW_OVERLAY_FONTS
+    "${MKW_RUNTIME_SOURCE_DIR}/assets/fonts/LuckiestGuy-Regular.ttf"
+    "${MKW_RUNTIME_SOURCE_DIR}/assets/fonts/Roboto-Medium.ttf")
+set(MKW_OVERLAY_FONTS_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/overlay_fonts.cpp")
+string(REPLACE ";" "|" mkw_overlay_fonts_arg "${MKW_OVERLAY_FONTS}")
+add_custom_command(OUTPUT "${MKW_OVERLAY_FONTS_SOURCE}"
+    COMMAND "${CMAKE_COMMAND}" "-DOUT=${MKW_OVERLAY_FONTS_SOURCE}" "-DFONTS=${mkw_overlay_fonts_arg}"
+            -P "${MKW_RUNTIME_SOURCE_DIR}/cmake/embed_fonts.cmake"
+    DEPENDS ${MKW_OVERLAY_FONTS} "${MKW_RUNTIME_SOURCE_DIR}/cmake/embed_fonts.cmake"
+    COMMENT "Overlay fonts"
+    VERBATIM)
+target_sources(mkw_runtime_common PRIVATE "${MKW_BUILD_INFO_SOURCE}" "${MKW_OVERLAY_FONTS_SOURCE}")
+set_source_files_properties("${MKW_BUILD_INFO_SOURCE}" "${MKW_OVERLAY_FONTS_SOURCE}" PROPERTIES
+    GENERATED TRUE SKIP_UNITY_BUILD_INCLUSION ON)
+add_dependencies(mkw_runtime_common mkw_build_info)
 target_compile_features(mkw_runtime_common PRIVATE cxx_std_20)
 target_compile_definitions(mkw_runtime_common PRIVATE
     SDL_MAIN_HANDLED
@@ -320,10 +348,10 @@ mkw_configure_product(WiiCompiled)
 target_precompile_headers(WiiCompiled PRIVATE
     "${MKW_RUNTIME_SOURCE_DIR}/include/mkw_pch.h")
 if(MKW_PLATFORM_WINDOWS)
-    # The app icon (projects/nsmbw/tools/make_icons.ps1): Explorer, the taskbar and, through SDL's
+    # The app icon (tools/launcher-art/make_launcher_art.py --icon): Explorer, the taskbar and, through SDL's
     # default of the executable's first icon, the game window.
     enable_language(RC)
-    file(TO_CMAKE_PATH "${MKW_RUNTIME_SOURCE_DIR}/assets/icon/nsmbw.ico" MKW_APP_ICON)
+    file(TO_CMAKE_PATH "${MKW_RUNTIME_SOURCE_DIR}/assets/icon/frightworks.ico" MKW_APP_ICON)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/app_icon.rc" "1 ICON \"${MKW_APP_ICON}\"\n")
     target_sources(WiiCompiled PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app_icon.rc")
 endif()

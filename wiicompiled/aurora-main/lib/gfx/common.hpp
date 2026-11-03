@@ -390,7 +390,7 @@ void push_draw_command(DrawData data);
 template <typename DrawData>
 DrawData* get_last_draw_command();
 // Cut-out fringe draws: recorded aside and drawn at the end of the current render pass, or when
-// flush_deferred_draws() runs (before a draw that doesn't write depth, or a clear).
+// flush_deferred_draws() runs (before a draw that isn't depth-tested and depth-writing, or a clear).
 void push_deferred_draw_command(const gx::DrawData& data);
 void flush_deferred_draws();
 

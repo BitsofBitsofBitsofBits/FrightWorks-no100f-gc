@@ -125,6 +125,9 @@ struct SDL_Gamepad;
 
 BOOL PADInit();
 u32 PADRead(PADStatus* status);
+// Like PADRead, but `filter` may change each port's gamepad buttons before keyboard input is added.
+typedef u16 (*PADGamepadButtonFilter)(u32 port, SDL_Gamepad* gamepad, u16 buttons);
+u32 PADReadWithGamepadButtonFilter(PADStatus* status, PADGamepadButtonFilter filter);
 BOOL PADReset(u32 mask);
 BOOL PADRecalibrate(u32 mask);
 void PADClamp(PADStatus* status);

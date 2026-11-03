@@ -1,4 +1,5 @@
 #include "controller_mapping_wizard.h"
+#include "overlay_theme.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 
@@ -376,7 +377,7 @@ void DrawSetupList() {
         return;
     }
     ImGui::SeparatorText("Unrecognized controllers");
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + OverlayTheme::Px(380.0f));
     ImGui::TextDisabled(
         "These devices have no usable gamepad mapping. Set one up by pressing "
         "each control when asked.");

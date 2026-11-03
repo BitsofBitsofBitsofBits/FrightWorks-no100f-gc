@@ -7,6 +7,7 @@ param([Parameter(Mandatory)][string]$Label, [string]$Boot = 'h001', [string]$Spo
       [string]$Pack = '', [string]$Modes = '0,1,2,3', [int]$Interp = 0)
 if ($Spot -eq 'none') { $Spot = '' }  # boot start position
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'
@@ -42,8 +43,8 @@ try {
         "mode $m  $($Matches[1])"
     }
 } finally {
-    Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
-    if (-not $look.WaitForExit(30000)) { Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
+    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+    if (-not $look.WaitForExit(30000)) { Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
     Get-Content $out | Select-String 'restored|closed' | ForEach-Object Line
     Remove-Item $out -ErrorAction SilentlyContinue
 }

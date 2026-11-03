@@ -40,33 +40,47 @@ The camera can't be turned, so a fixed spawn gives a fixed view. `mkhip.py` writ
 boot mod that `manual-session start` creates (game data: local only).
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot i004 -AllPowerups   # writes zz-manual + Config
-powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare -Boot i004 -AllPowerups   # saves user setup, writes zz-manual + Config
 python tools\debug\game\mkhip.py i004 --spot spot1            # spawn there, all NPCs moved off-map (--npc none keeps them)
 #   or: mkhip.py i004 --pos X Y Z --yaw R
-Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
+Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop   # when done: game closed, user setup back
 ```
 
 - Spots: with `postool.patch` built in, **F9** (global hotkey) appends Scooby's position + yaw to `Play/postool/spots.txt`
   (beeps). Copy good ones to `tools/debug/game/spots.txt` (i004 grate spots are there). F9 saves the feet; mkhip adds 0.3 to Y.
 - NPCs: clearing `baseFlags & 1` does nothing (NPC code ignores it), so mkhip moves them to (2000+50i, -500, 2000).
 - Poking only Scooby's matrix doesn't stick (the frame rebuilds it); the dev menu's teleport (below) does, or use the spawn.
-- Clean up afterwards: delete `Play\UserData\mods\zz-manual`, copy `tools\debug\local\Config.user.toml` back.
+- Clean up afterwards: `manual-session.ps1 stop` (or `restore`) puts the user's Config/controller files back and deletes
+  `Play\UserData\mods\zz-manual`. Don't `stop` between `prepare` and launching: it restores the user's config.
 
-## Dev menu (`tools/debug/patches/devmenu.patch`, `no100f_devmenu.cpp`)
+## Dev menu (`no100f_devmenu.cpp`; `tools/debug/patches/devmenu.patch` for older branches)
 
-Run: `powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1` applies the patch, builds, starts the game
-and takes the patch out of the source when the game closes (`-SkipTranslate` only if the last build was this branch;
+Built into the game, active with `[game] dev_tools = true` (launcher Extras > Developer tools) or `NO100F_DEV_TOOLS=1`
+(set by the kit's scripts). Run: `powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1` builds and
+starts the game with it on; on a branch from before it was built in, it applies the patch and takes it out of the
+source when the game closes (`-SkipTranslate` only if the last build was this branch;
 `-CleanBuild` rebuilds `Play\` without it afterwards; `-Keep` to work on the menu, then re-export the patch and `-Remove`).
 `-HdTextures` plays with the HD texture pack like the release does (`texture_pack\ScoobyHD` linked into
 `Play\UserData\texture_replacements`, `texture_replacements = true`; both put back afterwards). The user's config has HD off,
 so a bug seen in the release but not in a dev build may be an HD texture: retry with `-HdTextures`.
 
+**F3** in game (same gate, `no100f_recorder.cpp`): video to `Play\Videos\*.mp4` + `.txt` (build, start/end position,
+settings). Frames come from aurora (`aurora_set_video_capture`: presentation image re-rendered at window size, max 1080
+lines, read back async, 60 fps CFR piped raw to ffmpeg); `[game] record_audio` (default on) muxes the game's output in
+by wall-clock time; `[game] capture_overlay` (default off) = F8/F10 in F3 videos and F2 shots, else only the DEV mark
+(ImGui windows `##CaptureStamp` / `##CaptureHidden`, aurora.h). Needs ffmpeg (PATH or `tools\debug\local\ffmpeg`; the
+launcher downloads it when dev tools get turned on). Handy for the human to record a bug while playing; test driver
+`autotest\f3-recording\rec-test.ps1`.
+
 **F8** in game: current scene + Scooby's position, go to any scene (start position), save/delete spots and go to them
-(another scene loads first), god mode (no damage, green Scooby), Monsters tab (all off in every scene, or one
-by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
-`Play/devmenu.txt` (every 30 frames while in play, then deleted; results in `Play/devmenu.log`): `scene ID`, `spot NAME`,
-`save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `monsters [on|off]` (list / all),
+(another scene loads first; one transfer at a time, queued until in play with no cutscene, Cancel travel, 60 s
+timeout; travel turns the free camera off), Skip button (presses the game's own A in a recorded cutscene, Start on the
+title intro / attract demo, for up to 10 s), god mode (no damage, green Scooby), Levels tab, Monsters tab (all off in every level, or one
+by one in this scene), Power-ups tab (unlock/lock all or one by one). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
+`Play/devmenu.txt` (every 30 frames, then deleted; results in `Play/devmenu.log`; the file is left alone until in play with
+no scene/spot transfer pending, unless all its lines are `skip` or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
+`save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `powerups [all|none|HEX]`, `powerup NAME on|off` (sd2.ini name without `eSPECIAL_`), `monsters [on|off]` (list / all),
 `monster N|NAME on|off`, `ents` (scene entity list), `textures`. Doesn't touch warp flags or the save file.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `cutscene` (`cutscene yes|no control yes|no`).
@@ -80,7 +94,8 @@ scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines
 while `cutscene yes`, then waits for `control yes`.
 
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
-`#` comments) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
+optional seventh column starting with `effect`, any case = Effects tab instead; `#` comments; the Reload button re-reads
+it; each tab keeps its own "This level only" / "Hide fine" filters) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
 (aurora `aurora_texture_replacement_used(name)`, added by the patch: names are recorded when a replacement is looked up).
 Each row can save a spot named after the ID or go to it; suspects whose scenes include `boot` count in every scene.
 Find (row button or `find <id>`) draws that replacement solid magenta and writes each distinct GX state it is drawn with to
@@ -104,6 +119,11 @@ Creeper frames). i004 fog bank from a running dev menu build: `tools\debug\game\
 - Teleport: player entity frame `[0x802453C8]`: matrix (pos +0x30), previous pos +0x80, yaw angles +0xA4 and +0xC4; plus the
   model matrix `[[0x802453B4]+0x20]` and the camera target (0x801BD0A0/AC). Writing only the matrix gets rebuilt.
 - In play = mode `[0x80270E18]` 0xB and state `[0x802703C8]` 1. Current scene ID `[[0x80245CF4]+0x6C]`.
+- Power-ups: live mask `0x80245748` (globals + 0x5B8), bits 0-14 in sd2.ini read order: BubbleGum, SoapBar, StickyBoots,
+  Plungers, Slippers, LampShade, BlackKnight, FlowerPot, DivingHelmet, Spring, LightningBolt, FootballHelmet, Umbrella,
+  Shovel, LightningBoltStun. Pickup ORs `1 << [pickup+5]` in (`0x8004F0FC`); pause cheat `0x800ABF08` sets all; a new
+  game copies the eSPECIAL_* mask (globals + 0x820) in (`0x80057748`); kept on a scene change (tested); save block `PLYR`
+  read in `0x800CF2B8`.
 - God mode: sd2.ini `TakeDamage` lives at `0x802459B4` (globals + 0x824) and is read on every hit (`0x8005A430`: health
   +0x2E8 -= damage only when nonzero); held at 0. Tint: player instances `[0x802453B4]` (+0 next, +0x10 RpAtomic), geometry
   `[atomic+0x18]`: flags +8 `|= 0x40` (modulate material colour), materials `[geom+0x20]` x `[geom+0x24]`, colour RGBA at

@@ -20,4 +20,7 @@ void new_frame(const AuroraWindowSize& size) noexcept;
 // once and every presentation slot replays them. Reset by new_frame.
 void render_frame_data() noexcept;
 void render(const wgpu::RenderPassEncoder& pass) noexcept;
+// This frame's draw lists into a capture image `scale` times the window's framebuffer size: only the
+// AURORA_CAPTURE_STAMP_WINDOW window's list (stampOnly), or every list but AURORA_CAPTURE_HIDDEN_WINDOW's.
+void render_capture(const wgpu::RenderPassEncoder& pass, bool stampOnly, float scale) noexcept;
 } // namespace aurora::imgui

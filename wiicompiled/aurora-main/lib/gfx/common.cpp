@@ -178,8 +178,9 @@ struct RenderPass {
   // failing every subsequent depth test and making whatever's drawn into it vanish).
   float clearDepthValue = gx::UseReversedZ ? 0.f : 1.f;
   CommandList commands;
-  // Cut-out fringes (gx::CutoutPasses::TwoPass): drawn after the pass's own commands unless a
-  // non-depth-writing draw or a clear flushes them into `commands` first (flush_deferred_draws).
+  // Cut-out fringes (gx::CutoutPasses::TwoPass): drawn after the pass's own commands unless a draw
+  // that isn't depth-tested and depth-writing, or a clear, flushes them into `commands` first
+  // (flush_deferred_draws).
   CommandList deferred;
   bool clearColor = true;
   bool clearDepth = true;

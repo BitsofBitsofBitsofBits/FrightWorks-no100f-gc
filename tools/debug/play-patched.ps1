@@ -7,7 +7,7 @@
 #   ... play-patched.ps1 -CleanBuild           # after the game closes, rebuild Play\ without the patches
 #   ... play-patched.ps1 -HdTextures           # with the HD texture pack (texture_pack\ScoobyHD, as the release ships it)
 #
-# Steps: git apply each tools\debug\patches\<name>.patch, build, start Play\Scooby-Doo Refrightened.exe, wait for it to
+# Steps: git apply each tools\debug\patches\<name>.patch, build, start Play\FrightWorks Game.exe, wait for it to
 # exit, then git apply -R the patches this run applied. A patch that was already applied is left as found. A patch whose
 # files were edited while the game ran no longer reverses cleanly: it is left applied and the script says so.
 # -HdTextures links texture_pack\ScoobyHD into Play\UserData\texture_replacements and sets [video] texture_replacements =
@@ -25,9 +25,10 @@ param(
     [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\play-patched.ps1
 $patchDir = Join-Path $PSScriptRoot 'patches'
-$exe = Join-Path $root 'Play\Scooby-Doo Refrightened.exe'
+$exe = Join-Path $root 'Play\FrightWorks Game.exe'
 # powershell -File passes "-Patch a,b" as one string
 $names = @($Patch | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
@@ -80,6 +81,8 @@ if ($Remove) {
 
 if (Get-Process | Where-Object { $_.Path -eq $exe }) { throw "the game is already running from Play\; close it first" }
 $applied = New-Object System.Collections.Generic.List[object]
+& git -C $root cat-file -e 'HEAD:wiicompiled/runtime/src/no100f_devmenu.cpp' 2>$null
+$builtInDevmenu = $LASTEXITCODE -eq 0
 $hdOld = $null; $hdSet = $false; $linked = $false
 try {
     if ($HdTextures) {
@@ -97,6 +100,8 @@ try {
     }
     foreach ($p in $files) {
         if ($NoBuild) { break }
+        # The dev menu is part of the game since it was built in (NO100F_DEV_TOOLS above switches it on).
+        if ($p.Name -eq 'devmenu' -and $builtInDevmenu) { "built in  devmenu (dev tools on for this run)"; continue }
         if (Git-Apply @('--check', $p.File)) {
             Git-Apply @($p.File) | Out-Null
             $applied.Add($p)

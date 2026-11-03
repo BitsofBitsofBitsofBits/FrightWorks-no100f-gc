@@ -3335,9 +3335,12 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
       .bindGroups = bindGroups,
       .dstAlpha = pipelineState.dstAlpha,
   };
-  if (!g_gxState.depthUpdate) {
-    // Draws without depth write (the translucent part of the scene, HUD) come after the solid scene: draw the
-    // deferred cut-out fringes before them.
+  if (!g_gxState.depthCompare || !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS) {
+    // The deferred cut-out fringes wait only for the solid scene (depth-tested, depth-writing draws): draw them
+    // before any other draw. Draws without depth write (the translucent part of the scene, HUD) go over them, and
+    // a draw that writes depth without testing it replaces the depth they are tested against: the game clears
+    // depth with a screen quad (depth test "always") before the HUD, and fringes drawn after it showed through
+    // everything (the hub's lamp glows and lighthouse beam: their alpha stays below 128, so they are all fringe).
     gfx::flush_deferred_draws();
   }
   gfx::push_draw_command(draw);

@@ -25,7 +25,7 @@ TAG = "(dev menu)"
 MARKS = ("fine", "bugged", "fixed")  # statuses the menu's verdict button sets
 TODAY = datetime.date.today().isoformat()
 
-tasks = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Scooby-Doo Refrightened.exe", "/NH"], capture_output=True, text=True)
+tasks = subprocess.run(["tasklist", "/FI", "IMAGENAME eq FrightWorks Game.exe", "/NH"], capture_output=True, text=True)
 if "Scooby" in tasks.stdout:  # tasklist cuts names at 25 characters
     sys.exit("game is running: close it first (the menu would overwrite the file)")
 

@@ -6,6 +6,14 @@
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 status
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop-tests   # kill leftover automations only
+#   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare [-Boot ..]  # test config + boot mod, no game
+#   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 restore     # put the user's setup back
+#
+# Every test runs with the same config (written below: windowed 1600x900, fps60, msaa 4, HD off unless -HdTextures), not
+# the user's own. start/prepare first save the user's setup (Play\UserData\Config.toml and any *.controller files, where
+# aurora keeps F10 controller remaps) to tools\debug\local\user-setup\, unless a saved copy is already there (a test is
+# running, or one didn't finish: the copy there is still the user's). stop and restore put it back, delete the copy and
+# remove the zz-manual boot mod. Scripts that run the game themselves: prepare, launch, then stop/restore in a finally.
 #
 # Default boot (when -Boot is omitted): e001 — first Hedge Maze section
 # ("On Edge in the Hedge 1"). Override with -Boot <level> if needed.
@@ -18,7 +26,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'shot', 'status', 'stop', 'stop-tests')]
+    [ValidateSet('start', 'prepare', 'shot', 'status', 'stop', 'restore', 'stop-tests')]
     [string]$Command = 'status',
 
     [string]$Boot = 'e001',
@@ -30,14 +38,64 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 Set-StrictMode -Version 3.0
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\manual-session.ps1
 $play = Join-Path $root 'Play'
-$exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
+$exe = Join-Path $play 'FrightWorks Game.exe'
 $outDir = Join-Path $root 'autotest\manual'
 $statePath = Join-Path $outDir 'session.json'
 $disc = Join-Path $root 'Disc\DATA'
+$userData = Join-Path $play 'UserData'
+$userConfig = Join-Path $userData 'Config.toml'
+$backupDir = Join-Path $root 'tools\debug\local\user-setup'
+$backupMark = Join-Path $backupDir 'saved.txt'  # written last: no mark = no complete copy
+
+# The user's Config.toml + controller files -> tools\debug\local\user-setup\ (kept if a copy is already there).
+function Save-UserSetup {
+    if (Test-Path -LiteralPath $backupMark) {
+        $when = (Get-Content -LiteralPath $backupMark -TotalCount 1)
+        Write-Host "setup: your settings were already saved ($when); keeping that copy"
+        return
+    }
+    Remove-Item -Recurse -Force -LiteralPath $backupDir -ErrorAction SilentlyContinue
+    [IO.Directory]::CreateDirectory($backupDir) | Out-Null
+    $saved = @()
+    if (Test-Path -LiteralPath $userConfig) {
+        Copy-Item -LiteralPath $userConfig (Join-Path $backupDir 'Config.toml') -Force
+        $saved += 'Config.toml'
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $userData -Filter '*.controller' -File -ErrorAction SilentlyContinue)) {
+        Copy-Item -LiteralPath $f.FullName (Join-Path $backupDir $f.Name) -Force
+        $saved += $f.Name
+    }
+    # line 1: when; the rest: the files saved (a missing Config.toml is deleted again on restore)
+    @((Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) + $saved | Set-Content -LiteralPath $backupMark -Encoding utf8
+    Write-Host "setup: saved your settings ($(if ($saved) { $saved -join ', ' } else { 'no Config.toml yet' }))"
+}
+
+# Puts the saved copy back (files the test made that weren't there before are deleted) and removes zz-manual.
+function Restore-UserSetup {
+    Remove-Item -Recurse -Force -LiteralPath (Join-Path $userData 'mods\zz-manual') -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $backupMark)) {
+        Write-Host 'setup: nothing saved to restore'
+        return
+    }
+    $saved = @(Get-Content -LiteralPath $backupMark | Select-Object -Skip 1 | Where-Object { $_ })
+    if ($saved -contains 'Config.toml') {
+        Copy-Item -LiteralPath (Join-Path $backupDir 'Config.toml') $userConfig -Force
+    } else {
+        Remove-Item -LiteralPath $userConfig -ErrorAction SilentlyContinue
+    }
+    Get-ChildItem -LiteralPath $userData -Filter '*.controller' -File -ErrorAction SilentlyContinue |
+        Where-Object { $saved -notcontains $_.Name } | Remove-Item -Force
+    foreach ($name in @($saved | Where-Object { $_ -ne 'Config.toml' })) {
+        Copy-Item -LiteralPath (Join-Path $backupDir $name) (Join-Path $userData $name) -Force
+    }
+    Remove-Item -Recurse -Force -LiteralPath $backupDir
+    Write-Host "setup: restored your settings ($(if ($saved) { $saved -join ', ' } else { 'none existed' }))"
+}
 
 function Stop-AutomationLeftovers {
     $patterns = @(
@@ -65,7 +123,7 @@ function Stop-AutomationLeftovers {
 
 function Get-PlayGameProcesses {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -match 'Scooby' -and $_.ExecutablePath -and (
+        $_.Name -match '^FrightWorks Game\.exe$|Scooby' -and $_.ExecutablePath -and (
             $_.ExecutablePath -eq $exe -or
             ((Split-Path $_.ExecutablePath -Parent) -eq $play)
         )
@@ -155,6 +213,18 @@ switch ($Command) {
         }
         Remove-Item -LiteralPath $statePath -ErrorAction SilentlyContinue
         Write-Host 'stop: session cleared'
+        Restore-UserSetup
+    }
+    'restore' {
+        if (@(Get-PlayGameProcesses).Count) { Write-Host 'restore: the game is still running; it may write its config when it closes' }
+        Restore-UserSetup
+    }
+    'prepare' {
+        Assert-PlayReady
+        if (@(Get-PlayGameProcesses).Count) { throw 'prepare: the game is running from Play\; close it (or run stop) first' }
+        Save-UserSetup
+        Write-PlayConfig -bootLevel $Boot -unlockAllPowerups:([bool]$AllPowerups)
+        Write-Host 'prepare: test config + boot mod written; launch the game yourself, then stop (or restore) when done'
     }
     'status' {
         $session = Read-Session
@@ -184,9 +254,9 @@ switch ($Command) {
             Write-Host 'start: use "shot" to capture, or "stop" then "start" to relaunch'
             exit 0
         }
-        # Refuse to start if other Scooby copies are still up outside Play (shouldn't after stop-tests).
+        # Refuse to start if other game copies are still up outside Play (shouldn't after stop-tests).
         $strays = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -match 'Scooby' -and $_.ExecutablePath -and $_.ExecutablePath -ne $exe
+            $_.Name -match '^FrightWorks Game\.exe$|Scooby' -and $_.ExecutablePath -and $_.ExecutablePath -ne $exe
         }
         if ($strays) {
             foreach ($s in $strays) {
@@ -195,6 +265,7 @@ switch ($Command) {
             }
             Start-Sleep -Seconds 1
         }
+        Save-UserSetup
         Write-PlayConfig -bootLevel $Boot -unlockAllPowerups:([bool]$AllPowerups)
         # Inherit caller env into the game process (Start-Process default). Log selected diags if set.
         foreach ($name in @(

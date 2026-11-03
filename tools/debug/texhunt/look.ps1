@@ -2,15 +2,17 @@
 # and leave it to the human. HD textures off unless -Hd. stderr (RT_LOGF) goes to autotest\texhunt\look-stderr.log.
 # -Extra <folder>: also link that folder of replacements (e.g. tint-pack.py output, frames you made) as
 # texture_replacements\00-extra; it is indexed before ScoobyHD, so its textures win (turns replacements on).
-# When the game closes: zz-manual removed, the links removed, Config.toml back to Config.user.toml.
+# Runs with the test config (manual-session prepare; the switches above only change HD/fps60/interpolation in it).
+# When the game closes: the links removed, manual-session restore puts your settings back and removes zz-manual.
 param([string]$Boot = 'e005', [string]$Spot = '', [switch]$Hd, [switch]$AllPowerups, [switch]$Fps30, [string]$Pack = '', [string]$Extra = '', [int]$Interp = 0, [string]$SkipButton = 'a', [switch]$KeepIntro)
 if ($Pack) { $Hd = $true }  # -Pack <folder>: that pack instead of texture_pack\ScoobyHD (full path)
 if ($Extra) { $Extra = (Resolve-Path $Extra).Path }
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $play = Join-Path $root 'Play'
-$exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
+$exe = Join-Path $play 'FrightWorks Game.exe'
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'
 $cfg = Join-Path $play 'UserData\Config.toml'
 $cmdFile = Join-Path $play 'devmenu.txt'
@@ -22,23 +24,17 @@ $errLog = Join-Path $root 'autotest\texhunt\look-stderr.log'
 New-Item -ItemType Directory -Force (Split-Path $errLog) | Out-Null
 $start = [DateTime]::Now
 
-if (Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
+if (Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
 try {
-    # boot mod + config from manual-session, then the user's config with only the HD setting changed
-    $msArgs = @('-ExecutionPolicy', 'Bypass', '-File', $ms, 'start', '-Boot', $Boot)
+    # boot mod + test config from manual-session prepare (saves your settings first), then the HD/fps switches
+    $msArgs = @('-ExecutionPolicy', 'Bypass', '-File', $ms, 'prepare', '-Boot', $Boot)
     if ($AllPowerups) { $msArgs += '-AllPowerups' }
     & powershell @msArgs | Out-Null
-    & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
-    $t = [DateTime]::Now
-    while ((Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
-        Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Milliseconds 500
-    }
+    if ($LASTEXITCODE -ne 0) { throw 'manual-session prepare failed' }
     if ($Boot -eq 'h001' -and -not $KeepIntro) {
         & python (Join-Path $root 'tools\debug\texhunt\skipintro.py') (Join-Path $play 'UserData\mods\zz-manual') | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'skipintro.py failed' }
     }
-    Copy-Item (Join-Path $root 'tools\debug\local\Config.user.toml') $cfg -Force
     $text = [IO.File]::ReadAllText($cfg) -replace '(?m)^texture_replacements\s*=[^\r\n]*\r?\n', ''
     $text = [regex]::Replace($text, '(?m)^\[video\][ \t]*\r?\n', "[video]`r`ntexture_replacements = $(if ($Hd -or $Extra) { 'true' } else { 'false' })`r`n")
     if ($Fps30) { $text = $text -replace '(?m)^fps60\s*=\s*true', 'fps60 = false' }
@@ -114,8 +110,7 @@ try {
     "closed    exit code $($game.ExitCode)"
 } finally {
     foreach ($l in $made) { if (Test-Path $l) { [IO.Directory]::Delete($l, $false) } }
-    Remove-Item -Recurse -Force (Join-Path $play 'UserData\mods\zz-manual') -ErrorAction SilentlyContinue
-    Copy-Item (Join-Path $root 'tools\debug\local\Config.user.toml') $cfg -Force
+    & powershell -ExecutionPolicy Bypass -File $ms restore | Out-Null  # your settings back, zz-manual removed
     Remove-Item $cmdFile, (Join-Path $play 'devmenu_press.txt') -ErrorAction SilentlyContinue
     "restored"
 }
