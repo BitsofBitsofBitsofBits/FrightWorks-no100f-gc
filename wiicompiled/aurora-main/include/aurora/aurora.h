@@ -231,6 +231,10 @@ bool aurora_is_metalfx_spatial_supported();
 // icons. buttons[4]: the pad button (controller_button_names.h config name, e.g. "south") drawn for the GameCube A,
 // B, X and Y buttons; NULL, "" or a button without an icon = that GameCube button's usual one.
 void aurora_set_button_icons(int family, const char* const buttons[4]);
+// The folder of those icons (<UserData>/button_icons/<family>, UTF-8; one <config name>.png per pad button), or "" when
+// no controller is connected (BUTTON_ICONS=<family> pins one, for tests). Writes at most size - 1 bytes and a NUL;
+// returns the full length.
+size_t aurora_get_button_icon_folder(char* out, size_t size);
 // Dev menu (F8): whether texture_replacements/<name>.png|.dds has been drawn since start.
 bool aurora_texture_replacement_used(const char* name);
 // Dev menu (F8): forget what has been drawn (the dev menu tracks drawn per level).

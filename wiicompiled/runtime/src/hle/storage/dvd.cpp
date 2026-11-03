@@ -4,6 +4,7 @@
 #include "hle/no100f_xbox_text.h"
 #include "hle/runtime_parse_helpers.h"
 #include "memory.h"
+#include "no100f_game_state.h"
 
 // Defined in hle/gx/gx_objects.cpp. DVD reads are DMA-class writes to guest
 // RAM: the game brackets them with DCInvalidateRange (not a flush), so the GX
@@ -1108,6 +1109,11 @@ extern "C" int32_t DVDReadPrio_8015E834(uint32_t fileInfoPtr, uint32_t bufferPtr
     tempBuf.resize(requested, 0);
     uLength = requested;
     ApplyXboxText(entry, uOffset, tempBuf);
+    // A movie's first read (Bink header): note whether it is the credits, for the credits pill (settings_overlay).
+    if (uOffset == 0 && uLength >= 3 && std::memcmp(tempBuf.data(), "BIK", 3) == 0) {
+        no100f_game_state::g_creditsMovie.store(no100f_game_state::IsCreditsMovie(entry.hostPath.filename().string()),
+                                                std::memory_order_relaxed);
+    }
     // Skip intro: the boot logos and the intro movie report a single frame (Bink header, frame count at 0x08 and
     // 0x10), so the game's own player ends them at once. Only their first showing per launch (the title screen's
     // idle loop replays the intro); story cutscenes are untouched.

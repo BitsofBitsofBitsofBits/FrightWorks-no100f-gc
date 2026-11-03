@@ -17,8 +17,6 @@ sealed class MansionScene : Control
     string status = "";
     bool statusOk;
     public void SetStatus(string text, bool ok) { status = text; statusOk = ok; Invalidate(); }
-    public string Credit { get; set; } = "";
-    public string Version { get; set; } = "";
 
     static readonly Bitmap? HouseArt = Theme.LoadBitmap("mansion.png"), DogArt = Theme.LoadBitmap("dog.png"),
         GhostArt = Theme.LoadBitmap("ghost.png");
@@ -664,20 +662,16 @@ sealed class MansionScene : Control
     void DrawFooter(Graphics g)
     {
         using var font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-        int pad = Theme.S(8), y = Height - Theme.S(30);
-        void Pill(string text, Color color, bool right)
-        {
-            if (text.Length == 0) return;
-            var size = TextRenderer.MeasureText(g, text, font);
-            int x = right ? Width - size.Width - pad * 2 - Theme.S(14) : Theme.S(14);
-            var r = new Rectangle(x, y, size.Width + pad * 2, Theme.S(24));
-            using (var bg = Theme.Rounded(r, Theme.S(11)))
-            using (var fill = new SolidBrush(Color.FromArgb(185, 10, 6, 18)))
-                g.FillPath(fill, bg);
-            TextRenderer.DrawText(g, text, font, r, color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
-        }
-        Pill(Credit + (Version.Length > 0 ? "  ·  v" + Version : ""), Theme.CreamDim, false);
-        Pill(status, statusOk ? Theme.Good : Theme.Warn, true);
+        // The status pill, bottom right.
+        if (status.Length == 0) return;
+        int pad = Theme.S(8);
+        var size = TextRenderer.MeasureText(g, status, font);
+        var r = new Rectangle(Width - size.Width - pad * 2 - Theme.S(14), Height - Theme.S(30), size.Width + pad * 2, Theme.S(24));
+        using (var bg = Theme.Rounded(r, Theme.S(11)))
+        using (var fill = new SolidBrush(Color.FromArgb(185, 10, 6, 18)))
+            g.FillPath(fill, bg);
+        TextRenderer.DrawText(g, status, font, r, statusOk ? Theme.Good : Theme.Warn,
+                              TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
     }
 
     // ----- Input -----

@@ -12,7 +12,7 @@ Settings: resolution, widescreen, 60 fps, anti-aliasing, HD textures, skip intro
 developer tools (F8 dev menu, F3 video recording: the launcher offers to download ffmpeg for it, a DEV mark
 with the build in the corner), folders.
 In game: F10 = settings, F11 = fullscreen / window, F2 = screenshot (saved in the Screenshots folder),
-F1 = project page in your browser. Gamepads work right away.
+F1 = project page in your browser (the title screen lists these keys). Gamepads work right away.
 Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, IJKL D-pad.
 
 Saves, settings and mods are in data\UserData. To update, unzip the new release over this folder.

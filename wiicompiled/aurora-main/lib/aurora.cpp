@@ -2485,6 +2485,18 @@ void aurora_set_button_icons(int family, const char* const buttons[4]) {
   aurora::gfx::texture_replacement::set_button_icons(icons);
 #endif
 }
+size_t aurora_get_button_icon_folder(char* out, size_t size) {
+  std::string folder;
+#ifdef AURORA_ENABLE_GX
+  folder = aurora::gfx::texture_replacement::button_icon_folder();
+#endif
+  if (out != nullptr && size > 0) {
+    const size_t n = std::min(folder.size(), size - 1);
+    std::memcpy(out, folder.data(), n);
+    out[n] = '\0';
+  }
+  return folder.size();
+}
 bool aurora_texture_replacement_used(const char* name) {
 #ifdef AURORA_ENABLE_GX
   return aurora::gfx::texture_replacement::replacement_used(name);

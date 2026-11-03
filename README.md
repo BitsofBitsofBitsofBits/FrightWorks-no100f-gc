@@ -49,7 +49,8 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 
 Settings are in the launcher (**Settings**) and in game (**F10**, or the controller's **Back** / **Select** button, as
 long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
-screenshot to the `Screenshots` folder and **F1** opens this page in your browser. Saves, settings
+screenshot to the `Screenshots` folder and **F1** opens this page in your browser. The title screen and main menu list
+these keys in the corner. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
