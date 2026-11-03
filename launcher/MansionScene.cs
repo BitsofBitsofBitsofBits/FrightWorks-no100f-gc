@@ -662,17 +662,27 @@ sealed class MansionScene : Control
     void DrawFooter(Graphics g)
     {
         using var font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-        // The status pill, bottom right.
-        if (status.Length == 0) return;
-        int pad = Theme.S(8);
-        var size = TextRenderer.MeasureText(g, status, font);
-        var r = new Rectangle(Width - size.Width - pad * 2 - Theme.S(14), Height - Theme.S(30), size.Width + pad * 2, Theme.S(24));
-        using (var bg = Theme.Rounded(r, Theme.S(11)))
-        using (var fill = new SolidBrush(Color.FromArgb(185, 10, 6, 18)))
-            g.FillPath(fill, bg);
-        TextRenderer.DrawText(g, status, font, r, statusOk ? Theme.Good : Theme.Warn,
-                              TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        int pad = Theme.S(8), y = Height - Theme.S(30);
+        void Pill(string text, Color color, bool right)
+        {
+            if (text.Length == 0) return;
+            var size = TextRenderer.MeasureText(g, text, font);
+            int x = right ? Width - size.Width - pad * 2 - Theme.S(14) : Theme.S(14);
+            var r = new Rectangle(x, y, size.Width + pad * 2, Theme.S(24));
+            using (var bg = Theme.Rounded(r, Theme.S(11)))
+            using (var fill = new SolidBrush(Color.FromArgb(185, 10, 6, 18)))
+                g.FillPath(fill, bg);
+            TextRenderer.DrawText(g, text, font, r, color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+        Pill(BuildId, Theme.CreamDim, false);   // bottom left: the build ID
+        Pill(status, statusOk ? Theme.Good : Theme.Warn, true);   // bottom right: the status
     }
+
+    // The build ID, the same as the game's for one build: just the version for a release, else
+    // "<version> branch@commit[+diff hash]" (set at build time: InformationalVersion in the csproj).
+    static readonly string BuildId = typeof(MansionScene).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "";
 
     // ----- Input -----
     string? SignAt(Point p) => signs.LastOrDefault(sg => sg.Hit != null && sg.Hit.IsVisible(p))?.Id;
