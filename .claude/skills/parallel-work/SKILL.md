@@ -18,12 +18,19 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
 
 - **coordinator**: the session in the main checkout, named `coordinator` (`worktree.ps1 open -Name main`, or
   `/rename coordinator`). Not `main`: in SendMessage, "main" always means the sender's own conversation, so workers
-  could not reach it (not even as `main [ref]`). It stays
-  on `main` and edits nothing in the worktrees: it creates and removes them, starts sessions, checks on them, and after
-  a merge updates `main` and folds lasting facts into `AGENTS.md`.
+  could not reach it (not even as `main [ref]`). It stays on `main` and edits nothing in the worktrees: it creates and
+  removes them, starts sessions, checks on them, and after a merge updates `main` and folds lasting facts into
+  `AGENTS.md`.
 - **workers**: one session per worktree, named like the worktree. Each works only in its folder, keeps its notes in
-  `TASK.md`, and asks the human before commits, pushes and PRs (same rules as everywhere).
-- The human talks to any tab directly. Permission prompts appear in the worker's own tab.
+  `TASK.md`, commits and pushes to its own branch without asking, and sends every question, decision or approval
+  request (PRs, options, visual checks) and its done/blocked status (with what it committed and pushed) to
+  `coordinator`, not to the human in its tab (AGENTS.md: "Questions go through the coordinator").
+- The coordinator answers a worker itself when the answer follows from the rules, the task's goal or earlier
+  decisions, or is a routine technical choice: "Coordinator's answer: ...". What is the human's call (opening,
+  readying, merging or closing PRs, releases, scope or design, player-visible behaviour, deleting things) or needs the
+  human's eyes or hands, it asks the human and relays: "Human's answer: ...". Only that counts as the human's
+  approval.
+- Permission prompts appear in the worker's own tab; when the human types in a worker's tab, the worker answers there.
 
 ## Start a task
 

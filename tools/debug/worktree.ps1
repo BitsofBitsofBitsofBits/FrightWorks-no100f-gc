@@ -191,10 +191,13 @@ This worktree has its own Play\ and autotest\; Disc\, texture_pack\, toolchain\ 
 the main checkout's (read only: never delete or rewrite them from here). Game runs take turns (game-run lock).
 
 This session is named ``$Name``. The main checkout's session (named ``$coordinator``) creates and removes worktrees and
-may message you (SendMessage). When the goal is done, or you are stuck on something only the human can decide, say so
-here and send ``$coordinator`` a one-line status if ListAgents shows it (not ``main``: that means your own
-conversation). Keep Status below current: a session reopened later (worktree.ps1 open) starts from this file, not
-from this conversation.
+may message you (SendMessage). Don't ask the human in this tab: send ``$coordinator`` every question, decision or
+approval request (PR, which option, a visual check) and your done/blocked status, with enough context to answer it
+cold (what, options, your recommendation); never ``main`` (that means your own conversation). Commits and pushes to
+this branch need no approval: say what you committed and pushed. Note a question under Status as "Waiting on: ..." and
+carry on with anything it doesn't block. Replies start "Human's answer:" (the human's decision) or "Coordinator's
+answer:" (never an approval of PR actions or anything else the human decides). Full rules: AGENTS.md. Keep Status
+below current: a session reopened later (worktree.ps1 open) starts from this file, not from this conversation.
 
 ## Goal
 $goal
