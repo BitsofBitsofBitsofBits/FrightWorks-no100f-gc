@@ -11,8 +11,9 @@
 namespace aurora::gx {
 constexpr uint32_t MaxInterpolatedFrames = 3;
 
-// Identifies a draw across frames. `combined` includes the geometry signature and is exact, while
-// `pipeline`/`texture` is the material-only fallback for meshes whose vertex data changes.
+// Identifies a draw across frames. `combined` includes the geometry signature (index stream and
+// vertex positions, not array addresses) and is exact, while `pipeline`/`texture` is the
+// material-only fallback for meshes whose vertex data changes.
 struct FrameInterpolationDrawIdentity {
   HashType combined = 0;
   HashType pipeline = 0;
