@@ -107,6 +107,13 @@ int main(int argc, char** argv) {
                         axis.jaxis.axis = i % 2;
                         axis.jaxis.value = static_cast<Sint16>(i);
                         Require(SDL_PushEvent(&axis), "Push joystick axis");
+                        SDL_Event complete{};
+                        complete.type = SDL_EVENT_GAMEPAD_UPDATE_COMPLETE;
+                        complete.gdevice.which = 3;
+                        Require(SDL_PushEvent(&complete), "Push gamepad update boundary");
+                        complete.type = SDL_EVENT_JOYSTICK_UPDATE_COMPLETE;
+                        complete.jdevice.which = 4;
+                        Require(SDL_PushEvent(&complete), "Push joystick update boundary");
                     }
                     SDL_Event key{};
                     key.type = SDL_EVENT_KEY_DOWN;
@@ -133,6 +140,7 @@ int main(int argc, char** argv) {
                     owner::refresh_window_state();
                 });
                 int mouseCount = 0, gamepadCount = 0, joystickCount = 0;
+                int gamepadComplete = 0, joystickComplete = 0;
                 bool sawKey = false, sawButton = false;
                 Uint64 lastTimestamp = 0;
                 while (SDL_PollEvent(&event)) {
@@ -164,10 +172,17 @@ int main(int argc, char** argv) {
                         Require(event.jaxis.value == (event.jaxis.axis == 0 ? 4998 : 4999),
                                 "Keep latest joystick value per axis");
                         ++joystickCount;
+                    } else if (event.type == SDL_EVENT_GAMEPAD_UPDATE_COMPLETE) {
+                        Require(event.gdevice.which == 3, "Preserve the gamepad update device");
+                        ++gamepadComplete;
+                    } else if (event.type == SDL_EVENT_JOYSTICK_UPDATE_COMPLETE) {
+                        Require(event.jdevice.which == 4, "Preserve the joystick update device");
+                        ++joystickComplete;
                     }
                 }
                 Require(mouseCount == 4 && gamepadCount == 2 && joystickCount == 2 && sawKey && sawButton,
                         "Coalesce a stalled frame without losing independent devices or discrete input");
+                Require(gamepadComplete == 1 && joystickComplete == 1, "Retain the latest device update boundary");
             } else if (mode == "snapshot") {
                 std::atomic<bool> published{false}, release{false};
                 owner::submit([&] {

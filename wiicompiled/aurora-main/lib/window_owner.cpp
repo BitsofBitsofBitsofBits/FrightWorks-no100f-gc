@@ -88,17 +88,19 @@ void notify_owner() noexcept {
     }
 }
 
-bool is_motion(const SDL_Event& event) {
+bool is_continuous(const SDL_Event& event) {
     return event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_JOYSTICK_AXIS_MOTION ||
-           event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION;
+           event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION || event.type == SDL_EVENT_JOYSTICK_UPDATE_COMPLETE ||
+           event.type == SDL_EVENT_GAMEPAD_UPDATE_COMPLETE;
 }
 
 bool merge_motion(const SDL_Event& event) {
-    if (!is_motion(event)) return false;
+    if (!is_continuous(event)) return false;
     for (auto it = events.rbegin(); it != events.rend(); ++it) {
         auto& previous = it->event;
-        // Do not move motion across a key/button transition or another discrete event.
-        if (!is_motion(previous)) break;
+        // SDL emits update-complete markers after axis samples, not just discrete input.
+        // Retain the newest marker per device, but never cross a key/button transition.
+        if (!is_continuous(previous)) break;
         if (previous.type != event.type) continue;
         if (event.type == SDL_EVENT_MOUSE_MOTION) {
             if (previous.motion.which != event.motion.which ||
@@ -112,8 +114,14 @@ bool merge_motion(const SDL_Event& event) {
         } else if (event.type == SDL_EVENT_JOYSTICK_AXIS_MOTION) {
             if (previous.jaxis.which != event.jaxis.which || previous.jaxis.axis != event.jaxis.axis) continue;
             previous = event;
-        } else {
+        } else if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
             if (previous.gaxis.which != event.gaxis.which || previous.gaxis.axis != event.gaxis.axis) continue;
+            previous = event;
+        } else if (event.type == SDL_EVENT_JOYSTICK_UPDATE_COMPLETE) {
+            if (previous.jdevice.which != event.jdevice.which) continue;
+            previous = event;
+        } else {
+            if (previous.gdevice.which != event.gdevice.which) continue;
             previous = event;
         }
         const auto latest = previous;
