@@ -2105,6 +2105,9 @@ void DrawTopBar() {
             {"F1", "project page"},
         }};
         for (size_t i = firstKey; i < footerKeys.size(); ++i) {
+            // A small window leaves out the last ones: the About page lists them all.
+            const float keyWidth = ImGui::CalcTextSize(footerKeys[i].first).x + Px(5) + ImGui::CalcTextSize(footerKeys[i].second).x;
+            if (i > firstKey && ImGui::GetItemRectMax().x + Px(16) + keyWidth > p0.x + right) break;
             if (i > firstKey) ImGui::SameLine(0.0f, Px(16));
             ImGui::TextColored(Vec(Colour::Lime), "%s", footerKeys[i].first);
             ImGui::SameLine(0.0f, Px(5));
