@@ -1,8 +1,9 @@
 # Parallel work: one git worktree per task, each with its own branch, Play\ and Claude Code session.
 #
-#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer [-From origin/main] [-Build] [-NoOpen]
+#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer [-From origin/main] [-Task "goal"] [-Build] [-NoOpen]
 #   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 list
-#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name installer
+#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name installer [-Continue]
+#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name main
 #   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name installer
 #
 # Worktrees live beside the main checkout, in <its parent>\FrightWorks-worktrees\<name> (-Base to change). Each gets:
@@ -14,9 +15,14 @@
 #  - AGENTS.md: a link to the main checkout's (one set of rules); CLAUDE.md loads it and TASK.md, this task's own notes.
 # Builds can run side by side. Game runs take turns (kit-common.ps1, game-run lock).
 #
-# new opens a Windows Terminal tab in the worktree running `claude -n <name>` (-NoOpen: don't); open does that again
-# later. -Build runs the first full build there (about 10 min; translator tools, translate, compile).
-# remove refuses while the worktree has uncommitted or untracked work or a program running from it. It unlinks the
+# Sessions: new opens a Windows Terminal tab in the worktree running `claude -n <name>` (-NoOpen: don't). With -Task,
+# the goal goes into TASK.md and the session starts on it right away. open starts the session again later: a new
+# conversation that picks the task up from TASK.md (-Continue: claude -c, the folder's last conversation).
+# `open -Name main` opens the main checkout's session: the coordinating one, which creates and removes worktrees and
+# can message the others by name (session name = worktree name).
+# -Build runs the first full build there (translator tools, translate, compile).
+# remove refuses while the worktree has uncommitted or untracked work, a program running from it (it first stops the
+# dotnet build servers a launcher or translator build leaves running there) or its Claude session. It unlinks the
 # junctions first (so nothing shared is deleted), then removes the folder. The branch is kept: delete it yourself when
 # it is merged.
 [CmdletBinding()]
@@ -26,8 +32,10 @@ param(
     [string]$Branch,
     [string]$From = 'origin/main',
     [string]$Base,
+    [string]$Task,
     [switch]$Build,
-    [switch]$NoOpen
+    [switch]$NoOpen,
+    [switch]$Continue
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
@@ -59,15 +67,23 @@ function Get-Worktrees {
 function Get-WorktreePath {
     if (-not $Name) { throw "-Name is required for $Command" }
     if ($Name -notmatch '^[A-Za-z0-9._-]+$') { throw "-Name '$Name': use letters, digits, . _ - only (it becomes a folder name)" }
+    if ($Name -eq 'main') {
+        if ($Command -eq 'open') { return $main }
+        throw "-Name main is the main checkout's session; pick another name"
+    }
     Join-Path $Base $Name
 }
 
-function Open-Session([string]$path, [string]$title) {
+function Open-Session([string]$path, [string]$title, [string]$prompt, [bool]$continue) {
+    $claude = @('claude')
+    if ($continue) { $claude += '-c' }
+    $claude += @('-n', $title)
+    if ($prompt) { $claude += $prompt }
     $wt = Get-Command wt -ErrorAction SilentlyContinue
-    if (-not $wt) { Write-Host "open: Windows Terminal (wt) not found; run: cd `"$path`"; claude -n $title"; return }
+    if (-not $wt) { Write-Host "open: Windows Terminal (wt) not found; run: cd `"$path`"; $($claude -join ' ')"; return }
     # -w 0: a new tab in the current Windows Terminal window (a new window if none).
-    & $wt.Source -w 0 new-tab --title $title -d $path claude -n $title
-    Write-Host "open: Windows Terminal tab '$title' running claude in $path"
+    & $wt.Source -w 0 new-tab --title $title -d $path @claude
+    Write-Host "open: Windows Terminal tab '$title' running $(if ($continue) { 'claude -c (continuing)' } else { 'claude' }) in $path"
 }
 
 # Reparse points (junctions, symlinks) under $dir, without walking into them.
@@ -81,6 +97,12 @@ function Get-Links([string]$dir) {
             elseif ($attr -band [IO.FileAttributes]::Directory) { $stack.Push($e) }
         }
     }
+}
+
+function Get-RunningFrom([string]$path) {
+    $prefix = $path.TrimEnd('\') + '\'
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) }
 }
 
 switch ($Command) {
@@ -99,7 +121,8 @@ switch ($Command) {
     'open' {
         $path = Get-WorktreePath
         if (-not (Test-Path -LiteralPath $path)) { throw "no worktree $path" }
-        Open-Session $path $Name
+        $prompt = if ($Continue -or $Name -eq 'main') { '' } else { 'Read TASK.md and carry on with the task from its Status.' }
+        Open-Session $path $Name $prompt ([bool]$Continue)
     }
     'new' {
         $path = Get-WorktreePath
@@ -141,6 +164,7 @@ switch ($Command) {
         }
         Write-Text (Join-Path $path 'CLAUDE.md') "@AGENTS.md`r`n@TASK.md`r`n"
         $head = (& git -C $path rev-parse --short HEAD).Trim()
+        $goal = if ($Task) { "$($Task.Trim())`r`n" } else { '' }
         Write-Text (Join-Path $path 'TASK.md') @"
 # Task: $Name
 
@@ -149,8 +173,13 @@ Notes for this task go here, not in AGENTS.md (AGENTS.md is shared by every work
 This worktree has its own Play\ and autotest\; Disc\, texture_pack\, toolchain\ and tools\debug\local\* are links to
 the main checkout's (read only: never delete or rewrite them from here). Game runs take turns (game-run lock).
 
-## Goal
+This session is named ``$Name``. The main checkout's session (named ``main``) creates and removes worktrees and may
+message you (SendMessage). When the goal is done, or you are stuck on something only the human can decide, say so here
+and send ``main`` a one-line status if ListAgents shows it. Keep Status below current: a session reopened later
+(worktree.ps1 open) starts from this file, not from this conversation.
 
+## Goal
+$goal
 ## Status
 "@
         # TASK.md and CLAUDE.md stay out of git (info/exclude is shared by all worktrees).
@@ -168,7 +197,10 @@ the main checkout's (read only: never delete or rewrite them from here). Game ru
             Write-Host 'new: not built yet; first build there: tools\build-no100f.ps1 (no -SkipTools / -SkipTranslate)'
         }
         Write-Host "new: $path ready"
-        if (-not $NoOpen) { Open-Session $path $Name }
+        if (-not $NoOpen) {
+            $prompt = if ($Task) { 'Start on the goal in TASK.md.' } else { '' }
+            Open-Session $path $Name $prompt $false
+        }
     }
     'remove' {
         $path = Get-WorktreePath
@@ -176,10 +208,21 @@ the main checkout's (read only: never delete or rewrite them from here). Game ru
         if (-not $w) { throw "$path is not a worktree of $main" }
         $status = @(& git -C $path status --porcelain)
         if ($status.Count) { throw "remove: $path has uncommitted or untracked work:`n$($status -join "`n")" }
-        $prefix = $path.TrimEnd('\') + '\'
-        $running = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) })
-        if ($running) { throw "remove: still running from it: $(($running | ForEach-Object { "$($_.Name) ($($_.ProcessId))" }) -join ', ')" }
+        # dotnet build servers (MSBuild node, C# compiler) outlive a launcher or translator build and run from the
+        # worktree's toolchain link; they hold no work, so stop them the supported way.
+        $dotnet = Join-Path $path 'toolchain\dotnet\dotnet.exe'
+        if (@(Get-RunningFrom $path | Where-Object { $_.Name -eq 'dotnet.exe' }).Count -and (Test-Path -LiteralPath $dotnet)) {
+            Write-Host 'remove: stopping the dotnet build servers running from it'
+            & $dotnet build-server shutdown | Out-Null
+            for ($i = 0; $i -lt 20 -and @(Get-RunningFrom $path | Where-Object { $_.Name -eq 'dotnet.exe' }).Count; $i++) { Start-Sleep -Milliseconds 500 }
+        }
+        $running = @(Get-RunningFrom $path)
+        if ($running.Count) { throw "remove: still running from it: $(($running | ForEach-Object { "$($_.Name) ($($_.ProcessId))" }) -join ', ')" }
+        # Its Claude session (claude.exe lives elsewhere; new/open start it as `claude ... -n <name>`): removing the folder
+        # under it breaks that session. Close its tab first.
+        $session = @(Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" -ErrorAction SilentlyContinue | Where-Object {
+            $_.CommandLine -match "(^|\s)(-n|--name)\s+`"?$([regex]::Escape($Name))`"?(\s|$)" })
+        if ($session.Count) { throw "remove: its Claude session is still running (claude.exe $($session[0].ProcessId)); close the '$Name' tab first" }
         $ahead = (& git -C $main rev-list --count "origin/main..$($w.Branch)" 2>$null)
         foreach ($link in @(Get-Links $path)) {
             if ([IO.Directory]::Exists($link)) { [IO.Directory]::Delete($link, $false) } else { [IO.File]::Delete($link) }  # the link only
