@@ -494,9 +494,38 @@ fn vs_main(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
     return out;
 }
 
+// Average of the source texels under one output pixel, each weighted by how much of it the pixel covers (box
+// filter). center and footprint are in texels; footprint is capped to bound the loop.
+fn area_sample(center: vec2<f32>, footprint: vec2<f32>) -> vec4<f32> {
+    let radius = 0.5 * min(footprint, vec2(16.0));
+    let lo = center - radius;
+    let hi = center + radius;
+    let first = vec2<i32>(floor(lo));
+    let last = vec2<i32>(ceil(hi)) - vec2(1);
+    let maxTexel = vec2<i32>(textureDimensions(efb_texture)) - vec2(1);
+    var sum = vec4(0.0);
+    var total = 0.0;
+    for (var y = first.y; y <= last.y; y++) {
+        let wy = min(hi.y, f32(y + 1)) - max(lo.y, f32(y));
+        for (var x = first.x; x <= last.x; x++) {
+            let w = wy * (min(hi.x, f32(x + 1)) - max(lo.x, f32(x)));
+            sum += w * textureLoad(efb_texture, clamp(vec2(x, y), vec2(0), maxTexel), 0);
+            total += w;
+        }
+    }
+    return sum / total;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(efb_texture, efb_sampler, in.uv);
+    // Source texels per output pixel. One bilinear tap is right for 1:1 and upscaling, but shrinking a bigger render
+    // (resolution multiplier above the window size) with it skips texels: jaggies and moire. Average those instead.
+    let texSize = vec2<f32>(textureDimensions(efb_texture));
+    let footprint = vec2(abs(dpdx(in.uv.x)), abs(dpdy(in.uv.y))) * texSize;
+    var color = textureSample(efb_texture, efb_sampler, in.uv);
+    if (max(footprint.x, footprint.y) > 1.001) {
+        color = area_sample(in.uv * texSize, max(footprint, vec2(1.0)));
+    }
 )""" + fragmentTail + "\n}\n";
   wgpu::ShaderSourceWGSL sourceDescriptor{};
   sourceDescriptor.code = code.c_str();
