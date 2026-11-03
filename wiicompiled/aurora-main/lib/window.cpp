@@ -396,6 +396,8 @@ const AuroraEvent* poll_events() {
   return g_events.data();
 }
 
+static SDL_DisplayID fullscreen_target_display();
+
 bool create_window(AuroraBackend backend) {
   if (window_owner::enabled() && !window_owner::is_owner())
     return window_owner::call([=] { return create_window(backend); });
@@ -445,8 +447,17 @@ bool create_window(AuroraBackend backend) {
     height = 480;
   }
 
-  const Sint32 posX = g_config.hasWindowPosition ? g_config.windowPosX : SDL_WINDOWPOS_CENTERED;
-  const Sint32 posY = g_config.hasWindowPosition ? g_config.windowPosY : SDL_WINDOWPOS_CENTERED;
+  Sint32 posX = g_config.hasWindowPosition ? g_config.windowPosX : SDL_WINDOWPOS_CENTERED;
+  Sint32 posY = g_config.hasWindowPosition ? g_config.windowPosY : SDL_WINDOWPOS_CENTERED;
+  // Starting fullscreen on a chosen monitor: open there, so the window never shows on another monitor on its way.
+  if (const SDL_DisplayID target = fullscreen_target_display(); target != 0) {
+    // Without a saved spot the window's home is the centre of the main monitor, as when it opens in a window.
+    const Sint32 mainCentered = SDL_WINDOWPOS_CENTERED_DISPLAY(SDL_GetPrimaryDisplay());
+    g_windowPosBeforeFullscreen = {g_config.hasWindowPosition ? posX : mainCentered,
+                                   g_config.hasWindowPosition ? posY : mainCentered};
+    posX = SDL_WINDOWPOS_CENTERED_DISPLAY(target);
+    posY = SDL_WINDOWPOS_CENTERED_DISPLAY(target);
+  }
 
   const auto props = SDL_CreateProperties();
   TRY(SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, g_config.appName), "Failed to set {}: {}",
