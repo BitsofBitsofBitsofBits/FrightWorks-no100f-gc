@@ -2,7 +2,7 @@
 name: parallel-work
 description: >-
   Run several tasks at once, each in its own git worktree with its own Claude Code
-  session, coordinated from the main checkout's session (named main). Use when the
+  session, coordinated from the main checkout's session (named coordinator). Use when the
   human asks to start a task in parallel or in a new worktree/session, to check on
   or message the other sessions, to reopen one, or to finish a task (PR merged:
   remove the worktree, fold its notes into AGENTS.md).
@@ -12,16 +12,25 @@ description: >-
 
 `tools\debug\worktree.ps1` makes one worktree per task (its own branch, `Play\`, `autotest\`, session) and opens a
 Windows Terminal tab running `claude -n <name>` there. What a worktree contains, the shared links and the game-run lock
-are described at the top of that script and in `docs/testing.md` section 10. This skill is the main session's side.
+are described at the top of that script and in `docs/testing.md` section 10. This skill is the coordinator's side.
 
 ## Roles
 
-- **main**: the session in the main checkout, named `main` (`worktree.ps1 open -Name main`, or `/rename main`). It stays
-  on `main` and edits nothing in the worktrees: it creates and removes them, starts sessions, checks on them, and after
-  a merge updates `main` and folds lasting facts into `AGENTS.md`.
+- **coordinator**: the session in the main checkout, named `coordinator` (`worktree.ps1 open -Name main`, or
+  `/rename coordinator`). Not `main`: in SendMessage, "main" always means the sender's own conversation, so workers
+  could not reach it (not even as `main [ref]`). It stays on `main` and edits nothing in the worktrees: it creates and
+  removes them, starts sessions, checks on them, and after a merge updates `main` and folds lasting facts into
+  `AGENTS.md`.
 - **workers**: one session per worktree, named like the worktree. Each works only in its folder, keeps its notes in
-  `TASK.md`, and asks the human before commits, pushes and PRs (same rules as everywhere).
-- The human talks to any tab directly. Permission prompts appear in the worker's own tab.
+  `TASK.md`, commits and pushes to its own branch without asking, and sends every question, decision or approval
+  request (PRs, options, visual checks) and its done/blocked status (with what it committed and pushed) to
+  `coordinator`, not to the human in its tab (AGENTS.md: "Questions go through the coordinator").
+- The coordinator answers a worker itself when the answer follows from the rules, the task's goal or earlier
+  decisions, or is a routine technical choice: "Coordinator's answer: ...". What is the human's call (opening,
+  readying, merging or closing PRs, releases, scope or design, player-visible behaviour, deleting things) or needs the
+  human's eyes or hands, it asks the human and relays: "Human's answer: ...". Only that counts as the human's
+  approval.
+- Permission prompts appear in the worker's own tab; when the human types in a worker's tab, the worker answers there.
 
 ## Start a task
 
@@ -46,7 +55,7 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
 - A closed tab: `worktree.ps1 open -Name <name>` starts a new session that picks the task up from `TASK.md` (so keep
   workers writing their Status there). `-Continue` tries `claude -c` (the folder's last conversation) instead. That
   only works for sessions started after the environment fix (branch `tools/worktree-session-env`): earlier ones,
-  started from main's tool shell, ran as children of main and saved no conversation (and weren't in ListAgents).
+  started from the coordinator's tool shell, ran as its children and saved no conversation (and weren't in ListAgents).
 - The human tests a worktree's build with its own `Play\FrightWorks Game.exe`, or its launcher (the worker runs
   `tools\build-launcher.ps1` there, then `launcher\publish\FrightWorks.exe`). The human's own `Play\` is untouched.
 - When one PR merges and another worktree's branch needs it: ask that worker to merge `origin/main` into its branch.
