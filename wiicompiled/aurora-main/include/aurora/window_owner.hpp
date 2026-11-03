@@ -43,6 +43,8 @@ int run(std::function<int()> game);
 // Queue admission is not SDL completion. Async failures are rethrown at guest event/frame boundaries.
 void submit(std::function<void()> operation, unsigned replaceKey = 0);
 void check();
+void request_close() noexcept;
+bool consume_close_request() noexcept;
 void set_window(SDL_Window* window);
 void refresh_window_state();
 // Snapshots never wait for SDL or throw a pending owner error on a render/presenter thread.

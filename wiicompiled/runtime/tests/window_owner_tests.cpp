@@ -8,6 +8,12 @@
 #include <string>
 #include <thread>
 
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 namespace owner = aurora::window_owner;
 using namespace std::chrono_literals;
 
@@ -56,7 +62,113 @@ int main(int argc, char** argv) {
             SDL_DestroyProperties(props);
             Require(window != nullptr, "Create hidden fixture window");
 
-            if (mode == "snapshot") {
+            if (mode == "idle-cpu") {
+                const auto cpu = [] {
+                    FILETIME creation{}, exit{}, kernel{}, user{};
+                    Require(GetThreadTimes(GetCurrentThread(), &creation, &exit, &kernel, &user),
+                            "Read owner thread CPU time");
+                    const auto ticks = [](FILETIME time) {
+                        return (uint64_t(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+                    };
+                    return double(ticks(kernel) + ticks(user)) / 1e7;
+                };
+                const auto before = owner::call(cpu);
+                std::this_thread::sleep_for(500ms);
+                Require(owner::call(cpu) - before < 0.05, "Idle owner must block, not burn a core on timed waits");
+            } else if (mode == "deferred-close") {
+                []() noexcept { owner::request_close(); }();
+                Require(owner::consume_close_request(), "Transfer quit past the noexcept UI callback");
+                Require(!owner::consume_close_request(), "Consume a quit request only once");
+            } else if (mode == "motion") {
+                owner::call([&] {
+                    owner::refresh_window_state();
+                });
+                SDL_Event event{};
+                while (SDL_PollEvent(&event)) {}
+                owner::call([&] {
+                    for (int i = 0; i < 5000; ++i) {
+                        SDL_Event motion{};
+                        motion.type = SDL_EVENT_MOUSE_MOTION;
+                        motion.motion.which = 1;
+                        motion.motion.windowID = SDL_GetWindowID(window);
+                        motion.motion.x = float(i);
+                        motion.motion.xrel = 1;
+                        Require(SDL_PushEvent(&motion), "Push mouse motion");
+                        motion.motion.which = 2;
+                        Require(SDL_PushEvent(&motion), "Push second mouse motion");
+                        SDL_Event axis{};
+                        axis.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
+                        axis.gaxis.which = 3;
+                        axis.gaxis.axis = i % 2;
+                        axis.gaxis.value = static_cast<Sint16>(i);
+                        Require(SDL_PushEvent(&axis), "Push gamepad axis");
+                        axis.type = SDL_EVENT_JOYSTICK_AXIS_MOTION;
+                        axis.jaxis.which = 4;
+                        axis.jaxis.axis = i % 2;
+                        axis.jaxis.value = static_cast<Sint16>(i);
+                        Require(SDL_PushEvent(&axis), "Push joystick axis");
+                    }
+                    SDL_Event key{};
+                    key.type = SDL_EVENT_KEY_DOWN;
+                    key.key.scancode = SDL_SCANCODE_A;
+                    Require(SDL_PushEvent(&key), "Push key barrier");
+                    SDL_Event motion{};
+                    motion.type = SDL_EVENT_MOUSE_MOTION;
+                    motion.motion.which = 1;
+                    motion.motion.windowID = SDL_GetWindowID(window);
+                    motion.motion.x = 7000;
+                    motion.motion.xrel = 2;
+                    Require(SDL_PushEvent(&motion), "Push motion after key");
+                    SDL_Event button{};
+                    button.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+                    button.button.which = 1;
+                    button.button.windowID = SDL_GetWindowID(window);
+                    button.button.button = SDL_BUTTON_LEFT;
+                    Require(SDL_PushEvent(&button), "Push mouse button barrier");
+                    motion.motion.x = 8000;
+                    motion.motion.xrel = 3;
+                    motion.motion.state = SDL_BUTTON_LMASK;
+                    motion.common.timestamp = 0;
+                    Require(SDL_PushEvent(&motion), "Push motion after button");
+                    owner::refresh_window_state();
+                });
+                int mouseCount = 0, gamepadCount = 0, joystickCount = 0;
+                bool sawKey = false, sawButton = false;
+                Uint64 lastTimestamp = 0;
+                while (SDL_PollEvent(&event)) {
+                    Require(event.common.timestamp >= lastTimestamp, "Keep retained motion in chronological order");
+                    lastTimestamp = event.common.timestamp;
+                    if (event.type == SDL_EVENT_KEY_DOWN) {
+                        Require(mouseCount == 2, "Keep motion before key transition");
+                        sawKey = true;
+                    } else if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                        Require(mouseCount == 3 && sawKey, "Keep button after preceding motion and key");
+                        sawButton = true;
+                    } else if (event.type == SDL_EVENT_MOUSE_MOTION) {
+                        if (!sawKey) {
+                            Require(event.motion.x == 4999 && event.motion.xrel == 5000,
+                                    "Keep latest position and accumulated relative motion per mouse");
+                        } else if (!sawButton) {
+                            Require(event.motion.x == 7000 && event.motion.xrel == 2,
+                                    "Do not merge across a key transition");
+                        } else {
+                            Require(event.motion.x == 8000 && event.motion.xrel == 3,
+                                    "Do not merge across a button transition");
+                        }
+                        ++mouseCount;
+                    } else if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) {
+                        Require(event.gaxis.value == (event.gaxis.axis == 0 ? 4998 : 4999),
+                                "Keep latest gamepad value per axis");
+                        ++gamepadCount;
+                    } else if (event.type == SDL_EVENT_JOYSTICK_AXIS_MOTION) {
+                        Require(event.jaxis.value == (event.jaxis.axis == 0 ? 4998 : 4999),
+                                "Keep latest joystick value per axis");
+                        ++joystickCount;
+                    }
+                }
+                Require(mouseCount == 4 && gamepadCount == 2 && joystickCount == 2 && sawKey && sawButton,
+                        "Coalesce a stalled frame without losing independent devices or discrete input");
+            } else if (mode == "snapshot") {
                 std::atomic<bool> published{false}, release{false};
                 owner::submit([&] {
                     if (!SDL_SetWindowSize(window, 800, 600))
@@ -127,7 +239,8 @@ int main(int argc, char** argv) {
                 owner::call([&] {
                     for (int i = 0; i < 2049; ++i) {
                         SDL_Event event{};
-                        event.type = SDL_EVENT_USER;
+                        event.type = SDL_EVENT_KEY_DOWN;
+                        event.key.scancode = SDL_SCANCODE_A;
                         Require(SDL_PushEvent(&event), "Push overflow fixture event");
                     }
                     owner::refresh_window_state();

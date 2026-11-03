@@ -439,7 +439,7 @@ if(WIN32)
         "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/include")
     target_compile_features(no100f_window_owner_tests PRIVATE cxx_std_20)
     target_link_libraries(no100f_window_owner_tests PRIVATE SDL3::SDL3 Threads::Threads)
-    foreach(case lifecycle snapshot command-queue event-overflow async-error fiber-close)
+    foreach(case lifecycle snapshot command-queue event-overflow async-error fiber-close deferred-close motion idle-cpu)
         add_test(NAME no100f_window_owner_${case} COMMAND no100f_window_owner_tests ${case})
         set_tests_properties(no100f_window_owner_${case} PROPERTIES
             TIMEOUT 15 RUN_SERIAL TRUE ENVIRONMENT "SDL_VIDEODRIVER=dummy")

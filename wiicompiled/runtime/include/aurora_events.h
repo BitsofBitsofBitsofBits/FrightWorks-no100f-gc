@@ -75,6 +75,7 @@ inline void Flush(bool force = false) {
 // Update cached Aurora window/framebuffer dimensions based on pending events.
 inline void ProcessAuroraEvents(const AuroraEvent* events) {
     if (aurora::window_owner::enabled()) aurora::window_owner::check();
+    if (aurora::window_owner::consume_close_request()) ExitForAuroraWindowClose();
     if (!events) {
         return;
     }
