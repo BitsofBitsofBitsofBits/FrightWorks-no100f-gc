@@ -64,6 +64,16 @@ static class LauncherLayoutTests
             try
             {
                 var scene = form.Controls[0];
+                // Controller detection runs on its own thread and rewrites the Controls status line when it finishes
+                // ("Looking for controllers..." -> found / none / SDL3 missing): wait for it, or the layout can change
+                // between two snapshots of the same page.
+                var padStatus = (Label)type.GetField("padStatus", Private)!.GetValue(form)!;
+                for (var waited = System.Diagnostics.Stopwatch.StartNew(); padStatus.Text.StartsWith("Looking") && waited.Elapsed.TotalSeconds < 10;)
+                {
+                    Thread.Sleep(25);
+                    Application.DoEvents();
+                }
+                Check(!padStatus.Text.StartsWith("Looking"), "Controller detection did not finish within 10 seconds");
                 scene.GetType().GetMethod("Showcase")!.Invoke(scene, new object[] { false });
                 var selectTab = (Action<bool>)type.GetField("showControlsTab", Private)!.GetValue(form)!;
                 var initialDpi = form.DeviceDpi;
@@ -213,7 +223,7 @@ static class LauncherLayoutTests
                 Call(displayTab, "OnKeyDown", new KeyEventArgs(Keys.Space));
                 Call(displayTab, "OnKeyUp", new KeyEventArgs(Keys.Space));
                 Application.DoEvents();
-                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 10);
+                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 11);
                 Check(display.Visible, "Space did not select the Display tab");
                 var window = Descendants(display).OfType<ComboBox>().First();
                 window.SelectedIndex = 1;
