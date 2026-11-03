@@ -8,9 +8,10 @@ int main() {
     constexpr float y = 0.375f;
     constexpr float aspect16x9 = 16.0f / 9.0f;
     constexpr float aspect21x9 = 21.0f / 9.0f;
+    constexpr float aspectCinematic = 2.39f;
     constexpr float aspect32x9 = 32.0f / 9.0f;
 
-    for (const float aspect : {aspect16x9, aspect21x9, aspect32x9}) {
+    for (const float aspect : {aspect16x9, aspect21x9, aspectCinematic, aspect32x9}) {
         const float widened = No100fCamera::WidenedViewWindowWidth(x, y, aspect);
         assert(std::abs(widened / y - aspect) < 0.00001f);
     }
