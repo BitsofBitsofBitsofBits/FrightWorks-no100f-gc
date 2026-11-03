@@ -16,7 +16,8 @@ bug there is often also in Dolphin HLE. Goal is a clean remaster, not matching D
 ## Order of work
 
 1. **Capture what the game mixed** (no SDL, no Windows): `AUDIO_RAW_DUMP=<file>` (built in) before
-   `manual-session start` → BE16 stereo R/L, 32 kHz.
+   `manual-session start -Sound` → BE16 stereo R/L, 32 kHz. Audio work runs with `-Sound` (on at 5%); without it test
+   runs are muted. Mute/volume are SDL output gain only, so the dump is the same either way.
 2. **Measure, don't just listen:** `python tools\debug\audio\crackle.py <dump> [--wav out.wav] [--from S --to S]`
    → 2nd-difference clicks, flat tops (clipping), zero gaps (drops), limiter-knee counts, per-second table, strongest
    clicks with frame numbers. Look for a **grid** in click times (a period = a buffer/loop size).
@@ -37,7 +38,7 @@ builds read the date 2000-01-01 (fireworks every load) unless they have PR #12 o
 
 **Stuck loop** (music repeating ~1 s, hub report 2026-10-25, not reproduced yet): `python tools\debug\audio\loopcheck.py
 <dump> --scan 10` (stuck ring ≈ 0.99, normal music ≈ 0.1). `tools\debug\audio\loop-capture.ps1 -Label x [-Boot h001]
-[-Hd] [-Cmd "scene H001" -CmdAt 20]` boots a scene with the dump on and checks it; `texhunt\hunt.ps1` checks every session.
+[-Hd] [-Cmd "scene H001" -CmdAt 20]` boots a scene with the dump on (sound at 5%) and checks it; `texhunt\hunt.ps1` checks every session.
 
 ## Game facts
 
