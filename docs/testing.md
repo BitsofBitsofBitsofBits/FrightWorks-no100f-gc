@@ -104,6 +104,13 @@ ctest --test-dir wiicompiled\native-build --output-on-failure
 One test: `cmake --build wiicompiled\native-build --target <name>`, then run `wiicompiled\native-build\<name>.exe`.
 New pure logic (no SDL, no guest memory) belongs in a header with a test next to the existing ones.
 
+Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_TESTS=ON`), a ROM-free test of
+actual GPU pixels. Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
+occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
+With the enhanced two-pass cut-out modes, each render pass finishes solid geometry, then cut-out fringes, then
+depth-tested translucent world draws. Clears, overlays and non-monotonic depth passes flush that ordering.
+Original-game and single-cut modes retain the game's submission order; the test checks those controls too.
+
 ## 4. Playtest a level
 
 `tools\debug\manual-session.ps1` opens one game window straight into a level, for looking at a bug and taking

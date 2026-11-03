@@ -178,10 +178,9 @@ struct RenderPass {
   // failing every subsequent depth test and making whatever's drawn into it vanish).
   float clearDepthValue = gx::UseReversedZ ? 0.f : 1.f;
   CommandList commands;
-  // Cut-out fringes (gx::CutoutPasses::TwoPass): drawn after the pass's own commands unless a draw
-  // that isn't depth-tested and depth-writing, or a clear, flushes them into `commands` first
-  // (flush_deferred_draws).
+  // Solid scene, cut-out fringes, then translucent world draws. Explicit barriers flush both tails.
   CommandList deferred;
+  CommandList translucent;
   bool clearColor = true;
   bool clearDepth = true;
   // The resolve destination outlives the frame with no re-issue path (one-shot
@@ -242,6 +241,7 @@ static void release_command_list(CommandList&& list) noexcept {
 static void release_render_pass(RenderPass& pass) noexcept {
   release_command_list(std::move(pass.commands));
   release_command_list(std::move(pass.deferred));
+  release_command_list(std::move(pass.translucent));
 }
 
 static void recycle_render_passes(std::vector<RenderPass>& passes) noexcept {
@@ -517,10 +517,11 @@ static void push_draw_command(ShaderDrawCommand data) {
 static Viewport g_cachedViewport;
 static ClipRect g_cachedScissor;
 
-void push_deferred_draw_command(const gx::DrawData& data) {
+void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind) {
   if (!has_current_render_pass())
     UNLIKELY { return; }
-  auto& list = g_renderPasses[g_currentRenderPass].deferred;
+  auto& pass = g_renderPasses[g_currentRenderPass];
+  auto& list = kind == DeferredDrawKind::Translucent ? pass.translucent : pass.deferred;
   // Each deferred draw carries the viewport and scissor it was recorded with.
   const Viewport* lastViewport = nullptr;
   const ClipRect* lastScissor = nullptr;
@@ -547,9 +548,11 @@ void push_deferred_draw_command(const gx::DrawData& data) {
 void flush_deferred_draws() {
   if (!has_current_render_pass()) return;
   auto& pass = g_renderPasses[g_currentRenderPass];
-  if (pass.deferred.empty()) return;
+  if (pass.deferred.empty() && pass.translucent.empty()) return;
   pass.commands.insert(pass.commands.end(), pass.deferred.begin(), pass.deferred.end());
   pass.deferred.clear();
+  pass.commands.insert(pass.commands.end(), pass.translucent.begin(), pass.translucent.end());
+  pass.translucent.clear();
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
 }
@@ -1443,7 +1446,8 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
       }
     }
     const bool hasRenderWork =
-        passInfo.clearColor || passInfo.clearDepth || !passInfo.commands.empty() || !passInfo.deferred.empty();
+        passInfo.clearColor || passInfo.clearDepth || !passInfo.commands.empty() ||
+        !passInfo.deferred.empty() || !passInfo.translucent.empty();
     if (i == renderPasses.size() - 1) {
       ASSERT(!passInfo.resolveTarget, "Final render pass must not have resolve target");
     } else if (!(passInfo.resolveTarget && encodeTextureBakes) && !hasRenderWork) {
@@ -1650,7 +1654,7 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
   pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
 
   const auto& passCommands = renderPasses[idx];
-  for (const CommandList* list : {&passCommands.commands, &passCommands.deferred})
+  for (const CommandList* list : {&passCommands.commands, &passCommands.deferred, &passCommands.translucent})
   for (const auto& cmd : *list) {
 #ifdef AURORA_GFX_DEBUG_GROUPS
     {

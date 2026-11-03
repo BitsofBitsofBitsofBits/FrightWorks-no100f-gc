@@ -3340,15 +3340,23 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
       .bindGroups = bindGroups,
       .dstAlpha = pipelineState.dstAlpha,
   };
-  if (!g_gxState.depthCompare || !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS) {
-    // The deferred cut-out fringes wait only for the solid scene (depth-tested, depth-writing draws): draw them
-    // before any other draw. Draws without depth write (the translucent part of the scene, HUD) go over them, and
-    // a draw that writes depth without testing it replaces the depth they are tested against: the game clears
-    // depth with a screen quad (depth test "always") before the HUD, and fringes drawn after it showed through
-    // everything (the hub's lamp glows and lighthouse beam: their alpha stays below 128, so they are all fringe).
+  const auto cutoutMode = cutout_mode();
+  const bool enhancedCutouts = cutoutMode == CutoutMode::TwoPass || cutoutMode == CutoutMode::TwoPassAll;
+  const bool orderedWorld = enhancedCutouts && g_gxState.projType == GX_PERSPECTIVE &&
+                            g_gxState.depthCompare &&
+                            (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
+  const bool translucentWorld = orderedWorld && !g_gxState.depthUpdate;
+  if (!orderedWorld && (enhancedCutouts || !g_gxState.depthCompare ||
+                        !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS)) {
     gfx::flush_deferred_draws();
   }
-  gfx::push_draw_command(draw);
+  // The game queues alpha-tested grass after particles. Finish that solid geometry and its
+  // fringes before blending clouds over it; retain submission order within the translucent tail.
+  if (translucentWorld) {
+    gfx::push_deferred_draw_command(draw, gfx::DeferredDrawKind::Translucent);
+  } else {
+    gfx::push_draw_command(draw);
+  }
   if (fringe) {
     // Same geometry again with the fringe pipeline, deferred until the solid scene behind it is drawn (the game
     // draws cut-outs early: a fringe drawn in place would be painted over by the scenery behind it). The next
@@ -3359,7 +3367,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
     gfx::push_deferred_draw_command(draw);
     g_gxState.stateDirty = true;
   } else {
-    g_gxState.stateDirty = false;
+    g_gxState.stateDirty = translucentWorld;
   }
   if (flatSave) {
     g_gxState.tevStages[0] = flatSave->st0;
