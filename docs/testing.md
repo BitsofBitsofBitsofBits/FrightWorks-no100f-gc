@@ -74,9 +74,9 @@ New pure logic (no SDL, no guest memory) belongs in a header with a test next to
 `tools\debug\manual-session.ps1` opens one game window straight into a level, for looking at a bug and taking
 screenshots.
 
-Every test runs with the same settings (windowed 1600x900, 60 fps, MSAA 4, HD pack off unless `-HdTextures`), not
-yours. `start` saves your own settings first (`Play\UserData\Config.toml` and the `*.controller` files where F10
-controller remaps are kept) to `tools\debug\local\user-setup\`, and `stop` puts them back and deletes the
+Every test runs with the same settings (windowed 1600x900, 60 fps, MSAA 4, HD pack off unless `-HdTextures`, sound
+muted unless `-Sound`), not yours. `start` saves your own settings first (`Play\UserData\Config.toml` and the
+`*.controller` files where F10 controller remaps are kept) to `tools\debug\local\user-setup\`, and `stop` puts them back and deletes the
 `Play\UserData\mods\zz-manual` boot mod. If a test didn't finish, the saved copy stays (a new test keeps it rather than
 saving the test settings over it); `restore` puts it back.
 
@@ -87,7 +87,10 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
 ```
 
 - `-Boot <scene>` picks the level (default `e001`); `-AllPowerups` unlocks every gadget; `-HdTextures` turns the HD pack
-  on. Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
+  on; `-Sound` turns the sound on at 5% (`[audio] volume = 0.05`; without it `muted = true`). Use it when you want to
+  hear the game or are working on audio. Mute and volume only change what SDL plays: `AUDIO_RAW_DUMP` captures are the
+  same either way.
+  Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
   or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
   `e001`.
 - `status` shows the running session; `stop-tests` kills leftover automation.
@@ -102,7 +105,8 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
 The dev menu is part of the game, off unless **Extras > Developer tools** is on in the launcher (`[game] dev_tools =
 true` in `Config.toml`) or `NO100F_DEV_TOOLS=1` is set; the scripts in `tools/debug` set that variable for their
 sessions. With it on, the game shows **DEV** and its build in the bottom-right corner. `play-patched.ps1` builds,
-starts the game with the dev menu on and, for branches from before the dev menu was built in, applies
+starts the game with the dev menu on and the sound at 5% (your volume and mute lines go back when it closes) and, for
+branches from before the dev menu was built in, applies
 `tools/debug/patches/devmenu.patch` and takes it out again when you close the game:
 
 ```powershell
@@ -149,7 +153,9 @@ or use `-CleanBuild`.
 
 Every build knows what it was built from: the F10 **About** page, the DEV mark and the first lines of `console.log`
 show the version and, for a test build, `branch@commit` plus `+xxxx` when it had uncommitted changes (a hash of
-them, so two builds with different edits differ).
+them, so two builds with different edits differ). The launcher shows the same ID bottom left. It gets it at build time
+from the portable CMake in `toolchain\`, so a launcher built before the first game build says "unknown build":
+rebuild it once the toolchain is there.
 
 ## 6. Other diagnostic patches
 
@@ -205,8 +211,8 @@ useful:
 
 Each task can get its own git worktree: a second folder with its own branch, build and `Play\`, sharing the big
 read-only folders (disc files, HD pack, toolchain) with the main checkout through links. Each worktree gets its own
-Claude Code session in a Windows Terminal tab; one session in the main checkout, named `main`, coordinates them (the
-`parallel-work` skill).
+Claude Code session in a Windows Terminal tab; one session in the main checkout, named `coordinator`, coordinates them
+(the `parallel-work` skill). Not `main`: in SendMessage, "main" means the sender's own conversation.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name main
@@ -216,14 +222,18 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name ins
 powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name installer
 ```
 
-- `open -Name main` opens a tab in the main checkout running the coordinating session. Ask it to start, check on or
-  finish tasks; it runs the commands below and can message the other sessions.
+- `open -Name main` opens a tab in the main checkout running the coordinating session (`coordinator`). Ask it to
+  start, check on or finish tasks; it runs the commands below and can message the other sessions. Workers send it
+  their questions and approval requests (PRs, options, visual checks), and it answers or asks you (`AGENTS.md`:
+  "Questions go through the coordinator"). Commits and pushes to a task's own branch need no approval.
 - `new` creates `..\FrightWorks-worktrees\<name>` from `origin/main` (or checks out an existing branch) and opens a
   tab there running `claude -n <name>` (`-NoOpen` to skip). With `-Task`, the goal goes into the worktree's `TASK.md`
   and the session starts on it. Its first build must be a full one: `toolsuild-no100f.ps1` without
   `-SkipTools`/`-SkipTranslate` (or `new ... -Build`).
 - `open -Name <name>` starts a closed session again: a new conversation that picks the task up from `TASK.md`
-  (`-Continue` to resume the last conversation instead).
+  (`-Continue` to resume the last conversation instead). `new`/`open` start the tab without the Claude Code
+  variables of the shell that runs them, so a session started from the coordinator is its own session: listed by
+  ListAgents, its conversation saved for `-Continue`.
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its
@@ -241,4 +251,4 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
 `.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
 (graphics and state bugs), `game-logic-debug` (60 fps, timing and gameplay bugs, dev menu, postool),
 `manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) `audio-debug` (crackle, clicks, fuzz) and `parallel-work`
-(worktrees and their sessions, run from the main session).
+(worktrees and their sessions, run from the coordinator).
