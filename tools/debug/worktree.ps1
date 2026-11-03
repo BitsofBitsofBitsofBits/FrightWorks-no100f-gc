@@ -18,6 +18,8 @@
 # Sessions: new opens a Windows Terminal tab in the worktree running `claude -n <name>` (-NoOpen: don't). With -Task,
 # the goal goes into TASK.md and the session starts on it right away. open starts the session again later: a new
 # conversation that picks the task up from TASK.md (-Continue: claude -c, the folder's last conversation).
+# The tab starts without the Claude Code variables of the shell that ran this, so a session started from main's tool
+# shell is a session of its own (listed by ListAgents, its conversation saved), not a child of main.
 # `open -Name main` opens the main checkout's session: the coordinating one, which creates and removes worktrees and
 # can message the others by name (session name = worktree name).
 # -Build runs the first full build there (translator tools, translate, compile).
@@ -81,6 +83,15 @@ function Open-Session([string]$path, [string]$title, [string]$prompt, [bool]$con
     if ($prompt) { $claude += $prompt }
     $wt = Get-Command wt -ErrorAction SilentlyContinue
     if (-not $wt) { Write-Host "open: Windows Terminal (wt) not found; run: cd `"$path`"; $($claude -join ' ')"; return }
+    # The new tab gets this process's environment. Run from a Claude Code session's tool shell (as main does), that
+    # includes Claude Code's own variables, and the new claude would start as a child of that session: no
+    # ~/.claude/sessions entry (ListAgents/SendMessage can't find it), no saved transcript (open -Continue can't resume
+    # it). Drop them here (this process only), except any the user set themselves (User or Machine environment).
+    foreach ($v in @(Get-ChildItem Env: | Where-Object { $_.Name -in 'CLAUDECODE', 'CLAUDE_PID', 'AI_AGENT' -or $_.Name -like 'CLAUDE_CODE_*' })) {
+        if ($null -eq [Environment]::GetEnvironmentVariable($v.Name, 'User') -and $null -eq [Environment]::GetEnvironmentVariable($v.Name, 'Machine')) {
+            Remove-Item -LiteralPath "Env:$($v.Name)"
+        }
+    }
     # -w 0: a new tab in the current Windows Terminal window (a new window if none).
     & $wt.Source -w 0 new-tab --title $title -d $path @claude
     Write-Host "open: Windows Terminal tab '$title' running $(if ($continue) { 'claude -c (continuing)' } else { 'claude' }) in $path"
