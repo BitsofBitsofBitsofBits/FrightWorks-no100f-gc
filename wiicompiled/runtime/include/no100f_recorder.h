@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <string>
 
 // F3 video recording, part of the developer tools ([game] dev_tools; the dev menu passes F3 on). The frames come from
@@ -20,6 +21,7 @@ bool Recording() noexcept;
 void DrawIndicator() noexcept;
 // The game is quitting: stop and finish the file before the process ends.
 void FinishForExit() noexcept;
-// A message for the corner notice ("Saving the video...", "Video saved: ..."), or "" when nothing new.
-std::string TakeNotice();
+// A message for the corner notice ("Saving the video...", "Video saved: ..."), or "" when nothing new. file = the file
+// it names (the video, or ffmpeg's log when the video wasn't saved), else empty: a click on the notice shows it.
+std::string TakeNotice(std::filesystem::path& file);
 } // namespace no100f_recorder

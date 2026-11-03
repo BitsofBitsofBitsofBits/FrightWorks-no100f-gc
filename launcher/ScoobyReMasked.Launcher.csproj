@@ -27,4 +27,27 @@
     <EmbeddedResource Include="art\ghost.png" LogicalName="ScoobyReMasked.ghost.png" />
     <EmbeddedResource Include="fonts\LuckiestGuy-Regular.ttf" LogicalName="ScoobyReMasked.LuckiestGuy-Regular.ttf" />
   </ItemGroup>
+  <!-- The build ID (footer pill) goes in InformationalVersion: the game's own rules and text, from
+       wiicompiled/runtime/cmake/build_info.cmake (release = clean checkout at tag v<Version>: just the version, else
+       "<Version> branch@commit[+diff hash]"). Needs the portable CMake in toolchain\ (tools/build-no100f.ps1 installs
+       it) or CMakeExe=<path>; without one the ID says so. -->
+  <PropertyGroup>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <CMakeExe Condition="'$(CMakeExe)' == ''">$(MSBuildThisFileDirectory)..\toolchain\CMake\bin\cmake.exe</CMakeExe>
+  </PropertyGroup>
+  <Target Name="FrightWorksBuildId" BeforeTargets="GetAssemblyVersion">
+    <PropertyGroup>
+      <_BuildIdRepo>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..').Replace('\', '/'))</_BuildIdRepo>
+      <_BuildIdFile>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)build_id.txt</_BuildIdFile>
+    </PropertyGroup>
+    <Exec Condition="Exists('$(CMakeExe)')" StandardOutputImportance="low"
+          Command="&quot;$(CMakeExe)&quot; &quot;-DREPO=$(_BuildIdRepo)&quot; &quot;-DOUT=$(_BuildIdFile.Replace('\', '/'))&quot; -P &quot;$(_BuildIdRepo)/wiicompiled/runtime/cmake/build_info.cmake&quot;" />
+    <ReadLinesFromFile Condition="Exists('$(CMakeExe)')" File="$(_BuildIdFile)">
+      <Output TaskParameter="Lines" PropertyName="_BuildId" />
+    </ReadLinesFromFile>
+    <PropertyGroup>
+      <InformationalVersion>$(_BuildId)</InformationalVersion>
+      <InformationalVersion Condition="'$(_BuildId)' == ''">$(Version) (unknown build: no CMake)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
 </Project>

@@ -52,6 +52,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1753,10 +1754,77 @@ constexpr const char* kProjectUrl = "https://github.com/Loneranger419/FrightWork
 std::string g_noticeText;
 Clock::time_point g_noticeUntil{};
 std::filesystem::path g_lastScreenshot;
+std::filesystem::path g_noticeFile;  // the file the notice names: a click on the notice shows it in Explorer
 
-void ShowNotice(std::string text) {
+// A notice that names a file stays longer (time to reach it with the mouse) and while the mouse is on it.
+void ShowNotice(std::string text, std::filesystem::path file = {}) {
     g_noticeText = std::move(text);
-    g_noticeUntil = Clock::now() + std::chrono::milliseconds(2500);
+    g_noticeFile = std::move(file);
+    g_noticeUntil = Clock::now() + std::chrono::milliseconds(g_noticeFile.empty() ? 2500 : 5000);
+}
+
+void ShowInExplorer(const std::filesystem::path& file) {
+#if defined(_WIN32)
+    const std::wstring args = L"/select,\"" + file.wstring() + L"\"";
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+    (void)file;
+#endif
+}
+
+// F2 also puts the screenshot on the clipboard as a picture (CF_DIB), read back from the saved PNG on a worker thread
+// (the PNG itself is encoded off the game thread too). owner = the game window.
+void CopyScreenshotToClipboard(std::filesystem::path file, void* owner) {
+#if defined(_WIN32)
+    std::thread([file = std::move(file), owner] {
+        uint32_t width = 0, height = 0;
+        uint8_t* rgba = aurora_load_png_rgba(RuntimeConfigFile::PathToUtf8(file).c_str(), &width, &height);
+        if (rgba == nullptr) {
+            RT_LOG(RT_TAG_RUNTIME) << "screenshot not copied: can't read " << RuntimeConfigFile::PathToUtf8(file)
+                                   << std::endl;
+            return;
+        }
+        // 24-bit bottom-up DIB, rows padded to 4 bytes (32-bit DIBs get their unused byte read as alpha by some apps).
+        const size_t stride = (static_cast<size_t>(width) * 3 + 3) & ~static_cast<size_t>(3);
+        HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, sizeof(BITMAPINFOHEADER) + stride * height);
+        if (auto* header = memory ? static_cast<BITMAPINFOHEADER*>(GlobalLock(memory)) : nullptr) {
+            header->biSize = sizeof(BITMAPINFOHEADER);
+            header->biWidth = static_cast<LONG>(width);
+            header->biHeight = static_cast<LONG>(height);
+            header->biPlanes = 1;
+            header->biBitCount = 24;
+            header->biCompression = BI_RGB;
+            header->biSizeImage = static_cast<DWORD>(stride * height);
+            auto* bits = reinterpret_cast<uint8_t*>(header + 1);
+            for (uint32_t y = 0; y < height; ++y) {
+                const uint8_t* src = rgba + static_cast<size_t>(height - 1 - y) * width * 4;
+                uint8_t* dst = bits + static_cast<size_t>(y) * stride;
+                for (uint32_t x = 0; x < width; ++x, src += 4, dst += 3) {
+                    dst[0] = src[2];
+                    dst[1] = src[1];
+                    dst[2] = src[0];
+                }
+            }
+            GlobalUnlock(memory);
+        }
+        std::free(rgba);
+        // Another program may have the clipboard open for a moment.
+        bool opened = false;
+        for (int attempt = 0; memory && attempt < 10 && !(opened = OpenClipboard(static_cast<HWND>(owner))); ++attempt) {
+            Sleep(20);
+        }
+        const bool copied = opened && EmptyClipboard() && SetClipboardData(CF_DIB, memory) != nullptr;
+        if (opened) CloseClipboard();
+        if (!copied) {
+            if (memory) GlobalFree(memory);  // the clipboard owns it only once SetClipboardData succeeds
+            RT_LOG(RT_TAG_RUNTIME) << "screenshot not copied to the clipboard (error " << GetLastError() << ")"
+                                   << std::endl;
+        }
+    }).detach();
+#else
+    (void)file;
+    (void)owner;
+#endif
 }
 
 // The settings board (F10): pages on the left as planks, the page's settings on the right, Resume / Quit at the top
@@ -2027,13 +2095,17 @@ void DrawDevMark() {
 }
 
 void DrawNotice() {
-    if (const int result = aurora_take_screenshot_result(); result != 0) {
-        ShowNotice(result > 0 ? "Screenshot saved: " + RuntimeConfigFile::CaptureDirectoryLabel(false) +
-                                    RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename())
-                              : std::string("Screenshot failed (see the log)"));
+    if (const int result = aurora_take_screenshot_result(); result > 0) {
+        ShowNotice("Screenshot saved and copied: " + RuntimeConfigFile::CaptureDirectoryLabel(false) +
+                       RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename()),
+                   g_lastScreenshot);
+        CopyScreenshotToClipboard(g_lastScreenshot, ImGui::GetMainViewport()->PlatformHandleRaw);
+    } else if (result < 0) {
+        ShowNotice("Screenshot failed (see the log)");
     }
-    if (std::string recorder = no100f_recorder::TakeNotice(); !recorder.empty()) {
-        ShowNotice(std::move(recorder));
+    std::filesystem::path recorderFile;
+    if (std::string recorder = no100f_recorder::TakeNotice(recorderFile); !recorder.empty()) {
+        ShowNotice(std::move(recorder), std::move(recorderFile));
     }
     if (g_noticeText.empty() || Clock::now() >= g_noticeUntil) {
         return;
@@ -2049,12 +2121,20 @@ void DrawNotice() {
     constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize |
                                         ImGuiWindowFlags_NoDecoration |
                                         ImGuiWindowFlags_NoFocusOnAppearing |
-                                        ImGuiWindowFlags_NoInputs |
                                         ImGuiWindowFlags_NoMove |
                                         ImGuiWindowFlags_NoNav |
                                         ImGuiWindowFlags_NoSavedSettings;
-    if (ImGui::Begin("Notice", nullptr, kFlags)) {
+    const bool clickable = !g_noticeFile.empty();
+    if (ImGui::Begin("Notice", nullptr, clickable ? kFlags : kFlags | ImGuiWindowFlags_NoInputs)) {
         ImGui::TextUnformatted(g_noticeText.c_str());
+        if (clickable && ImGui::IsWindowHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            g_noticeUntil = std::max(g_noticeUntil, Clock::now() + std::chrono::milliseconds(500));
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                ShowInExplorer(g_noticeFile);
+                g_noticeText.clear();
+            }
+        }
     }
     ImGui::End();
 }
