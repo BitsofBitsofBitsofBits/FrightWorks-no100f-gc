@@ -429,23 +429,6 @@ target_include_directories(no100f_window_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_compile_features(no100f_window_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_window_tests COMMAND no100f_window_tests)
 
-if(WIN32)
-    add_executable(no100f_window_owner_tests
-        "${CMAKE_CURRENT_LIST_DIR}/tests/window_owner_tests.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/lib/window_owner.cpp"
-        "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp")
-    target_include_directories(no100f_window_owner_tests PRIVATE
-        "${CMAKE_CURRENT_LIST_DIR}/include"
-        "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/include")
-    target_compile_features(no100f_window_owner_tests PRIVATE cxx_std_20)
-    target_link_libraries(no100f_window_owner_tests PRIVATE SDL3::SDL3 Threads::Threads)
-    foreach(case lifecycle snapshot command-queue event-overflow async-error fiber-close deferred-close motion idle-cpu)
-        add_test(NAME no100f_window_owner_${case} COMMAND no100f_window_owner_tests ${case})
-        set_tests_properties(no100f_window_owner_${case} PROPERTIES
-            TIMEOUT 15 RUN_SERIAL TRUE ENVIRONMENT "SDL_VIDEODRIVER=dummy")
-    endforeach()
-endif()
-
 add_executable(no100f_devmenu_state_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_devmenu_state_tests.cpp")
 target_include_directories(no100f_devmenu_state_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_devmenu_state_tests PRIVATE cxx_std_17)
@@ -468,6 +451,23 @@ add_executable(mkw_input_expr_tests
 target_include_directories(mkw_input_expr_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(mkw_input_expr_tests PRIVATE cxx_std_17)
 add_test(NAME mkw_input_expr_tests COMMAND mkw_input_expr_tests)
+
+if(WIN32)
+    add_executable(no100f_window_owner_tests
+        "${CMAKE_CURRENT_LIST_DIR}/tests/window_owner_tests.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/lib/window_owner.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/src/host_context.cpp")
+    target_include_directories(no100f_window_owner_tests PRIVATE
+        "${CMAKE_CURRENT_LIST_DIR}/include"
+        "${CMAKE_CURRENT_LIST_DIR}/../aurora-main/include")
+    target_compile_features(no100f_window_owner_tests PRIVATE cxx_std_20)
+    target_link_libraries(no100f_window_owner_tests PRIVATE SDL3::SDL3 Threads::Threads)
+    foreach(case lifecycle snapshot command-queue event-overflow async-error fiber-close deferred-close motion idle-cpu)
+        add_test(NAME no100f_window_owner_${case} COMMAND no100f_window_owner_tests ${case})
+        set_tests_properties(no100f_window_owner_${case} PROPERTIES
+            TIMEOUT 15 RUN_SERIAL TRUE ENVIRONMENT "SDL_VIDEODRIVER=dummy")
+    endforeach()
+endif()
 
 # HostContext deliberately keeps the platform-specific context primitive out
 # of fiber_manager.cpp. Exercise the Linux libco handoff directly so future
