@@ -54,6 +54,29 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   (no `portable.txt`), with `FrightWorks.exe` beside it.
 - Packaging a release zip: `tools\package-scooby.ps1 -Build -Zip` → `dist\`. It also needs ImageMagick (`magick`) on
   PATH and the HD texture pack in `texture_pack\ScoobyHD` (not in git).
+- **Installer** (Velopack): `tools\package-scooby.ps1 -Installer` → `dist\installer\`: `FrightWorks-win-Setup.exe`,
+  `FrightWorks-<ver>-full.nupkg`, a `-delta.nupkg` against the previous release, and `releases.win.json` /
+  `assets.win.json`. It first runs `vpk download github` so the delta can be made against the latest GitHub release.
+  vpk (pinned in the script and in the launcher's Velopack `PackageReference`: change both together) is installed into
+  `dist\.vpk`. The installer puts the game in `%LOCALAPPDATA%\FrightWorks` (`current\` = the program, replaced on
+  every update; the whole folder goes on uninstall) with Start menu and desktop shortcuts; the game's own data goes to
+  the installed layout above.
+- **Testing an update without GitHub** (a local feed): pack two versions into one folder, install the first, point the
+  launcher at the folder.
+  ```powershell
+  tools\package-scooby.ps1 -Installer -Version 1.0.5-test.1 -Feed dist\testfeed -NoDownload
+  dist\testfeed\FrightWorks-win-Setup.exe --silent       # installs and starts the launcher; close it
+  tools\package-scooby.ps1 -Installer -Version 1.0.5-test.2 -Feed dist\testfeed -NoDownload   # makes the delta too
+  $env:FRIGHTWORKS_UPDATE_SOURCE = "$PWD\dist\testfeed"
+  & "$env:LOCALAPPDATA\FrightWorks\current\FrightWorks.exe"   # asks to update to test.2
+  ```
+  Uninstall afterwards in Windows Settings > Apps (or `%LOCALAPPDATA%\FrightWorks\Update.exe --uninstall`); the data
+  folders stay (delete `%LOCALAPPDATA%\FrightWorks-Data` and `Saved Games\FrightWorks` by hand for a clean slate).
+- **Release with the installer**: after the zip steps, `-Installer` on the same clean `main` (version from the
+  `.csproj`), then put `dist\installer\*` (Setup.exe, the nupkgs, `releases.win.json`, `assets.win.json`) on the same
+  draft release as the zip: `gh release upload v<ver> dist\installer\FrightWorks-win-Setup.exe ...`. Installed games
+  look for `releases.win.json` in the published (non-pre-release) releases, so every release from now on carries
+  these files; a release without them isn't offered as an update. The zip's launcher reads the latest release's tag.
 
 ## 3. Unit tests
 

@@ -1,23 +1,35 @@
 # Assembles dist\FrightWorks: one exe on top (the launcher, named "FrightWorks.exe"), README.txt, and
 # data\ with the game's runtime files. No disc data.
 #   powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 [-Build] [-Zip]
+#   powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Installer [-Version <v>] [-Feed <dir>] [-NoDownload]
 # -Build first rebuilds the game (build-no100f.ps1 -SkipTools) and the launcher.
 # -Zip also writes dist\FrightWorks.zip from a clean copy (never the player's disc, saves or settings).
 # Updating dist in place only replaces program files: data\Disc and data\UserData (saves, Config.toml, mods) are kept,
 # so a disc set up there by the launcher survives a repackage. An old Play\ layout is moved into data\ first.
-[CmdletBinding()] param([switch]$Build, [switch]$Zip)
+# -Installer packs the same program files, without the portable marker, with Velopack (vpk, fetched into dist\.vpk) into
+# -Feed (default dist\installer): FrightWorks-win-Setup.exe, the full package, a delta from the previous release, and
+# releases.win.json, which the installed launcher reads from GitHub Releases. It first downloads the latest GitHub
+# release's package into the feed so the delta can be made (-NoDownload: use what the feed holds, for a local test feed).
+# -Version defaults to <Version> in the launcher's .csproj. Uploading is a separate step (docs/testing.md).
+[CmdletBinding()] param([switch]$Build, [switch]$Zip, [switch]$Installer, [string]$Version, [string]$Feed, [switch]$NoDownload)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $launcher = "$root\launcher\publish\FrightWorks.exe"
+$VpkVersion = '1.2.161'  # keep in step with the Velopack PackageReference in the launcher's .csproj
+$RepoUrl = 'https://github.com/Loneranger419/FrightWorks-no100f-gc'
 if ($Build) { & "$PSScriptRoot\build-no100f.ps1" -SkipTools; & "$PSScriptRoot\build-launcher.ps1" }
 elseif (-not (Test-Path -LiteralPath $launcher)) { & "$PSScriptRoot\build-launcher.ps1" }
 
-# Program files only: what a new download replaces.
-function Stage([string]$to) {
-    New-Item -ItemType Directory -Force "$to\data\UserData\mods" | Out-Null
+# Program files only: what a new download replaces. -Installed: no portable marker (the game then keeps the player's
+# files in %LOCALAPPDATA%\FrightWorks-Data and Saved Games\FrightWorks), no UserData, no zip README.
+function Stage([string]$to, [switch]$Installed) {
+    New-Item -ItemType Directory -Force "$to\data" | Out-Null
+    if (-not $Installed) { New-Item -ItemType Directory -Force "$to\data\UserData\mods" | Out-Null }
     Copy-Item -LiteralPath $launcher -Destination "$to\FrightWorks.exe" -Force
-    Copy-Item -LiteralPath "$PSScriptRoot\package-README.txt" -Destination "$to\README.txt" -Force
-    foreach ($f in 'FrightWorks Game.exe', '*.dll', 'dsp_coef.bin', 'initial_pipeline_cache.db', 'portable.txt') {
+    if (-not $Installed) { Copy-Item -LiteralPath "$PSScriptRoot\package-README.txt" -Destination "$to\README.txt" -Force }
+    $files = 'FrightWorks Game.exe', '*.dll', 'dsp_coef.bin', 'initial_pipeline_cache.db'
+    if (-not $Installed) { $files += 'portable.txt' }
+    foreach ($f in $files) {
         if (Test-Path "$root\Play\$f") { Copy-Item "$root\Play\$f" "$to\data" -Force }
     }
     # Built-in HD texture pack (texture_pack\ScoobyHD, kept out of git) and the button prompt icons: the same files
@@ -63,4 +75,36 @@ if ($Zip) {
     } finally { $archive.Dispose() }
     Remove-Item -Recurse -Force (Split-Path $clean)
     Write-Host "DONE: $root\dist\FrightWorks.zip"
+}
+if ($Installer) {
+    if (-not $Version) {
+        $Version = ([xml](Get-Content -Raw "$root\launcher\ScoobyReMasked.Launcher.csproj")).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+    }
+    if (-not $Feed) { $Feed = "$root\dist\installer" }
+    New-Item -ItemType Directory -Force $Feed | Out-Null
+    # The title names the shortcuts and the uninstall entry: no ':' (on NTFS "A: B.lnk" becomes a stream of a file "A").
+    # vpk (Velopack's packer), a .NET tool, pinned and kept in dist\.vpk; it runs on the .NET 8 SDK in toolchain\dotnet.
+    $dotnet = & "$PSScriptRoot\get-dotnet.ps1" | Select-Object -Last 1
+    $env:DOTNET_ROOT = Split-Path $dotnet; $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'; $env:DOTNET_NOLOGO = '1'
+    $vpkDir = "$root\dist\.vpk\$VpkVersion"
+    $vpk = "$vpkDir\vpk.exe"
+    if (-not (Test-Path -LiteralPath $vpk)) {
+        & $dotnet tool install vpk --version $VpkVersion --tool-path $vpkDir
+        if ($LASTEXITCODE -ne 0) { throw "installing vpk $VpkVersion failed" }
+    }
+    $clean = Join-Path $env:TEMP "FrightWorks-installer\FrightWorks"
+    Remove-Item -Recurse -Force (Split-Path $clean) -ErrorAction SilentlyContinue
+    Stage $clean -Installed
+    if (-not $NoDownload) {
+        # The latest release's full package, for the delta (none yet before the first installer release: fine).
+        & $vpk download github --repoUrl $RepoUrl --outputDir $Feed
+        if ($LASTEXITCODE -ne 0) { throw "vpk download github failed" }
+    }
+    & $vpk pack --packId FrightWorks --packVersion $Version --packDir $clean --mainExe FrightWorks.exe --runtime win-x64 `
+        --packTitle FrightWorks --packAuthors Loneranger419 --icon "$root\launcher\frightworks.ico" `
+        --noPortable --outputDir $Feed
+    if ($LASTEXITCODE -ne 0) { throw "vpk pack failed" }
+    Remove-Item -Recurse -Force (Split-Path $clean)
+    Write-Host "DONE: $Feed (FrightWorks $Version)"
+    Get-ChildItem -LiteralPath $Feed -File | Sort-Object LastWriteTime | ForEach-Object { "  {0}  {1:N0} MB" -f $_.Name, ($_.Length / 1MB) }
 }
