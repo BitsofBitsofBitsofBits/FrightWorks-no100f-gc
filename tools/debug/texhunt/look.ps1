@@ -1,10 +1,11 @@
-# look.ps1 -Boot e005 -Spot Greenhouse_Example_1 [-Hd | -Pack <full path>] [-Extra <folder>] [-AllPowerups] [-Fps30] [-Interp 120|180] [-SkipButton a|none] [-KeepIntro]: open the game (dev menu build already in Play\) at a saved spot
-# and leave it to the human. HD textures off unless -Hd. stderr (RT_LOGF) goes to autotest\texhunt\look-stderr.log.
+# look.ps1 -Boot e005 -Spot Greenhouse_Example_1 [-Hd | -Pack <full path>] [-Extra <folder>] [-AllPowerups] [-Fps30] [-Interp 120|180] [-SkipButton a|none] [-KeepIntro] [-Sound]: open the game (dev menu build already in Play\) at a saved spot
+# and leave it to the human. HD textures off unless -Hd; sound muted unless -Sound (then on at 5%). stderr (RT_LOGF)
+# goes to autotest\texhunt\look-stderr.log.
 # -Extra <folder>: also link that folder of replacements (e.g. tint-pack.py output, frames you made) as
 # texture_replacements\00-extra; it is indexed before ScoobyHD, so its textures win (turns replacements on).
 # Runs with the test config (manual-session prepare; the switches above only change HD/fps60/interpolation in it).
 # When the game closes: the links removed, manual-session restore puts your settings back and removes zz-manual.
-param([string]$Boot = 'e005', [string]$Spot = '', [switch]$Hd, [switch]$AllPowerups, [switch]$Fps30, [string]$Pack = '', [string]$Extra = '', [int]$Interp = 0, [string]$SkipButton = 'a', [switch]$KeepIntro)
+param([string]$Boot = 'e005', [string]$Spot = '', [switch]$Hd, [switch]$AllPowerups, [switch]$Fps30, [string]$Pack = '', [string]$Extra = '', [int]$Interp = 0, [string]$SkipButton = 'a', [switch]$KeepIntro, [switch]$Sound)
 if ($Pack) { $Hd = $true }  # -Pack <folder>: that pack instead of texture_pack\ScoobyHD (full path)
 if ($Extra) { $Extra = (Resolve-Path $Extra).Path }
 $ErrorActionPreference = 'Stop'
@@ -30,6 +31,7 @@ try {
     # boot mod + test config from manual-session prepare (saves your settings first), then the HD/fps switches
     $msArgs = @('-ExecutionPolicy', 'Bypass', '-File', $ms, 'prepare', '-Boot', $Boot)
     if ($AllPowerups) { $msArgs += '-AllPowerups' }
+    if ($Sound) { $msArgs += '-Sound' }
     & powershell @msArgs | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'manual-session prepare failed' }
     if ($Boot -eq 'h001' -and -not $KeepIntro) {

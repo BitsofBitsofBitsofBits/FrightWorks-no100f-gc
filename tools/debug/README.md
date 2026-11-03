@@ -31,15 +31,15 @@ Layout (paths in the skills and scripts are written from the repo root):
 
 | Path | What |
 | --- | --- |
-| `play-patched.ps1` | Apply patches, build, play with the dev menu on (`NO100F_DEV_TOOLS=1`; the default `devmenu` patch only on branches from before it was built in); patches come out of the source when the game closes. `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
-| `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups]` (saves the user's settings, writes the test Config + `zz-manual` boot mod), `shot`, `stop` (settings back), `prepare` (like start, no game), `restore`, `stop-tests`. Stays inside its own checkout; `prepare`/`start` wait for the game-run lock |
+| `play-patched.ps1` | Apply patches, build, play with the dev menu on (`NO100F_DEV_TOOLS=1`; the default `devmenu` patch only on branches from before it was built in); patches come out of the source when the game closes. Sound on at 5% for the run (the user's volume/mute lines go back). `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
+| `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups] [-Sound]` (saves the user's settings, writes the test Config + `zz-manual` boot mod; sound muted, `-Sound` = on at 5% for human tests and audio work), `shot`, `stop` (settings back), `prepare` (like start, no game), `restore`, `stop-tests`. Stays inside its own checkout; `prepare`/`start` wait for the game-run lock |
 | `worktree.ps1` | Parallel work (the `parallel-work` skill): `new -Name <n> -Branch <b> [-From origin/main] [-Task "goal"] [-Build] [-NoOpen]` (a git worktree in `..\FrightWorks-worktrees\<n>` with its own Play\, links to the main checkout's Disc\, texture_pack\, toolchain\, Dependencies and `local\` folders, and a Windows Terminal tab running `claude -n <n>`; `-Task` writes the goal into its TASK.md and the session starts on it), `list`, `open -Name <n> [-Continue]` (a new session that picks the task up from TASK.md, or `claude -c`; `-Name main` = the main checkout's coordinating session), `remove -Name <n>` (stops leftover dotnet build servers; refuses with uncommitted work or a running program; unlinks before deleting; keeps the branch) |
 | `kit-common.ps1` | Dot-sourced by the scripts: `Get-/Stop-CheckoutGames <root>` (only games started from that checkout) and the game-run lock (`Enter-/Exit-GameLock`, `%LOCALAPPDATA%\FrightWorks-kit\game-run.lock`): one checkout runs the game for a test at a time, builds run in parallel, the user's own game is never waited for or closed |
 | `build-translator.ps1` | Rebuild the translator after switching to/from a branch that changes `wiicompiled\translator` (then build without `-SkipTranslate`) |
 | `dol.py` | `callers` / `func` / `dis` / `name` on `game/main.dol` with MAP names (needs `capstone`) |
 | `overrides.py` | Active native overrides; `--effects`, `--xref` (`__GXData` fields only the replaced original maintained) |
 | `dff/` | Dolphin `.dff` FIFO log decoder, renders, pool/dynamic-array listers |
-| `audio/` | `crackle.py` click detector, `adpcm_ref.py` disc reference decode + bit-exact compare, `hip.py` HIP asset lister, `loopcheck.py` (is the output stuck repeating a short loop? `--scan W` over a long dump), `loop-capture.ps1` (boot a scene with the audio dump on, then `loopcheck.py`) |
+| `audio/` | `crackle.py` click detector, `adpcm_ref.py` disc reference decode + bit-exact compare, `hip.py` HIP asset lister, `loopcheck.py` (is the output stuck repeating a short loop? `--scan W` over a long dump), `loop-capture.ps1` (boot a scene with the audio dump on and sound at 5%, then `loopcheck.py`) |
 | `game/` | `levels.md` (scene IDs ↔ level names, which scenes to test what in) + `levels.py` (reads the table from `main.dol`), `mkhip.py` (spawn spot / move NPCs via the boot mod), `spots.txt`, `findpos.py`, `addrrefs.py`, `parsys.py`, `births.py` + `births-run.ps1`, `fogdump.ps1` + `fogsum.py` (i004 fog bank state from a running dev menu build), `fanfog-walk.py` (walk one particle list from a pool peek) |
 | `texhunt/` | HD texture work, see below |
 | `capture/` | `get-ffmpeg.ps1` + `ffbin.py` (find or fetch ffmpeg), `record.ps1` (video of the game window: ddagrab + topmost by default, `-Method gdigrab`), `flashcount.py` (one-frame flash counter), `triplet.py` |
@@ -55,8 +55,8 @@ setup when the game closes.
 
 | Tool | What |
 | --- | --- |
-| `look.ps1 -Boot e005 -Spot <spot> [-Hd \| -Pack <dir>] [-Extra <dir>] [-Interp N] [-KeepIntro]` | Open the game at a saved dev-menu spot (intro cutscene skipped) and leave it to the human |
-| `hunt.ps1 [-Boot h001] [-Pack <dir>] [-Branch b] [-TexLog]` | Texture-hunt session: dev menu + HD pack, every powerup, no hub intro, audio dump checked for a stuck loop |
+| `look.ps1 -Boot e005 -Spot <spot> [-Hd \| -Pack <dir>] [-Extra <dir>] [-Interp N] [-KeepIntro] [-Sound]` | Open the game at a saved dev-menu spot (intro cutscene skipped) and leave it to the human |
+| `hunt.ps1 [-Boot h001] [-Pack <dir>] [-Branch b] [-TexLog]` | Texture-hunt session: dev menu + HD pack, every powerup, no hub intro, sound at 5% (`play-patched.ps1`), audio dump checked for a stuck loop |
 | `spots-run.ps1 -Boot h001 -Ids a,b -Mode orig\|hd\|clean [-Tag x] [-Branch b]` | Screenshot each saved spot |
 | `cutout-shots.ps1`, `perf-cutout.ps1` | Shots / draw-call + frame-time numbers per cut-out mode (needs aurora's cut-out modes) |
 | `build-devmenu.ps1 -Branch b` | `Play\` = that branch with the dev menu (the patch on older branches), source put back afterwards |
