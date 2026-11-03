@@ -19,8 +19,11 @@ sealed class MainForm : Form
     Label discStatus = null!, dumpHelp = null!;
     PlankButton chooseDisc = null!;
     ThemedBar progress = null!, ffmpegBar = null!;
-    Label ffmpegStatus = null!, savesNote = null!;
-    PlankButton savesDefault = null!;
+    Label ffmpegStatus = null!, savesNote = null!, updateStatus = null!;
+    PlankButton savesDefault = null!, checkNow = null!;
+    readonly Updater updater;
+    bool updating;  // checking, or downloading / applying an update: Play waits
+    bool asking;    // a question (Xbox layout, update) is open: the other waits, so one never disables the other
     PlankButton ffmpegButton = null!;
     CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
     Action<bool>? showControlsTab;
@@ -37,6 +40,7 @@ sealed class MainForm : Form
         paths = DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
+        updater = new Updater(paths);
 
         Text = AppTitle;
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch { }
@@ -75,6 +79,7 @@ sealed class MainForm : Form
             if (shotDir != null) { TakeShots(shotDir); return; }
             gamepads.Start();
             padTimer.Start();
+            if (updater.CanCheck && updater.CheckAtStart) _ = CheckForUpdates(manual: false);
         };
     }
 
@@ -116,7 +121,9 @@ sealed class MainForm : Form
         switch (id)
         {
             case "play":
-                if (CanPlay()) Launch();
+                if (updating && updater.Installed)
+                    MessageBox.Show(this, "The launcher is updating the game. It starts again by itself when it's done.", AppTitle);
+                else if (CanPlay()) Launch();
                 else ShowBoard("extras");
                 break;
             case "exit":
@@ -377,6 +384,23 @@ sealed class MainForm : Form
         body.Controls.Add(saveRow);
         RefreshSaves();
 
+        body.Controls.Add(Title("Updates"));
+        updateStatus = Note("");
+        if (updater.CanCheck)
+        {
+            body.Controls.Add(UpdateBox());
+            body.Controls.Add(updateStatus);
+            checkNow = new PlankButton("Check now", async (_, _) => await CheckForUpdates(manual: true));
+            body.Controls.Add(checkNow);
+            ShowUpdateState(null);
+        }
+        else
+        {
+            updateStatus.Text = paths.DevTree ? "A source build doesn't look for updates."
+                                              : "This copy wasn't installed with the FrightWorks installer, so it can't look for updates.";
+            body.Controls.Add(updateStatus);
+        }
+
         body.Controls.Add(Title("About"));
         var version = typeof(MainForm).Assembly.GetName().Version;
         body.Controls.Add(Note("FrightWorks " + (version == null ? "" : "v" + version.ToString(3) + " ") + "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. Built on WiiCompiled (GPLv3) " +
@@ -470,6 +494,121 @@ sealed class MainForm : Form
             finally { p.Dispose(); }
         }
         return false;
+    }
+
+    // ----- Updates (Updater) -----
+    Control UpdateBox()
+    {
+        var box = new ThemedCombo();
+        box.Items.Add("Look for a new version at start");
+        box.Items.Add("Don't look");
+        box.SelectedIndex = updater.CheckAtStart ? 0 : 1;
+        box.SelectedIndexChanged += (_, _) => updater.SetCheckAtStart(box.SelectedIndex == 0);
+        return box;
+    }
+
+    void ShowUpdateState(string? text)
+    {
+        if (updateStatus == null) return;
+        updateStatus.Text = text ?? ("You have version " + updater.CurrentVersion + (updater.Installed
+            ? ". New versions download and install from the launcher; your saves and settings stay."
+            : ". This is the zip: a new version is a new download (the launcher tells you when one is out)."));
+    }
+
+    // At start (manual = false: quiet when there's nothing new, the check fails or the player skipped that version) or
+    // from Extras > Check now.
+    async Task CheckForUpdates(bool manual)
+    {
+        if (updating) return;
+        updating = true;
+        checkNow.Enabled = false;
+        ShowUpdateState("Looking for a new version...");
+        Updater.Found? found = null;
+        try { found = await updater.CheckAsync(CancellationToken.None); }
+        catch (Exception e)
+        {
+            ShowUpdateState("Couldn't look for a new version: " + e.Message);
+            if (manual) MessageBox.Show(this, "Couldn't look for a new version: " + e.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        updating = false;
+        if (IsDisposed) return;
+        checkNow.Enabled = true;
+        if (found == null)
+        {
+            if (updateStatus.Text.StartsWith("Looking")) ShowUpdateState(manual ? "You have the newest version, " + updater.CurrentVersion + "." : null);
+            return;
+        }
+        ShowUpdateState($"Version {found.Version} is out (you have {updater.CurrentVersion}).");
+        if (!manual && (updater.Skipped == found.Version || GameRunning())) return;  // the game has the screen: Extras says it
+        while (asking) await Task.Delay(300);
+        if (IsDisposed) return;
+        UpdateAnswer answer;
+        asking = true;
+        try { answer = AskUpdate(found); }
+        finally { asking = false; }
+        switch (answer)
+        {
+            case UpdateAnswer.Update when updater.Installed: await InstallUpdate(found); break;
+            case UpdateAnswer.Update: Process.Start(new ProcessStartInfo(found.PageUrl!) { UseShellExecute = true }); break;
+            case UpdateAnswer.Skip: updater.Skip(found.Version); break;
+        }
+    }
+
+    async Task InstallUpdate(Updater.Found found)
+    {
+        while (GameRunning())
+            if (MessageBox.Show(this, "Close the game first, then press OK to update.", AppTitle, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        updating = true;
+        checkNow.Enabled = false;
+        void Show(string text) { if (!IsDisposed) { scene.SetStatus(text, false); ShowUpdateState(text); } }
+        Show($"Downloading version {found.Version}...");
+        try
+        {
+            await updater.DownloadAsync(found, p => { try { BeginInvoke(() => Show($"Downloading version {found.Version}: {p}%")); } catch (InvalidOperationException) { } },
+                                        CancellationToken.None);
+            Show($"Installing version {found.Version}...");
+            updater.ApplyAndRestart(found);  // exits the launcher
+        }
+        catch (Exception e)
+        {
+            updating = false;
+            checkNow.Enabled = true;
+            RefreshDisc();
+            ShowUpdateState("The update failed: " + e.Message);
+            MessageBox.Show(this, "The update failed: " + e.Message + "\n\nThe game is unchanged; try again with Extras > Check now.", AppTitle,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    enum UpdateAnswer { Update, Later, Skip }
+
+    UpdateAnswer AskUpdate(Updater.Found found)
+    {
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        using var dialog = new Form
+        {
+            Text = "A new version of FrightWorks", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, BackColor = BoardBottom, Font = Body,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = S(20, 14, 20, 14), Icon = Icon,
+        };
+        var body = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = BoardBottom };
+        var title = Title($"FrightWorks {found.Version} is out");
+        title.Margin = S(0, 0, 0, 6);
+        body.Controls.Add(title);
+        body.Controls.Add(Note($"You have version {updater.CurrentVersion}. " + (updater.Installed
+            ? "Updating downloads the new version and restarts the launcher; your saves, settings and mods stay."
+            : "This is the zip, which can't update itself: download the new version from its release page and unzip it over this folder.")));
+        body.Controls.Add(Note("Extras > Updates turns this question off."));
+        var row = Row();
+        row.Margin = S(0, 8, 0, 0);
+        var answer = UpdateAnswer.Later;
+        row.Controls.Add(new PlankButton(updater.Installed ? "Update now" : "Open the download page", (_, _) => { answer = UpdateAnswer.Update; dialog.Close(); }, primary: true));
+        row.Controls.Add(new PlankButton("Not now", (_, _) => { answer = UpdateAnswer.Later; dialog.Close(); }));
+        row.Controls.Add(new PlankButton("Skip this version", (_, _) => { answer = UpdateAnswer.Skip; dialog.Close(); }));
+        body.Controls.Add(row);
+        dialog.Controls.Add(body);
+        dialog.ShowDialog(this);
+        return answer;
     }
 
     // The hubs' holiday events ([game] holiday): the game checks the date when a hub loads. "auto" uses today's date,
@@ -732,9 +871,12 @@ sealed class MainForm : Form
             : "Connected: " + string.Join(", ", pads.Select(p => $"{p.Name} ({Gamepads.Describe(p.Kind)})"));
         // An Xbox pad and no layout chosen yet (key absent): ask once per launcher start.
         var xbox = pads.FirstOrDefault(p => p.Kind == Gamepads.Kind.Xbox);
-        if (xbox == null || askedLayout || new GameConfig(configPath).Get("controller", "layout") != null) return;
+        if (xbox == null || askedLayout || asking || new GameConfig(configPath).Get("controller", "layout") != null) return;
         askedLayout = true;
-        bool? original = AskXboxLayout(xbox.Name);
+        bool? original;
+        asking = true;
+        try { original = AskXboxLayout(xbox.Name); }
+        finally { asking = false; }
         if (original == null) return;
         SaveLayout(original.Value);
         layoutBox.SelectedIndex = original.Value ? 1 : 0;

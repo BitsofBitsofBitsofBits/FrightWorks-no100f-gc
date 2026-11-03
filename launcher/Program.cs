@@ -5,6 +5,11 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // Velopack (the installed game): during install, update and uninstall it starts this exe with its own arguments,
+        // and Run() handles them and exits. Nothing to do there: the player's files live outside the install folder, so
+        // an uninstall leaves them (DataPaths). In the zip and the dev tree this does nothing.
+        Velopack.VelopackApp.Build().Run();
+
         // Headless: "--extract <image> <outdir>" writes <outdir>\extract.log; exit 0 ok, 2 holes, 3 wrong disc, 1 error.
         if (args.Length == 3 && args[0] == "--extract")
         {

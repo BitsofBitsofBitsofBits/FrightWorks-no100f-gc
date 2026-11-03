@@ -17,6 +17,10 @@
     <ApplicationIcon>frightworks.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The installer and updates (Velopack): keep in step with $VpkVersion in tools\package-scooby.ps1. -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="art\mansion.png" LogicalName="ScoobyReMasked.mansion.png" />
     <EmbeddedResource Include="art\mansion.json" LogicalName="ScoobyReMasked.mansion.json" />
     <EmbeddedResource Include="art\dog.png" LogicalName="ScoobyReMasked.dog.png" />

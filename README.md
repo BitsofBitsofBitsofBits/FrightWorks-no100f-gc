@@ -44,16 +44,33 @@ are left unchanged.
 Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** as `.iso`,
 `.gcm` or `.ciso`.
 
-1. Unzip the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest).
-2. Open `FrightWorks.exe` and press **Play**. The first time, it asks for your disc image (**Extras**).
+1. From the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest), run
+   `FrightWorks-win-Setup.exe` (installs for your Windows user, no admin rights; Start menu and desktop shortcuts), or
+   unzip `FrightWorks-<version>.zip` anywhere if you'd rather keep everything in one folder.
+2. Open **FrightWorks** and press **Play**. The first time, it asks for your disc image (**Extras**).
+
+Windows may warn that the setup is from an unknown publisher (it isn't code-signed): **More info** > **Run anyway**.
+
+**Updates.** The installed game looks for a new version when the launcher starts and asks before updating (**Extras >
+Updates** turns that off, or checks right away). Updating keeps your saves and settings. The zip can't update itself:
+its launcher tells you when a new release is out; unzip it over the old folder.
+
+**Where your files are**
+
+| | Installed | Zip |
+| --- | --- | --- |
+| Saves | `Saved Games\FrightWorks` | `data\UserData\Saves` |
+| Settings, mods, logs, game files from your disc | `%LOCALAPPDATA%\FrightWorks-Data` | `data\UserData`, `data\Disc` |
+| Screenshots (**F2**) / videos (**F3**) | `Pictures\FrightWorks` / `Videos\FrightWorks` | `Screenshots` / `Videos` beside the launcher |
+
+**Extras > Folders** opens these, can put the saves in another folder (say, one that's backed up), and copies saves and
+settings over from an earlier FrightWorks or Refrightened folder. Uninstalling (Windows Settings > Apps) removes the
+program only; your saves and settings stay.
 
 Settings are in the launcher (**Settings**) and in game (**F10**, or the controller's **Back** / **Select** button, as
 long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
-screenshot to the `Screenshots` folder and **F1** opens this page in your browser. The title screen and main menu list
-these keys in the corner. Saves, settings
-and mods live in `data\UserData`; unzip a new release over the old folder to update. **Extras > Folders** opens them,
-can put the saves in another folder (say, one that's backed up), and copies saves and settings over from an earlier
-FrightWorks or Refrightened folder.
+screenshot and **F1** opens this page in your browser. The title screen and main menu list
+these keys in the corner.
 
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
 free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
@@ -61,8 +78,10 @@ free camera, god mode, power-ups on/off, texture finder), **F3** video recording
 build in the corner of the game. The build (version,
 branch and commit of a test build) is also on the F10 **About** page and at the top of `console.log`.
 
-Coming from Scooby-Doo: Refrightened? Unzip FrightWorks next to your old folder. On first start, the launcher offers
-to copy your saves, settings, controls, mods and game files over; the old folder is left as it is.
+Coming from an earlier zip of FrightWorks or from Scooby-Doo: Refrightened? On first start, the launcher looks for the
+old folder (beside the new zip, or for the installed game in Downloads, Desktop and Documents) and offers to copy your
+saves, settings, controls, mods and game files over; the old folder is left as it is. If it isn't found, use **Extras >
+Folders > Copy from an earlier version**.
 
 **Version numbers** continue from Scooby-Doo: Refrightened. Its last release, v1.0.2, is the commit FrightWorks split
 off from, so FrightWorks starts at v1.0.3.
@@ -98,7 +117,7 @@ Windows 10/11 x64 with Python 3 and Git. The build downloads its own toolchain i
 powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1
 & "launcher\publish\FrightWorks.exe" --extract "C:\path\to\game.iso" Disc\DATA
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1
-powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
+powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip          # or -Installer (Velopack)
 ```
 
 The game builds to `Play\`; the package goes to `dist\`. The first build downloads dogerki's HD texture pack
