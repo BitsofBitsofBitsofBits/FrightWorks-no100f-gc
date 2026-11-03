@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $launcher = "$root\launcher\publish\FrightWorks.exe"
 $VpkVersion = '1.2.161'  # keep in step with the Velopack PackageReference in the launcher's .csproj
-$RepoUrl = 'https://github.com/Loneranger419/FrightWorks-no100f-gc'
+$RepoUrl = 'https://github.com/FrightWorks/FrightWorks-no100f'
 if ($Build) { & "$PSScriptRoot\build-no100f.ps1" -SkipTools; & "$PSScriptRoot\build-launcher.ps1" }
 elseif (-not (Test-Path -LiteralPath $launcher)) { & "$PSScriptRoot\build-launcher.ps1" }
 

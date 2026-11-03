@@ -9,7 +9,7 @@ namespace ScoobyReMasked;
 sealed class MainForm : Form
 {
     internal const string GameExe = DataPaths.GameExe, AppTitle = "FrightWorks: Night of 100 Frights";
-    const string ProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+    const string ProjectUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
 
     readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
@@ -33,11 +33,14 @@ sealed class MainForm : Form
     readonly List<(PadMapping.Row Row, Label Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
 
-    public MainForm(string? shotDir = null)
+    public MainForm(string? shotDir = null, DataPaths? dataPaths = null)
     {
         this.shotDir = shotDir;
         K = DeviceDpi / 96f;
-        paths = DataPaths.Find();
+        AutoScaleDimensions = new SizeF(DeviceDpi, DeviceDpi);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        SuspendLayout();
+        paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
         updater = new Updater(paths);
@@ -65,6 +68,7 @@ sealed class MainForm : Form
         AddBoard("extras", "Extras", BuildExtras);
         PlaceBoards();
         RefreshDisc();
+        ResumeLayout(true);
 
         KeyDown += (_, e) =>
         {
@@ -81,6 +85,21 @@ sealed class MainForm : Form
             padTimer.Start();
             if (updater.CanCheck && updater.CheckAtStart) _ = CheckForUpdates(manual: false);
         };
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        K = e.DeviceDpiNew / 96f;
+        base.OnDpiChanged(e);
+        PlaceBoards();
+        Invalidate(true);
+    }
+
+    protected override void OnLayout(LayoutEventArgs levent)
+    {
+        base.OnLayout(levent);
+        // A DPI transition scales children after their Resize events; place the boards at the final size.
+        if (scene != null) PlaceBoards();
     }
 
     // Headless visual check (--shots <dir>): the main screen, a lightning flash and every board, then exit.
@@ -139,15 +158,19 @@ sealed class MainForm : Form
     void AddBoard(string id, string title, Action<FlowLayoutPanel> build)
     {
         var board = new Board(title, CloseBoards);
+        board.SuspendLayout();
         var flow = new FlowLayoutPanel
         {
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown,
             WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty,
         };
+        flow.SuspendLayout();
         build(flow);
         board.Body.Controls.Add(flow);
         boards[id] = board;
         scene.Controls.Add(board);
+        flow.ResumeLayout(true);
+        board.ResumeLayout(true);
     }
 
     void PlaceBoards()
@@ -160,10 +183,17 @@ sealed class MainForm : Form
 
     void ShowBoard(string id)
     {
-        foreach (var (key, b) in boards) b.Visible = key == id;
-        boards[id].BringToFront();
-        scene.ActiveSign = id;
         RefreshDisc();
+        scene.SuspendLayout();
+        try
+        {
+            foreach (var (key, b) in boards) b.Visible = key == id;
+            boards[id].BringToFront();
+            boards[id].PerformLayout();
+            boards[id].Body.PerformLayout();
+            scene.ActiveSign = id;
+        }
+        finally { scene.ResumeLayout(true); }
     }
 
     void CloseBoards()
@@ -173,11 +203,16 @@ sealed class MainForm : Form
         scene.Focus();
     }
 
-    static FlowLayoutPanel Row() => new() { AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent, WrapContents = true };
+    static FlowLayoutPanel Row() => new()
+    {
+        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Margin = Padding.Empty, BackColor = Color.Transparent, WrapContents = true,
+    };
 
     static TableLayoutPanel Table() => new()
     {
-        AutoSize = true, ColumnCount = 2, BackColor = Color.Transparent, Margin = S(0, 2, 0, 6),
+        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        ColumnCount = 2, BackColor = Color.Transparent, Margin = S(0, 2, 0, 6),
     };
 
     void OpenFolder(string path)
@@ -190,15 +225,20 @@ sealed class MainForm : Form
     void BuildSettings(FlowLayoutPanel body)
     {
         var tabs = Row();
-        var display = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty };
-        var controls = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty, Visible = false };
+        var display = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty };
+        var controls = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty, Visible = false };
         PlankButton displayTab = null!, controlsTab = null!;
         void Select(bool showControls)
         {
-            display.Visible = !showControls;
-            controls.Visible = showControls;
-            displayTab.Selected = !showControls;
-            controlsTab.Selected = showControls;
+            body.SuspendLayout();
+            try
+            {
+                display.Visible = !showControls;
+                controls.Visible = showControls;
+                displayTab.Selected = !showControls;
+                controlsTab.Selected = showControls;
+            }
+            finally { body.ResumeLayout(true); }
         }
         displayTab = new PlankButton("Display", (_, _) => Select(false)) { Selected = true };
         controlsTab = new PlankButton("Controls", (_, _) => Select(true));
@@ -307,11 +347,9 @@ sealed class MainForm : Form
             {
                 var box = new CheckBox
                 {
-                    Text = Path.GetFileName(d), Checked = !File.Exists(Path.Combine(d, "disabled")), AutoSize = true,
-                    ForeColor = Cream, BackColor = Field, Font = Body, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand, Margin = S(0, 3, 0, 3),
+                    Text = Path.GetFileName(d), Checked = !File.Exists(Path.Combine(d, "disabled")), AutoSize = true, AutoEllipsis = true,
+                    ForeColor = Cream, BackColor = Field, Font = Body, FlatStyle = FlatStyle.Standard, Cursor = Cursors.Hand, Margin = S(0, 3, 0, 3),
                 };
-                box.FlatAppearance.BorderColor = Lime;
-                box.FlatAppearance.CheckedBackColor = Purple;
                 var dir = d;
                 box.CheckedChanged += (_, _) =>
                 {

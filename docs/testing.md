@@ -28,6 +28,14 @@ tools). Video capture needs ffmpeg on PATH, or run `tools\debug\capture\get-ffmp
 
 ## 2. Build and play
 
+For widescreen edge-culling regressions, the focused `no100f_model_culling_tests` CMake/CTest target checks sphere
+classification and the linked-model visibility gate. The GIHE78 rev 1 repair applies only to the main camera's
+widescreen entity pre-cull: a character's root atomic can be a small hat rather than a bound for the whole character.
+The entity stays eligible while a visible linked model intersects the frustum; individual atomic culling, shadow
+cameras and Original 4:3 retain their existing behavior. For a visual check, use an isolated `f001` dock session and
+move the developer camera across both horizontal edges, checking that the groundskeeper's body does not disappear
+when his hat leaves view, then repeat in Original 4:3. Do not change or load an existing save for this check.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools                  # full build
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # faster: native code only
@@ -211,6 +219,18 @@ useful:
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
 - **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>`
   draws every page to `<dir>\<Page>.png`.
+- **Isolated launcher layout regression** (Windows, .NET 8 SDK or newer):
+  `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
+  This builds the launcher and checks Settings/Display, Controls, Mods and Extras at normal, minimum and smaller
+  window sizes, reopening and growing/shrinking layouts, long mod names, nested scrolling, dropdown widths, keyboard
+  button activation, transparent button corners (normal, hover, pressed and disabled, including the gradient-backed
+  close button), and preservation of custom HDR and unknown config values. It creates a disposable portable
+  fixture and page screenshots only in the output directory; it never starts the game or uses the player's data.
+  It also moves its own test window across existing monitors and back, logging actual DPI transitions without
+  changing display settings. An optional trailing zero-based monitor index selects the starting monitor.
+  Additional font/size stress at 125%, 150%, 200% and back to 100% is **simulated**, separate from those native
+  transitions. Also check first-open painting interactively. The rounded board region should only change on resize, not on ordinary layout,
+  and page content should scroll vertically without hiding dropdown arrows or producing horizontal scrollbars.
 - **Screen recording**: `tools\debug\capture\record.ps1`.
 
 ## 8. Looking at the game's code and data

@@ -214,6 +214,11 @@ set_source_files_properties(${MKW_PPC_SEMANTIC_RUNTIME_SOURCES} PROPERTIES
     COMPILE_OPTIONS "${MKW_TRANSLATED_PPC_FP_OPTIONS}")
 # The NSMBW sampling profiler includes <windows.h>; keep it out of the unity batches.
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/guest_profiler.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+# Map guards must reject guest NaN/Inf before constructing backdrop geometry.
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/hle/no100f_map_backdrop.cpp" PROPERTIES
+    SKIP_UNITY_BUILD_INCLUSION ON
+    SKIP_PRECOMPILE_HEADERS ON
+    COMPILE_OPTIONS "-fno-finite-math-only")
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/no100f_resources.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 # Match the optimization policy of the translated callers as well as their FP policy.
 set_property(SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/ppc_quantized.cpp" APPEND PROPERTY
@@ -434,6 +439,11 @@ target_include_directories(no100f_window_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_compile_features(no100f_window_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_window_tests COMMAND no100f_window_tests)
 
+add_executable(no100f_camera_aspect_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_camera_aspect_tests.cpp")
+target_include_directories(no100f_camera_aspect_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_camera_aspect_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_camera_aspect_tests COMMAND no100f_camera_aspect_tests)
+
 add_executable(no100f_ax_address_sync_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_ax_address_sync_tests.cpp")
 target_compile_features(no100f_ax_address_sync_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_ax_address_sync_tests COMMAND no100f_ax_address_sync_tests)
@@ -447,6 +457,15 @@ else()
     target_compile_options(no100f_devmenu_state_tests PRIVATE -UNDEBUG)
 endif()
 add_test(NAME no100f_devmenu_state_tests COMMAND no100f_devmenu_state_tests)
+add_executable(no100f_model_culling_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_model_culling_tests.cpp")
+target_include_directories(no100f_model_culling_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_model_culling_tests PRIVATE cxx_std_17)
+if(MSVC)
+    target_compile_options(no100f_model_culling_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(no100f_model_culling_tests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME no100f_model_culling_tests COMMAND no100f_model_culling_tests)
 add_executable(no100f_resources_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_resources_tests.cpp")
 target_include_directories(no100f_resources_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_resources_tests PRIVATE cxx_std_17)
@@ -460,6 +479,17 @@ add_executable(no100f_xbox_layout_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_
 target_include_directories(no100f_xbox_layout_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_xbox_layout_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_xbox_layout_tests COMMAND no100f_xbox_layout_tests)
+
+add_executable(no100f_title_backdrop_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_title_backdrop_tests.cpp")
+target_include_directories(no100f_title_backdrop_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_title_backdrop_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_title_backdrop_tests COMMAND no100f_title_backdrop_tests)
+
+add_executable(no100f_map_backdrop_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_map_backdrop_tests.cpp")
+target_include_directories(no100f_map_backdrop_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_map_backdrop_tests PRIVATE cxx_std_17)
+target_compile_options(no100f_map_backdrop_tests PRIVATE -ffast-math -fno-finite-math-only)
+add_test(NAME no100f_map_backdrop_tests COMMAND no100f_map_backdrop_tests)
 
 # The input expression engine is self-contained, so it can be exercised without
 # linking the runtime or SDL.

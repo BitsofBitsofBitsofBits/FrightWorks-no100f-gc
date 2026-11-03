@@ -13,7 +13,7 @@ namespace ScoobyReMasked;
 // replaces GitHub for testing an update (docs/testing.md).
 sealed class Updater
 {
-    public const string RepoUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+    public const string RepoUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
     public const string SourceVariable = "FRIGHTWORKS_UPDATE_SOURCE";
 
     // A newer version: Info for the installed game, PageUrl (the release page) for the zip.

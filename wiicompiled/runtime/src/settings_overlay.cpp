@@ -1752,7 +1752,7 @@ void DrawExitPrompt() {
 
 // F1 opens the project page. F2 saves the next game frame (without the overlay) as a PNG in
 // RuntimeConfigFile::CaptureDirectory: Pictures\FrightWorks when installed, else Screenshots\ beside the launcher.
-constexpr const char* kProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+constexpr const char* kProjectUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
 std::string g_noticeText;
 Clock::time_point g_noticeUntil{};
 std::filesystem::path g_lastScreenshot;
