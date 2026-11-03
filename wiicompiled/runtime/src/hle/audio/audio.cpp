@@ -5,6 +5,7 @@
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
 #include "audio_backend.h"
+#include "audio_poll_clock.h"
 #include "ax_dsp.h"
 #include "music_attenuation.h"
 #include "runtime_log.h"
@@ -553,26 +554,14 @@ namespace {
 
 // Wall-clock delta since the previous poll, from whichever pump ran it. All
 // pumps live on the guest thread, so the one thread_local cursor is shared and
-// no interval is ever counted twice or dropped between them.
+// no interval is ever counted twice or dropped between them. Work is bounded by
+// kMaxBlocksPerTick, not by discarding elapsed time.
 int64_t ConsumeAudioPollDeltaMicros()
 {
     using Clock = std::chrono::steady_clock;
     static thread_local Clock::time_point lastPoll = Clock::now();
 
-    const Clock::time_point now = Clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastPoll).count();
-    lastPoll = now;
-
-    if (elapsed < 0) {
-        elapsed = 0;
-    }
-
-    // Cap the catch-up interval after a debugger pause or host stall; backlog drains via
-    // kMaxBlocksPerTick per pass. Never return early on a zero delta: two scheduler passes
-    // can land in the same microsecond and the backlog still needs servicing.
-    constexpr int64_t kMaxPollDeltaMicros = 100'000;
-    // microseconds::rep is long long; int64_t is long on LP64 Linux/Android.
-    return std::min<int64_t>(elapsed, kMaxPollDeltaMicros);
+    return AudioHleInternal::ConsumePollDeltaMicros(lastPoll, Clock::now());
 }
 
 } // namespace
