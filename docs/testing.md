@@ -145,7 +145,9 @@ or use `-CleanBuild`.
 
 Every build knows what it was built from: the F10 **About** page, the DEV mark and the first lines of `console.log`
 show the version and, for a test build, `branch@commit` plus `+xxxx` when it had uncommitted changes (a hash of
-them, so two builds with different edits differ).
+them, so two builds with different edits differ). The launcher shows the same ID bottom left. It gets it at build time
+from the portable CMake in `toolchain\`, so a launcher built before the first game build says "unknown build":
+rebuild it once the toolchain is there.
 
 ## 6. Other diagnostic patches
 
