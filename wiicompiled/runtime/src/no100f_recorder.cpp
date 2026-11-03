@@ -57,16 +57,19 @@ namespace {
 
 std::mutex g_noticeMutex;
 std::string g_notice;
+std::filesystem::path g_noticeFile;
 
-void Notice(std::string text) {
+void Notice(std::string text, std::filesystem::path file = {}) {
     std::lock_guard<std::mutex> lock(g_noticeMutex);
     g_notice = std::move(text);
+    g_noticeFile = std::move(file);
 }
 
 } // namespace
 
-std::string TakeNotice() {
+std::string TakeNotice(std::filesystem::path& file) {
     std::lock_guard<std::mutex> lock(g_noticeMutex);
+    file = std::exchange(g_noticeFile, std::filesystem::path());
     return std::exchange(g_notice, std::string());
 }
 
@@ -513,7 +516,8 @@ void Writer(std::shared_ptr<Session> session) {
     RT_LOG(RT_TAG_RUNTIME) << "recording " << (saved ? "saved: " : "NOT saved: ") << Utf8(saved ? mp4 : video) << " ("
                            << written << " frames, " << dropped << " dropped)" << std::endl;
     Notice(saved ? "Video saved: Videos\\" + Utf8(mp4.filename())
-                 : "Video not saved: " + (failure.empty() ? "see Videos\\" + Utf8(logPath.filename()) : failure));
+                 : "Video not saved: " + (failure.empty() ? "see Videos\\" + Utf8(logPath.filename()) : failure),
+           saved ? mp4 : failure.empty() ? logPath : std::filesystem::path());
     g_saving = false;
     SetEvent(g_idle);
 }
