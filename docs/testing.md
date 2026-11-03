@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   launcher at the folder.
   ```powershell
   tools\package-scooby.ps1 -Installer -Version 1.0.5-test.1 -Feed dist\testfeed -NoDownload
-  dist\testfeed\FrightWorks-win-Setup.exe --silent       # installs and starts the launcher; close it
+  dist\testfeed\FrightWorks-win-Setup.exe --silent       # installs only (--silent doesn't start the launcher)
   tools\package-scooby.ps1 -Installer -Version 1.0.5-test.2 -Feed dist\testfeed -NoDownload   # makes the delta too
   $env:FRIGHTWORKS_UPDATE_SOURCE = "$PWD\dist\testfeed"
   & "$env:LOCALAPPDATA\FrightWorks\current\FrightWorks.exe"   # asks to update to test.2
