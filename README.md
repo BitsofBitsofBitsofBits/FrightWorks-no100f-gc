@@ -53,14 +53,6 @@ screenshot to the `Screenshots` folder and **F1** opens this page in your browse
 these keys in the corner. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
-The GameCube audio runtime preserves a pending complete voice-address reset when subsequent loop, end,
-current or looping updates arrive before synchronization. This avoids dropping the reset during movie
-restarts; ordinary partial updates retain the original SDK behavior. This is a targeted synchronization
-correction, not a guarantee that every intermittent audio issue is resolved.
-
-Window-interaction stalls are separate: GameCube audio is generated on the game thread, and the
-original Bink code can switch to silence when its audio-servicing timeout expires. The address
-synchronization correction does not make audio continue through a blocked window event loop.
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
 free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
 [ffmpeg](https://ffmpeg.org): the launcher offers to download it when you turn the tools on) and a **DEV** mark with the
@@ -113,12 +105,6 @@ into `texture_pack\ScoobyHD` (not in git) and adds the HD Creeper frames from `t
 copies the pack and the button prompt icons into `Play\UserData`; the icons need Python and ImageMagick.
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
-
-Audio polling retains elapsed host time, including
-fractional microseconds, rather than dropping time after a 100 ms stall. Catch-up work remains
-bounded per tick, and the original Bink safety thresholds are unchanged. This timing correction
-does not guarantee that every historical audio failure is resolved. After changing the native AX
-overrides, rebuild without `-SkipTranslate` so translated calls use the corrected setters.
 
 ## Credits
 
