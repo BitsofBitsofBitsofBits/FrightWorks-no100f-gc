@@ -19,7 +19,7 @@ $mods = Join-Path $root 'Play\UserData\mods'
 $mod = Join-Path $mods 'zz-hunt'
 $dump = Join-Path $root 'autotest\audio-loop\hunt.raw'
 New-Item -ItemType Directory -Force (Split-Path $dump) | Out-Null
-$packLink = Join-Path $root 'Play\UserData\texture_replacements\ScoobyHD'
+$packLink = Join-Path $root 'Play\texture_replacements\ScoobyHD'
 
 if (@(Get-CheckoutGames $root).Count) { throw 'the game is running from this checkout; close it first' }
 if ($Branch) {

@@ -4,10 +4,12 @@
 
 // F3 video recording, part of the developer tools ([game] dev_tools; the dev menu passes F3 on). The frames come from
 // the renderer (aurora_set_video_capture), so only the game and the DEV stamp are in the video, or the F8/F10 menus too
-// with [game] capture_overlay; ffmpeg encodes them to Videos\ beside the launcher (like Screenshots\), with a .txt next
+// with [game] capture_overlay; ffmpeg encodes them to RuntimeConfigFile::CaptureDirectory (Videos\ beside the launcher
+// in a portable game, Videos\FrightWorks when installed; like the screenshots), with a .txt next
 // to each video: build, picture, Scooby's position at the start and the end, the [video] and [game] settings.
 // [game] record_audio (default on) adds the game's own sound. Windows only; ffmpeg comes from PATH, beside the game or
-// launcher (the launcher downloads it there) or tools\debug\local\ffmpeg; it is never shipped.
+// launcher, the user data folder (the launcher downloads it to one of these) or tools\debug\local\ffmpeg; it is never
+// shipped.
 namespace no100f_recorder {
 // F3: start a recording, or stop the one running. Game thread.
 void Toggle() noexcept;

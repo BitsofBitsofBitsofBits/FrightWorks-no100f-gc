@@ -11,8 +11,9 @@ static class FfmpegSetup
     const string ZipName = "ffmpeg-master-latest-win64-gpl.zip";
     const string BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/";
 
-    // PATH, then beside the game, then beside the launcher (release) / the debug kit's copy (dev tree).
-    public static string? Find(string root, string play)
+    // PATH, then beside the game, then beside the launcher (portable release) / the debug kit's copy (dev tree), then
+    // the user data folder (installed).
+    public static string? Find(DataPaths paths)
     {
         foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
@@ -23,20 +24,22 @@ static class FfmpegSetup
             }
             catch (ArgumentException) { }  // a PATH entry with bad characters
         }
-        foreach (var b in new[] { play, root })
+        foreach (var b in new[] { paths.Game, paths.Root, paths.UserData })
             foreach (var rel in new[] { "ffmpeg.exe", @"ffmpeg\bin\ffmpeg.exe", @"tools\debug\local\ffmpeg\bin\ffmpeg.exe" })
                 if (File.Exists(Path.Combine(b, rel))) return Path.Combine(b, rel);
         return null;
     }
 
-    // Where Download puts it: <root>\ffmpeg in a release, tools\debug\local\ffmpeg in the dev tree (with ffprobe, which
-    // the debug kit's scripts use too).
-    public static string InstallDir(string root, bool release) =>
-        release ? Path.Combine(root, "ffmpeg") : Path.Combine(root, "tools", "debug", "local", "ffmpeg");
+    // Where Download puts it: tools\debug\local\ffmpeg in the dev tree (with ffprobe, which the debug kit's scripts use
+    // too), <root>\ffmpeg in a portable release, UserData\ffmpeg when installed (the program folder is replaced on update).
+    public static string InstallDir(DataPaths paths) =>
+        paths.DevTree ? Path.Combine(paths.Root, "tools", "debug", "local", "ffmpeg")
+        : paths.Portable ? Path.Combine(paths.Root, "ffmpeg") : Path.Combine(paths.UserData, "ffmpeg");
 
-    public static async Task<string> Download(string root, bool release, IProgress<(long done, long total)> progress, CancellationToken cancel)
+    public static async Task<string> Download(DataPaths paths, IProgress<(long done, long total)> progress, CancellationToken cancel)
     {
-        var target = InstallDir(root, release);
+        var target = InstallDir(paths);
+        bool release = !paths.DevTree;
         var tmp = Path.Combine(Path.GetTempPath(), "frightworks-ffmpeg-" + Environment.ProcessId);
         Directory.CreateDirectory(tmp);
         try

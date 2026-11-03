@@ -62,7 +62,7 @@ starts the game with it on; on a branch from before it was built in, it applies 
 source when the game closes (`-SkipTranslate` only if the last build was this branch;
 `-CleanBuild` rebuilds `Play\` without it afterwards; `-Keep` to work on the menu, then re-export the patch and `-Remove`).
 `-HdTextures` plays with the HD texture pack like the release does (`texture_pack\ScoobyHD` linked into
-`Play\UserData\texture_replacements`, `texture_replacements = true`; both put back afterwards). The user's config has HD off,
+`Play\texture_replacements` if a build hasn't staged it there, `texture_replacements = true`; both put back afterwards). The user's config has HD off,
 so a bug seen in the release but not in a dev build may be an HD texture: retry with `-HdTextures`.
 
 **F3** in game (same gate, `no100f_recorder.cpp`): video to `Play\Videos\*.mp4` + `.txt` (build, start/end position,

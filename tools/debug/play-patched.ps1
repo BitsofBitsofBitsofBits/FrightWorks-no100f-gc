@@ -10,7 +10,7 @@
 # Steps: git apply each tools\debug\patches\<name>.patch, build, start Play\FrightWorks Game.exe, wait for it to
 # exit, then git apply -R the patches this run applied. A patch that was already applied is left as found. A patch whose
 # files were edited while the game ran no longer reverses cleanly: it is left applied and the script says so.
-# -HdTextures links texture_pack\ScoobyHD into Play\UserData\texture_replacements and sets [video] texture_replacements =
+# -HdTextures links texture_pack\ScoobyHD into Play\texture_replacements (if not staged there) and sets [video] texture_replacements =
 # true for this run only; both go back when the game closes (only that Config line: settings changed in game stay).
 # Removal also runs on a build failure or Ctrl+C. If the window is closed instead, run with -Remove.
 #   ... play-patched.ps1 -Remove [-Patch ...]  # just take the patches out
@@ -39,7 +39,7 @@ function Git-Apply([string[]]$GitArgs) {
 }
 
 $config = Join-Path $root 'Play\UserData\Config.toml'
-$packLink = Join-Path $root 'Play\UserData\texture_replacements\ScoobyHD'
+$packLink = Join-Path $root 'Play\texture_replacements\ScoobyHD'
 $hdLineRe = '(?m)^texture_replacements[ \t]*=[^\r\n]*'
 
 # Sets [video] texture_replacements to $Line ($null = remove the line); returns the line it replaced ($null if none).

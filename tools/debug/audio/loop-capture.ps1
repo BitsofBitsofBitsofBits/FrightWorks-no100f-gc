@@ -12,7 +12,7 @@ Set-Location $root
 $play = Join-Path $root 'Play'
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'
 $cfg = Join-Path $play 'UserData\Config.toml'
-$link = Join-Path $play 'UserData\texture_replacements\ScoobyHD'
+$link = Join-Path $play 'texture_replacements\ScoobyHD'
 $out = Join-Path $root 'autotest\audio-loop'
 New-Item -ItemType Directory -Force $out | Out-Null
 $dump = Join-Path $out "$Label.raw"

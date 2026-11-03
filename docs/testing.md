@@ -35,15 +35,23 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
 ```
 
 - Every build also puts the HD texture pack (`texture_pack\ScoobyHD`, downloaded from the Internet Archive by the first
-  build, plus `tools\hd-pack-additions`) and the button prompt icons into `Play\UserData`,
-  like a release (`tools\stage-userdata.ps1`; only what changed is copied or rebuilt). The icons need Python and
-  ImageMagick; without them the build warns and goes on.
+  build, plus `tools\hd-pack-additions`) and the button prompt icons into `Play\texture_replacements\ScoobyHD` and
+  `Play\button_icons`, beside the game like a release (`tools\stage-assets.ps1`; only what changed is copied or
+  rebuilt; old copies in `Play\UserData` are removed). The game indexes `UserData\texture_replacements` and mods
+  first, so those win over the built-in pack. The icons need Python and ImageMagick; without them the build warns and
+  goes on.
 - `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).
 - `-SkipTranslate` reuses the translated game code. Only use it when you changed native code (`wiicompiled/runtime`,
   `wiicompiled/aurora-main`). **Do a full build** (no `-SkipTranslate`) when you add or remove a native override
   (`PPC_NATIVE_OVERRIDE`), switch to a branch that does, or after any build with a debug patch that adds overrides
   (the dev menu does). Otherwise the game stops at boot with "Fatal Error" and PC=0.
-- Settings, saves and mods are in `Play\UserData\` (`Config.toml`; in game **F10**, **F11** fullscreen).
+- Settings, saves and mods are in `Play\UserData\` (`Config.toml`; in game **F10**, **F11** fullscreen):
+  `Play\portable.txt` makes the dev tree portable, like the zip. Without that marker the game uses the installed
+  layout: `%LOCALAPPDATA%\FrightWorks-Data` (settings, logs, cache, disc, mods), `Saved Games\FrightWorks`,
+  `Pictures\FrightWorks` / `Videos\FrightWorks` for F2 / F3. `[paths] saves_dir` in Config.toml moves the saves in
+  either layout (the launcher's **Extras > Folders** sets it). To test the installed layout without an installer,
+  copy `Play\`'s exe, DLLs, `dsp_coef.bin`, `button_icons` and `texture_replacements` into a folder named `data`
+  (no `portable.txt`), with `FrightWorks.exe` beside it.
 - Packaging a release zip: `tools\package-scooby.ps1 -Build -Zip` → `dist\`. It also needs ImageMagick (`magick`) on
   PATH and the HD texture pack in `texture_pack\ScoobyHD` (not in git).
 
@@ -168,7 +176,7 @@ useful:
   `PLUS` (Start), `ONE` (X), `TWO` (Y), `MINUS` (Z), `UP`/`DOWN`/`LEFT`/`RIGHT`.
 - **Button prompts**: `$env:BUTTON_ICONS = 'xbox'` (or `playstation`, `nintendo`) forces a prompt set; the game puts
   the prompt picture together from one icon per pad button, following player 1's mapping. The icons are built by
-  `python tools\make-button-icons.py --out Play\UserData\button_icons` (needs ImageMagick and the HD pack).
+  `python tools\make-button-icons.py --out Play\button_icons` (needs ImageMagick and the HD pack).
 - **Audio capture**: `$env:AUDIO_RAW_DUMP = 'C:\temp\out.raw'` writes the mixed output; analysis tools in
   `tools\debug\audio\`.
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.

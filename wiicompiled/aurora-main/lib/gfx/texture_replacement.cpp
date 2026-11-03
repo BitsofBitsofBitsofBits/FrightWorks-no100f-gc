@@ -74,7 +74,8 @@ struct ReplacementIndexEntry {
 };
 
 absl::flat_hash_map<RuntimeTextureKey, ReplacementIndexEntry> s_replacementIndex;
-// <UserData>/button_icons (tools/make-button-icons.py): the game's button picture, an atlas of the GameCube A, B, X
+// button_icons beside the game (<resourcesPath>, tools/make-button-icons.py; shipped, so never in the user's
+// folder): the game's button picture, an atlas of the GameCube A, B, X
 // and Y buttons, put together from one icon per pad button of the controller in use, so the prompts follow the
 // player's button mapping. Looked up before everything else.
 constexpr const char* kButtonIconFamilies[] = {"xbox", "playstation", "nintendo"};
@@ -573,9 +574,9 @@ void evict_replacement_cache_if_needed() noexcept {
 
 // Button prompts follow the controller whether or not texture replacements (the HD pack) are on.
 // button_icons/layout.txt: "atlas <file name> <width> <height>", "icon <size>", then "<A|B|X|Y> <left> <top>".
-static void index_button_icons(const std::filesystem::path& userPath) noexcept {
+static void index_button_icons(const std::filesystem::path& resourcesPath) noexcept {
   s_buttonIconLayout = {};
-  s_buttonIconRoot = userPath / "button_icons";
+  s_buttonIconRoot = resourcesPath / "button_icons";
   std::ifstream file(s_buttonIconRoot / "layout.txt");
   ButtonIconLayout layout;
   bool atlas = false;
@@ -614,7 +615,11 @@ static void index_button_icons(const std::filesystem::path& userPath) noexcept {
 
 void build_index() noexcept {
   auto userPath = fs_path_from_string(g_config.userPath);
-  index_button_icons(userPath);
+  // Files the game ships (button_icons, the built-in HD pack in texture_replacements) sit beside it, not in the user's
+  // folder: an installed game's program folder is replaced on every update.
+  const auto resourcesPath = g_config.resourcesPath != nullptr ? fs_path_from_string(g_config.resourcesPath)
+                                                               : std::filesystem::path{};
+  index_button_icons(resourcesPath);
   if (!g_config.allowTextureReplacements) {
     return;
   }
@@ -635,6 +640,7 @@ void build_index() noexcept {
   // New Super Paper Bros. mods: <UserData>/mods/<name>/textures (skipped when the mod folder holds a file
   // named "disabled"). The user's own folder is indexed first and try_emplace keeps the first entry, so
   // it wins over mods; among mods the alphabetically later one wins, like their disc file overrides.
+  // The game's own texture_replacements (the built-in HD pack) come last, so anything of the user's wins.
   std::vector<std::filesystem::path> roots{s_replacementRoot};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(userPath / "mods", ec)) {
@@ -645,6 +651,9 @@ void build_index() noexcept {
   }
   std::sort(mods.begin(), mods.end(), std::greater<>());
   roots.insert(roots.end(), mods.begin(), mods.end());
+  if (!resourcesPath.empty() && std::filesystem::is_directory(resourcesPath / "texture_replacements", ec)) {
+    roots.push_back(resourcesPath / "texture_replacements");
+  }
   ec.clear();
   for (const auto& root : roots)
   for (std::filesystem::recursive_directory_iterator it(
@@ -683,7 +692,7 @@ void build_index() noexcept {
     s_replacementIndex.try_emplace(*parsed, path);
   }
 
-  Log.info("Indexed {} texture replacements from {} folder(s) (texture_replacements + mods)", s_replacementIndex.size(), roots.size());
+  Log.info("Indexed {} texture replacements from {} folder(s) (texture_replacements + mods + the game's own)", s_replacementIndex.size(), roots.size());
 }
 
 const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {

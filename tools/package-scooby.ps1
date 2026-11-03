@@ -21,8 +21,8 @@ function Stage([string]$to) {
         if (Test-Path "$root\Play\$f") { Copy-Item "$root\Play\$f" "$to\data" -Force }
     }
     # Built-in HD texture pack (texture_pack\ScoobyHD, kept out of git) and the button prompt icons: the same files
-    # every Play\ build gets.
-    & "$PSScriptRoot\stage-userdata.ps1" -UserData "$to\data\UserData" -Required
+    # every Play\ build gets, beside the game (program files, not the player's).
+    & "$PSScriptRoot\stage-assets.ps1" -GameDir "$to\data" -Required
 }
 
 $dist = "$root\dist\FrightWorks"

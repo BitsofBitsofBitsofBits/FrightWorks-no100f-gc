@@ -1747,8 +1747,8 @@ void DrawExitPrompt() {
     ImGui::EndPopup();
 }
 
-// F1 opens the project page. F2 saves the next game frame (without the overlay) as a PNG in a
-// Screenshots folder beside the launcher: above data/ in a release, else the game exe's folder.
+// F1 opens the project page. F2 saves the next game frame (without the overlay) as a PNG in
+// RuntimeConfigFile::CaptureDirectory: Pictures\FrightWorks when installed, else Screenshots\ beside the launcher.
 constexpr const char* kProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
 std::string g_noticeText;
 Clock::time_point g_noticeUntil{};
@@ -1798,7 +1798,8 @@ void DrawAboutPage() {
     const std::array<std::pair<const char*, const char*>, 7> keys = {{
         {"F10 / Esc / Back", "Settings (this board) / back to the game (Back = the controller's Back / Select)"},
         {"F11", "Fullscreen or window"},
-        {"F2", "Screenshot (Screenshots folder beside the launcher)"},
+        {"F2", RuntimeConfigFile::PortableRootDirectory() ? "Screenshot (Screenshots folder beside the launcher)"
+                                                           : "Screenshot (Pictures\\FrightWorks)"},
         {"F1", "Project page in your browser"},
         {"F8", "Dev menu (with developer tools on in the launcher)"},
         {"F3", "Start / stop a video (with developer tools on; Videos folder, needs ffmpeg)"},
@@ -1958,14 +1959,7 @@ bool IsToggleKey(const SDL_Event& event, SDL_Scancode code) {
 }
 
 void TakeScreenshot() {
-    const auto exeDir = RuntimeConfigFile::ExecutableDirectory();
-    if (!exeDir) {
-        ShowNotice("Screenshot failed: game folder not found");
-        return;
-    }
-    std::filesystem::path root = *exeDir;
-    if (root.filename() == "data") root = root.parent_path();
-    const std::filesystem::path folder = root / "Screenshots";
+    const std::filesystem::path folder = RuntimeConfigFile::CaptureDirectory(false);
     std::error_code ec;
     std::filesystem::create_directories(folder, ec);
     const std::time_t now = std::time(nullptr);
@@ -2034,7 +2028,8 @@ void DrawDevMark() {
 
 void DrawNotice() {
     if (const int result = aurora_take_screenshot_result(); result != 0) {
-        ShowNotice(result > 0 ? "Screenshot saved: Screenshots\\" + RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename())
+        ShowNotice(result > 0 ? "Screenshot saved: " + RuntimeConfigFile::CaptureDirectoryLabel(false) +
+                                    RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename())
                               : std::string("Screenshot failed (see the log)"));
     }
     if (std::string recorder = no100f_recorder::TakeNotice(); !recorder.empty()) {
@@ -2482,9 +2477,10 @@ void DrawHotkeyGuide() {
     if (g_hotkeyGuideAlpha <= 0.0f) return;
 
     const bool dev = no100f_devmenu::Enabled();
-    // Keycaps from button_icons/keyboard/<key>.png (staged with the controller icons); gold names without them.
+    // Keycaps from button_icons/keyboard/<key>.png beside the game (shipped with the controller icons); gold names
+    // without them.
     static const std::string keyFolder = RuntimeConfigFile::PathToUtf8(
-        RuntimeConfigFile::ApplicationDataDirectory() / "button_icons" / "keyboard");
+        RuntimeConfigFile::ExecutableDirectory().value_or(std::filesystem::path{}) / "button_icons" / "keyboard");
     const auto key = [](const char* name, const char* what, std::initializer_list<const char*> files) {
         GuideRow row{name, what};
         for (const char* file : files) row.icons.push_back(LoadButtonIcon(keyFolder, file));

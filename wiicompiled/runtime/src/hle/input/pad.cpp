@@ -240,7 +240,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     // between "connected" and "no controller" every time the overlay toggles.
     WiiRemoteInput::HideRemotesFromPad(statuses, PAD_CHANMAX);
 
-    // On-screen button prompts follow the first connected controller and player 1's button mapping (UserData/button_icons,
+    // On-screen button prompts follow the first connected controller and player 1's button mapping (button_icons beside the game,
     // tools/make-button-icons.py); with the Xbox layout, gameplay swaps B and X.
     static int family = -1;
     if (static unsigned n = 0; n++ % 30 == 0) {

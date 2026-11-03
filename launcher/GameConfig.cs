@@ -1,6 +1,6 @@
 ﻿namespace ScoobyReMasked;
 
-// Play\UserData\Config.toml, edited the way the runtime's WriteSetting does: line by line, inside the key's
+// Config.toml in the user data folder (DataPaths), edited the way the runtime's WriteSetting does: line by line, inside the key's
 // section, comments and unknown keys kept. shortcut: '#' inside a quoted value counts as a comment start;
 // no key the launcher writes holds one.
 sealed class GameConfig
@@ -46,7 +46,9 @@ sealed class GameConfig
         if (i < 0) return null;
         string v = Strip(lines[i]);
         v = v[(v.IndexOf('=') + 1)..].Trim();
-        return v.Length >= 2 && (v[0] == '"' || v[0] == '\'') && v[^1] == v[0] ? v[1..^1] : v;
+        if (v.Length >= 2 && v[0] == '\'' && v[^1] == '\'') return v[1..^1];
+        if (v.Length >= 2 && v[0] == '"' && v[^1] == '"') return v[1..^1].Replace("\\\\", "\0").Replace("\\\"", "\"").Replace("\0", "\\");
+        return v;
     }
 
     public void Set(string section, string key, string raw)
@@ -72,10 +74,11 @@ sealed class GameConfig
         if (i >= 0) lines.RemoveAt(i);
     }
 
-    // TOML basic string; the values the launcher writes (paths, key names) hold no quotes or backslashes to escape
-    // except Windows paths, which use the literal form.
+    // A TOML string: Windows paths in the literal form ('C:\...'), unless they hold a ' (C:\Users\O'Brien), which
+    // needs the basic form with its backslashes escaped; key names and the like as basic strings.
     public void SetString(string section, string key, string value) =>
-        Set(section, key, value.Contains('\\') ? "'" + value.Replace("'", "") + "'" : "\"" + value.Replace("\"", "") + "\"");
+        Set(section, key, value.Contains('\\') && !value.Contains('\'') ? "'" + value + "'"
+                          : "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"");
 
     public void Save()
     {

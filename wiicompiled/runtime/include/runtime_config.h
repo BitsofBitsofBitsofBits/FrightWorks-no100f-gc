@@ -100,6 +100,8 @@ struct RuntimeUserConfig {
     std::optional<std::string> discordClientId;
     std::optional<std::string> nandRoot;
     std::optional<std::string> dvdRoot;
+    // [paths] saves_dir: where the saves go instead of the default (SavesDirectory).
+    std::optional<std::string> savesDir;
     // The one canonical Retro Rewind installation, owned and updated by the frontend. Setup records
     // it here instead of copying the pack, so an asset-only update is visible on the next launch.
     std::optional<std::string> retroRewindRoot;
@@ -263,15 +265,6 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
 #endif
 }
 
-// NSMBW: the Windows downloads up to 0.0.7 shipped this marker; such a folder is an old release,
-// whose UserData moves to Documents\MarioWiiSaveData (AdoptEarlierUserData), not a portable root.
-inline bool IsReleasedNsmbwMarker(const std::filesystem::path& marker) {
-    std::ifstream input(marker);
-    std::string line;
-    std::getline(input, line);
-    return line.rfind("Keep this file: settings, saves and caches stay in the UserData", 0) == 0;
-}
-
 // The portable root this executable lives under, or nullopt for a normal installation. The answer
 // cannot change while the process runs, so it is resolved exactly once: every user-state path
 // derives from it and they must not disagree with each other.
@@ -284,8 +277,7 @@ inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
         std::filesystem::path current = *executableDirectory;
         for (int level = 0; level <= kPortableSearchDepth; ++level) {
             std::error_code ec;
-            if (std::filesystem::is_regular_file(current / kPortableMarkerFileName, ec) &&
-                !IsReleasedNsmbwMarker(current / kPortableMarkerFileName)) {
+            if (std::filesystem::is_regular_file(current / kPortableMarkerFileName, ec)) {
                 return current;
             }
             const auto parent = current.parent_path();
@@ -300,57 +292,22 @@ inline const std::optional<std::filesystem::path>& PortableRootDirectory() {
 }
 
 #ifdef _WIN32
-// NSMBW: on Windows the settings (with the game folder), saves and caches live in
-// Documents\MarioWiiSaveData, so a new version extracted anywhere carries on where the last left off.
-inline constexpr const wchar_t* kDocumentsDataDirectoryName = L"MarioWiiSaveData";
+// FrightWorks without the portable marker is the installed game (Velopack, in %LOCALAPPDATA%\FrightWorks, which an
+// update replaces and an uninstall deletes, so nothing of the player's may live there): settings, logs, caches, the
+// extracted disc and mods go to %LOCALAPPDATA%\FrightWorks-Data, saves to Saved Games\FrightWorks (SavesDirectory),
+// F2 / F3 to Pictures\FrightWorks and Videos\FrightWorks (CaptureDirectory). launcher/DataPaths.cs uses the same
+// folders.
+inline constexpr const wchar_t* kInstalledDataDirectoryName = L"FrightWorks-Data";
+inline constexpr const wchar_t* kInstalledUserFolderName = L"FrightWorks";
 
-// The first start with an empty MarioWiiSaveData takes over the newest earlier data: a portable
-// UserData beside this executable or beside another version's NSMBW.exe in the folder above it
-// (each release extracts to its own NSMBW-x.y.z-windows-x64 folder), or %LOCALAPPDATA%\WiiCompiled.
-// Logs stay behind.
-inline void AdoptEarlierUserData(const std::filesystem::path& target) {
-    std::error_code ec;
-    if (std::filesystem::exists(target / kConfigFileName, ec)) {
-        return;
+inline std::optional<std::filesystem::path> KnownFolder(REFKNOWNFOLDERID id) {
+    PWSTR raw = nullptr;
+    std::optional<std::filesystem::path> path;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_CREATE, nullptr, &raw)) && raw) {
+        path = std::filesystem::path(raw);
     }
-    std::vector<std::filesystem::path> candidates;
-    if (const auto executableDirectory = ExecutableDirectory()) {
-        candidates.push_back(*executableDirectory / kPortableUserDataDirectoryName);
-        const auto parent = executableDirectory->parent_path();
-        for (std::filesystem::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec)) {
-            if (it->is_directory(ec) && it->path() != *executableDirectory) {
-                candidates.push_back(it->path() / kPortableUserDataDirectoryName);
-            }
-        }
-    }
-    PWSTR localPath = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localPath)) && localPath) {
-        candidates.push_back(std::filesystem::path(localPath) / kApplicationDirectoryName);
-        CoTaskMemFree(localPath);
-    }
-    std::optional<std::filesystem::path> newest;
-    std::filesystem::file_time_type newestTime{};
-    for (const auto& candidate : candidates) {
-        std::error_code timeError;
-        const auto time = std::filesystem::last_write_time(candidate / kConfigFileName, timeError);
-        if (!timeError && (!newest || time > newestTime)) {
-            newest = candidate;
-            newestTime = time;
-        }
-    }
-    if (!newest) {
-        return;
-    }
-    std::filesystem::create_directories(target, ec);
-    for (std::filesystem::directory_iterator it(*newest, ec), end; !ec && it != end; it.increment(ec)) {
-        if (it->path().filename() == "Logs") {
-            continue;
-        }
-        std::error_code copyError;
-        std::filesystem::copy(it->path(), target / it->path().filename(),
-                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing,
-                              copyError);
-    }
+    CoTaskMemFree(raw);
+    return path;
 }
 #endif
 
@@ -359,25 +316,9 @@ inline std::filesystem::path ApplicationDataDirectory() {
         return *portableRoot / kPortableUserDataDirectoryName;
     }
 #ifdef _WIN32
-    static const std::optional<std::filesystem::path> documents = []() -> std::optional<std::filesystem::path> {
-        PWSTR documentsPath = nullptr;
-        if (FAILED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &documentsPath)) ||
-            documentsPath == nullptr) {
-            return std::nullopt;
-        }
-        const std::filesystem::path directory = std::filesystem::path(documentsPath) / kDocumentsDataDirectoryName;
-        CoTaskMemFree(documentsPath);
-        AdoptEarlierUserData(directory);
-        return directory;
-    }();
-    if (documents) {
-        return *documents;
-    }
-    PWSTR rawPath = nullptr;
-    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &rawPath)) && rawPath) {
-        const std::filesystem::path directory = std::filesystem::path(rawPath) / kApplicationDirectoryName;
-        CoTaskMemFree(rawPath);
-        return directory;
+    static const std::optional<std::filesystem::path> localAppData = KnownFolder(FOLDERID_LocalAppData);
+    if (localAppData) {
+        return *localAppData / kInstalledDataDirectoryName;
     }
 #elif defined(__APPLE__) || defined(__ANDROID__)
     return RuntimePlatform::ApplicationDataDirectory(kApplicationDirectoryName);
@@ -681,6 +622,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
 
     config.nandRoot = FindConfigValue<std::string>(document, "paths", "nand_root");
     config.dvdRoot = FindConfigValue<std::string>(document, "paths", "dvd_root");
+    config.savesDir = FindConfigValue<std::string>(document, "paths", "saves_dir");
     config.retroRewindRoot = FindConfigValue<std::string>(document, "paths", "retro_rewind_root");
     if (auto roots = FindConfigValue<std::vector<std::string>>(document, "paths", "overlay_roots")) {
         for (auto& root : *roots) {
@@ -1331,8 +1273,51 @@ inline std::filesystem::path ResolvedDvdRoot() {
     return configured.empty() ? std::filesystem::path{} : ResolveRelativeToConfig(configured);
 }
 
+// The saves (MemoryCard, and NAND for Wii games): [paths] saves_dir when set (absolute, or relative to Config.toml's
+// folder; the launcher's Extras > Folders sets it), else Saved Games\FrightWorks when installed, else UserData\Saves.
+inline std::filesystem::path SavesDirectory() {
+    const std::string configured = Get().savesDir.value_or("");
+    if (!configured.empty()) {
+        return ResolveRelativeToConfig(configured);
+    }
+#ifdef _WIN32
+    if (!PortableRootDirectory()) {
+        if (const auto savedGames = KnownFolder(FOLDERID_SavedGames)) {
+            return *savedGames / kInstalledUserFolderName;
+        }
+    }
+#endif
+    return ApplicationDataDirectory() / "Saves";
+}
+
+// F2 screenshots and F3 videos. Installed: Pictures\FrightWorks and Videos\FrightWorks. Portable: Screenshots\ and
+// Videos\ beside the launcher (the folder above data\ in a release, the game's own folder in a source build).
+inline std::filesystem::path CaptureDirectory(bool videos) {
+#ifdef _WIN32
+    if (!PortableRootDirectory()) {
+        if (const auto folder = KnownFolder(videos ? FOLDERID_Videos : FOLDERID_Pictures)) {
+            return *folder / kInstalledUserFolderName;
+        }
+    }
+#endif
+    const auto executableDirectory = ExecutableDirectory();
+    std::filesystem::path root = executableDirectory ? *executableDirectory : std::filesystem::current_path();
+    if (root.filename() == "data") {
+        root = root.parent_path();
+    }
+    return root / (videos ? "Videos" : "Screenshots");
+}
+
+// CaptureDirectory as the game's notices name it, ending in a backslash (Videos\, Pictures\FrightWorks\, ...).
+inline std::string CaptureDirectoryLabel(bool videos) {
+    if (PortableRootDirectory()) {
+        return videos ? "Videos\\" : "Screenshots\\";
+    }
+    return videos ? "Videos\\FrightWorks\\" : "Pictures\\FrightWorks\\";
+}
+
 // NSMBW: a game folder for this run only, not saved (a "game" folder beside the program, so each
-// install plays its own game while they all share Documents\MarioWiiSaveData).
+// install plays its own game with its own saves).
 inline void UseDvdRootForThisRun(const std::filesystem::path& path) {
     Mutable().dvdRoot = PathToUtf8(path);
 }
