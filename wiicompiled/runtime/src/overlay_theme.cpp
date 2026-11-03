@@ -209,7 +209,9 @@ void Board(ImDrawList* list, ImVec2 min, ImVec2 max, float rounding) {
                   Col(Colour::Lime, 0.35f), std::max(0.0f, rounding - Px(3)), 0, Px(1));
 }
 
-bool Plank(const char* label, bool selected, ImVec2 size) {
+namespace {
+// `lettering` 0 = ink without an outline, for the light planks.
+bool DrawPlank(const char* label, ImVec2 size, ImU32 top, ImU32 bottom, ImU32 edge, ImU32 lettering) {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     if (window->SkipItems) return false;
     const ImGuiID id = window->GetID(label);
@@ -222,8 +224,6 @@ bool Plank(const char* label, bool selected, ImVec2 size) {
     const bool disabled = (ImGui::GetItemFlags() & ImGuiItemFlags_Disabled) != 0;
 
     ImDrawList* list = window->DrawList;
-    ImU32 top = selected ? Col(Colour::Lime) : Col(Colour::Purple);
-    ImU32 bottom = selected ? Col(Colour::LimeDeep) : Col(Colour::PurpleDeep);
     if (hovered && !disabled) {
         top = Lighten(top, 0.2f);
         bottom = Lighten(bottom, 0.2f);
@@ -242,7 +242,7 @@ bool Plank(const char* label, bool selected, ImVec2 size) {
         const float y = a.y + (b.y - a.y) * static_cast<float>(i) / 3.0f;
         list->AddLine(ImVec2(a.x + Px(10), y), ImVec2(b.x - Px(10), y + Px(1)), Col(Colour::Ink, 0.16f), Px(1));
     }
-    list->AddRect(a, b, Col(Colour::Ink), rounding, 0, Px(2));
+    list->AddRect(a, b, edge, rounding, 0, Px(2));
     // Nails.
     const float nail = Px(2.2f);
     for (const float x : {a.x + Px(9), b.x - Px(9)})
@@ -253,13 +253,23 @@ bool Plank(const char* label, bool selected, ImVec2 size) {
     const ImVec2 textSize = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, label, end);
     const ImVec2 textPos(std::round((a.x + b.x - textSize.x) * 0.5f), std::round((a.y + b.y - textSize.y) * 0.5f + Px(1)));
     std::string text(label, end);
-    if (selected) {
+    if (lettering == 0) {
         list->AddText(font, font->FontSize, textPos, Col(Colour::Ink), text.c_str());
     } else {
-        OutlinedText(list, font, textPos, Col(Colour::Cream), Col(Colour::Ink), Px(2), text.c_str());
+        OutlinedText(list, font, textPos, lettering, Col(Colour::Ink), Px(2), text.c_str());
     }
     ImGui::RenderNavCursor(bb, id);
     return pressed;
+}
+} // namespace
+
+bool Plank(const char* label, bool selected, ImVec2 size) {
+    return selected ? DrawPlank(label, size, Col(Colour::Lime), Col(Colour::LimeDeep), Col(Colour::Ink), 0)
+                    : DrawPlank(label, size, Col(Colour::Purple), Col(Colour::PurpleDeep), Col(Colour::Ink), Col(Colour::Cream));
+}
+
+bool ActionPlank(const char* label, Colour colour, ImVec2 size) {
+    return DrawPlank(label, size, Col(Colour::BoardTop), Col(Colour::Field), Col(colour), Col(colour));
 }
 
 bool Toggle(const char* label, bool* value) {

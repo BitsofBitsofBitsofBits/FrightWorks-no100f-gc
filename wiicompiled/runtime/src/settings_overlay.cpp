@@ -1865,8 +1865,8 @@ void CopyScreenshotToClipboard(std::filesystem::path file, void* owner) {
 #endif
 }
 
-// The settings board (F10): pages on the left as planks, the page's settings on the right, Resume / Quit at the top
-// and the keys + build ID at the bottom. With a controller: A opens a page, B goes back, LB / RB change the page.
+// The settings board (F10): on the left a column of Resume, the pages as planks and Quit Game, the page's settings on
+// the right, and the keys + build ID at the bottom. With a controller: A opens a page, B goes back, LB / RB change the page.
 enum class Page { Video, Audio, Controls, LanPlay, About };
 struct PageItem {
     Page page;
@@ -2002,7 +2002,7 @@ void DrawTopBar() {
         const ImVec2 p1(p0.x + ImGui::GetWindowWidth(), p0.y + ImGui::GetWindowHeight());
         Board(list, p0, p1, Px(16));
 
-        // Header: the title sign on the left, Resume / Quit on the right.
+        // Header: the title sign.
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImFont* title = Title();
         OutlinedText(list, title, origin, Col(Colour::Lime), Col(Colour::Ink), Px(3), "FRIGHTWORKS");
@@ -2011,16 +2011,7 @@ void DrawTopBar() {
         OutlinedText(list, heading,
                      ImVec2(origin.x + titleWidth + Px(16), origin.y + title->FontSize - heading->FontSize - Px(2)),
                      Col(Colour::Cream), Col(Colour::Ink), Px(2), "SETTINGS");
-        const ImVec2 plank(Px(150), Px(42));
         const float right = ImGui::GetWindowContentRegionMax().x;
-        ImGui::SetCursorPos(ImVec2(right - plank.x * 2 - Px(10), ImGui::GetCursorPosY()));
-        if (Plank("RESUME##resume", true, plank)) {
-            SetTopBarVisible(false);
-        }
-        ImGui::SameLine(0.0f, Px(10));
-        if (Plank("QUIT GAME##quit", false, plank)) {
-            g_exitPromptOpen = true;
-        }
         ImGui::SetCursorScreenPos(ImVec2(origin.x, std::max(origin.y + title->FontSize, ImGui::GetCursorScreenPos().y) + Px(14)));
 
         // Pages + content.
@@ -2041,15 +2032,24 @@ void DrawTopBar() {
                 ImGui::SetNavCursorVisible(true);
             }
         }
-        // Focus on the page panel itself = B coming out of the page, or the D-pad going there: it belongs to the tab.
+        // Focus on the page panel itself = B coming out of the page: it goes to the page's tab.
         const bool leftPage = g.NavId == ImGui::GetID("##page");
         if (leftPage) g_tabFocusPending = true;
         if (onTabs && !leftPage && ImGui::IsKeyPressed(ImGuiKey_NavGamepadCancel, false)) SetTopBarVisible(false);
+        // The column shrinks with the board, so all of it fits the smallest window.
+        const ImVec2 spacing = ImGui::GetStyle().ItemSpacing;
+        const float actionGap = Px(8);  // on top of the spacing: sets Resume and Quit Game apart from the pages
+        const float rows = static_cast<float>(kPages.size());
+        const float fit = std::min(1.0f, bodyHeight / (rows * Px(46) + 2 * Px(36) + (rows + 1) * spacing.y + 2 * actionGap));
+        const ImVec2 actionSize(tabsWidth, Px(36) * fit);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing.x, spacing.y * fit));
         ImGui::BeginGroup();
+        if (ActionPlank("RESUME##resume", Colour::Good, actionSize)) SetTopBarVisible(false);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + actionGap * fit);
         for (const auto& item : kPages) {
             std::string label = item.label;
             std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c) { return std::toupper(c); });
-            if (Plank(label.c_str(), g_page == item.page, ImVec2(tabsWidth, Px(46)))) {
+            if (Plank(label.c_str(), g_page == item.page, ImVec2(tabsWidth, Px(46) * fit))) {
                 g_page = item.page;
                 if (g.NavActivatePressedId == ImGui::GetItemID()) g_pageFocusPending = true;
             }
@@ -2064,7 +2064,10 @@ void DrawTopBar() {
                 }
             }
         }
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + actionGap * fit);
+        if (ActionPlank("QUIT GAME##quit", Colour::Warn, actionSize)) g_exitPromptOpen = true;
         ImGui::EndGroup();
+        ImGui::PopStyleVar();
         ImGui::SameLine(0.0f, Px(18));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Vec(Colour::Field, 0.72f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, Px(12));
@@ -2086,6 +2089,7 @@ void DrawTopBar() {
             DrawPage(g_page);
             ImGui::PopID();
         }
+        g.NextItemData.ItemFlags |= ImGuiItemFlags_NoNav;  // the panel itself is no stop for the D-pad: only A goes in
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();

@@ -33,6 +33,8 @@ void Board(ImDrawList* list, ImVec2 min, ImVec2 max, float rounding);
 
 // A wooden plank button (tabs and big actions): lime when selected/primary, purple otherwise. Gamepad-navigable.
 bool Plank(const char* label, bool selected, ImVec2 size);
+// A plank that does something rather than choosing a page: dark, with its edge and lettering in `colour`.
+bool ActionPlank(const char* label, Colour colour, ImVec2 size);
 // A switch for a setting: the knob on the right = on. Returns true when clicked (and flips *value).
 bool Toggle(const char* label, bool* value);
 // A section title in Luckiest Guy with a lime rule under it.
