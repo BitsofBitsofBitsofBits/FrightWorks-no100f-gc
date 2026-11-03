@@ -13,6 +13,7 @@ param([string]$Boot = 'h001', [string]$Pack = '', [switch]$SkipTranslate, [strin
 $ErrorActionPreference = 'Stop'
 $env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
+. (Join-Path $PSScriptRoot '..\kit-common.ps1')  # Get-CheckoutGames: only this checkout's game
 Set-Location $root
 $mods = Join-Path $root 'Play\UserData\mods'
 $mod = Join-Path $mods 'zz-hunt'
@@ -20,7 +21,7 @@ $dump = Join-Path $root 'autotest\audio-loop\hunt.raw'
 New-Item -ItemType Directory -Force (Split-Path $dump) | Out-Null
 $packLink = Join-Path $root 'Play\UserData\texture_replacements\ScoobyHD'
 
-if (Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
+if (@(Get-CheckoutGames $root).Count) { throw 'the game is running from this checkout; close it first' }
 if ($Branch) {
     # build-devmenu.ps1 builds the branch and comes back to this one (the kit may not exist on that branch)
     "hunt      building $Branch + dev menu"

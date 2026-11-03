@@ -10,6 +10,7 @@ if ($Extra) { $Extra = (Resolve-Path $Extra).Path }
 $ErrorActionPreference = 'Stop'
 $env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
+. (Join-Path $PSScriptRoot '..\kit-common.ps1')  # Get-CheckoutGames: only this checkout's game
 Set-Location $root
 $play = Join-Path $root 'Play'
 $exe = Join-Path $play 'FrightWorks Game.exe'
@@ -24,7 +25,7 @@ $errLog = Join-Path $root 'autotest\texhunt\look-stderr.log'
 New-Item -ItemType Directory -Force (Split-Path $errLog) | Out-Null
 $start = [DateTime]::Now
 
-if (Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
+if (@(Get-CheckoutGames $root).Count) { throw 'the game is running from this checkout; close it first' }
 try {
     # boot mod + test config from manual-session prepare (saves your settings first), then the HD/fps switches
     $msArgs = @('-ExecutionPolicy', 'Bypass', '-File', $ms, 'prepare', '-Boot', $Boot)

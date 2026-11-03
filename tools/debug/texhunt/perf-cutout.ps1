@@ -6,6 +6,7 @@ param([Parameter(Mandatory)][string]$Label, [string]$Boot = 'h001', [string]$Spo
 $ErrorActionPreference = 'Stop'
 $env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
+. (Join-Path $PSScriptRoot '..\kit-common.ps1')  # Get-/Stop-CheckoutGames: only this checkout's game
 Set-Location $root
 $cmd = Join-Path $root 'Play\devmenu.txt'
 $log = Join-Path $root 'Play\devmenu.log'
@@ -47,8 +48,8 @@ try {
         }
     }
 } finally {
-    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
-    if (-not $look.WaitForExit(30000)) { Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
+    Get-CheckoutGames $root | ForEach-Object { (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).CloseMainWindow() | Out-Null }
+    if (-not $look.WaitForExit(30000)) { Stop-CheckoutGames $root; $look.WaitForExit(15000) | Out-Null }
     Get-Content $out | Select-String 'restored' | ForEach-Object Line
     Remove-Item $out -ErrorAction SilentlyContinue
 }

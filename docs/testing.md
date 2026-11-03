@@ -193,6 +193,27 @@ useful:
 - Smoke test: boot `h001` and one level you changed something in.
 - Open it as a draft and say plainly what you tested and what you didn't.
 
+## 10. Working on several branches at once
+
+Each task can get its own git worktree: a second folder with its own branch, build and `Play\`, sharing the big
+read-only folders (disc files, HD pack, toolchain) with the main checkout through links.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer
+powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 list
+powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name installer
+```
+
+- `new` creates `..\FrightWorks-worktrees\<name>` from `origin/main` (or checks out an existing branch) and opens a
+  Windows Terminal tab there running Claude Code (`-NoOpen` to skip; `open -Name <name>` later). Its first build must be
+  a full one: `toolsuild-no100f.ps1` without `-SkipTools`/`-SkipTranslate` (or `new ... -Build`).
+- `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
+- Builds can run side by side. Game runs take turns: `manual-session prepare/start` and `play-patched.ps1` wait while
+  another checkout's test has the game open. Scripts only close the game they started from their own checkout; your
+  own game (launcher or `Play\` in the main checkout) is never closed by a test.
+- Never delete a worktree folder by hand: `Disc`, `texture_pack`, `toolchain` there are links, and some delete tools
+  follow links into the main checkout. `remove` unlinks them first; it refuses while the worktree has uncommitted work.
+
 ## Claude Code skills
 
 `.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
