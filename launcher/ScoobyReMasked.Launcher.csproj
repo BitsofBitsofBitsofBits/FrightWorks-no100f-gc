@@ -8,7 +8,7 @@
     <AssemblyName>FrightWorks</AssemblyName>
     <RootNamespace>ScoobyReMasked</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.0.4</Version>
+    <Version>1.1.0</Version>
     <Product>FrightWorks: Night of 100 Frights</Product>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
