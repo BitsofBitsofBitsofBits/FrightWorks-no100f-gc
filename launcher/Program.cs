@@ -38,9 +38,9 @@ static class Program
         {
             var paths = DataPaths.Find();
             if (paths.Portable) paths.RemoveOldShippedCopies();
-            DataImport.OfferAtStart(paths, MainForm.AppTitle);
         }
-        var form = new MainForm(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null);
+        var form = new MainForm(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null,
+            enableServices: !args.Contains("--selftest"));
         if (args.Contains("--selftest")) { form.Shown += (_, _) => form.Close(); }
         Application.Run(form);
         return 0;

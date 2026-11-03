@@ -211,7 +211,37 @@ useful:
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
 - **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>`
   draws every page to `<dir>\<Page>.png`.
+- **Isolated launcher controller regression** (Windows, .NET 8 SDK or newer):
+  `dotnet run --project tools\launcher-controller-tests\LauncherControllerTests.csproj -c Release -- autotest\launcher-controller`.
+  This uses disposable portable data and injected SDL-shaped input, without loading SDL, polling a real controller,
+  starting the game, or reading/writing the player's settings. It checks neutral-to-arm, deadzone and repeat timing,
+  simulated foreground/modal ownership and hotplug transitions, mansion signs, settings tabs and dropdown
+  apply/cancel, Mods checkboxes, Extras scrolling, numeric/slider adjustments, confirmation defaults, file/folder
+  selection, text entry and preservation of unrelated config. Screenshots remain in the output directory.
+  Real hardware, SDL device drivers, actual foreground-window transitions and game-controller handover still
+  require a separately allocated human-controller session; automated state assertions are not hardware verification.
 - **Screen recording**: `tools\debug\capture\record.ps1`.
+
+### Launcher controller conventions
+
+The launcher uses SDL's physical button positions, independently of the game's Controls mappings:
+D-pad or left stick navigates; **South** (Xbox A / PlayStation Cross / Nintendo B) confirms; **East**
+(Xbox B / Circle / Nintendo A) backs out. Bumpers move to the previous/next control (including tabs and buttons
+beside lists); right stick scrolls the focused list's page. Movement repeats after 400 ms, then every 100 ms;
+sticks use a roughly 49% deadzone. Confirm/back never repeat. Return all navigation inputs to neutral after
+connecting, switching windows/dialogs, or returning from the game.
+
+Select a dropdown with South, choose with up/down, then South applies or East cancels without changing the setting.
+Dialogs and disc/save/import browsers use accessible WinForms controls rather than desktop-wide synthetic input.
+In browsers, South opens the selected folder/file; bumpers reach **Drives**, **Go to path**, **Select this folder**,
+**New folder** and **Cancel**. Selecting the path field opens an on-screen character keyboard; a physical keyboard
+can also enter paths (including UNC paths) and text not in its ASCII character palette. Browsing existing files
+and folders supports Unicode names. Folder/project buttons still open Explorer/the browser; controlling those
+external applications is outside the launcher, and launcher input stops while they are foreground.
+
+Controller input is accepted only by the foreground launcher or one of its owned managed dialogs.
+SDL handles are closed before launching the game and remain paused while this game's processes run (including
+when the launcher starts beside an already-running game). No game button mapping is changed by navigation.
 
 ## 8. Looking at the game's code and data
 

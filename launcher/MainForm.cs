@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using static ScoobyReMasked.Theme;
+using MessageBox = ScoobyReMasked.LauncherDialogs;
 
 namespace ScoobyReMasked;
 
@@ -28,18 +29,21 @@ sealed class MainForm : Form
     CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
     Action<bool>? showControlsTab;
     readonly Gamepads gamepads;
+    readonly ControllerNavigation controllerNavigation;
     Label padStatus = null!;
     ThemedCombo layoutBox = null!;
     readonly List<(PadMapping.Row Row, Label Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
+    bool gameOwnsControllers;
 
-    public MainForm(string? shotDir = null)
+    public MainForm(string? shotDir = null, DataPaths? dataPaths = null, bool enableServices = true)
     {
         this.shotDir = shotDir;
         K = DeviceDpi / 96f;
-        paths = DataPaths.Find();
+        paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
+        controllerNavigation = new ControllerNavigation(this, gamepads);
         updater = new Updater(paths);
 
         Text = AppTitle;
@@ -60,11 +64,7 @@ sealed class MainForm : Form
         scene.Resize += (_, _) => PlaceBoards();
         Controls.Add(scene);
 
-        AddBoard("settings", "Settings", BuildSettings);
-        AddBoard("mods", "Mods", BuildMods);
-        AddBoard("extras", "Extras", BuildExtras);
-        PlaceBoards();
-        RefreshDisc();
+        BuildBoards();
 
         KeyDown += (_, e) =>
         {
@@ -73,12 +73,17 @@ sealed class MainForm : Form
         // Connected controllers: shown on Settings > Controls; an Xbox pad asks for the layout once.
         var padTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         padTimer.Tick += (_, _) => RefreshGamepads();
-        FormClosed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
+        FormClosed += (_, _) => { padTimer.Dispose(); controllerNavigation.Dispose(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
         Shown += (_, _) =>
         {
             if (shotDir != null) { TakeShots(shotDir); return; }
-            gamepads.Start();
+            if (!enableServices) return;
+            gameOwnsControllers = GameRunning();
+            if (!gameOwnsControllers) gamepads.Start();
+            controllerNavigation.Start();
             padTimer.Start();
+            if (DataImport.OfferAtStart(paths, AppTitle, this)) BuildBoards();
+            RefreshDisc();
             if (updater.CanCheck && updater.CheckAtStart) _ = CheckForUpdates(manual: false);
         };
     }
@@ -116,6 +121,18 @@ sealed class MainForm : Form
     }
 
     // ----- Signs and boards -----
+    void BuildBoards()
+    {
+        foreach (var board in boards.Values) { scene.Controls.Remove(board); board.Dispose(); }
+        boards.Clear();
+        padRows.Clear();
+        AddBoard("settings", "Settings", BuildSettings);
+        AddBoard("mods", "Mods", BuildMods);
+        AddBoard("extras", "Extras", BuildExtras);
+        PlaceBoards();
+        RefreshDisc();
+    }
+
     void OnSign(string id)
     {
         switch (id)
@@ -160,17 +177,30 @@ sealed class MainForm : Form
 
     void ShowBoard(string id)
     {
+        controllerNavigation.Reset();
         foreach (var (key, b) in boards) b.Visible = key == id;
         boards[id].BringToFront();
         scene.ActiveSign = id;
         RefreshDisc();
+        var first = ControllerNavigation.Targets(boards[id].Body).FirstOrDefault();
+        if (first != null) ControllerNavigation.Focus(first);
     }
 
     void CloseBoards()
     {
+        controllerNavigation.Reset();
         foreach (var b in boards.Values) b.Visible = false;
         scene.ActiveSign = null;
         scene.Focus();
+    }
+
+    internal void CloseControllerBoard() => CloseBoards();
+
+    internal bool NavigateScene(LauncherButtons action)
+    {
+        if (boards.Values.Any(b => b.Visible)) return false;
+        scene.Navigate(action);
+        return true;
     }
 
     static FlowLayoutPanel Row() => new() { AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent, WrapContents = true };
@@ -251,6 +281,9 @@ sealed class MainForm : Form
     {
         body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
                                "Change the buttons below, or in the game with F10 > Controls."));
+        body.Controls.Add(Note("Launcher: D-pad / left stick moves focus; South (A / Cross / Nintendo B) confirms; East backs out. " +
+                               "Bumpers move to the previous / next control; right stick scrolls. Select a dropdown to browse its choices, " +
+                               "then South applies or East cancels. Launcher controls are independent of game button mappings."));
         body.Controls.Add(Title("Gamepad"));
         padStatus = FieldLabel("Looking for controllers...");
         padStatus.Margin = S(0, 4, 0, 6);
@@ -421,11 +454,8 @@ sealed class MainForm : Form
 
     void ChooseSavesFolder()
     {
-        using var dialog = new FolderBrowserDialog
-        {
-            Description = "Choose the folder for your saves", UseDescriptionForTitle = true, SelectedPath = paths.Saves,
-        };
-        if (dialog.ShowDialog(this) == DialogResult.OK) MoveSaves(dialog.SelectedPath);
+        var folder = LauncherDialogs.PickPath(this, "Choose the folder for your saves", paths.Saves, folder: true);
+        if (folder != null) MoveSaves(folder);
     }
 
     // Points [paths] saves_dir at target (null = the usual folder) and offers to move the saves already there. Files the
@@ -580,9 +610,9 @@ sealed class MainForm : Form
         }
     }
 
-    enum UpdateAnswer { Update, Later, Skip }
+    internal enum UpdateAnswer { Update, Later, Skip }
 
-    UpdateAnswer AskUpdate(Updater.Found found)
+    internal UpdateAnswer AskUpdate(Updater.Found found)
     {
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         using var dialog = new Form
@@ -607,7 +637,7 @@ sealed class MainForm : Form
         row.Controls.Add(new PlankButton("Skip this version", (_, _) => { answer = UpdateAnswer.Skip; dialog.Close(); }));
         body.Controls.Add(row);
         dialog.Controls.Add(body);
-        dialog.ShowDialog(this);
+        LauncherDialogs.Show(dialog, this);
         return answer;
     }
 
@@ -730,14 +760,11 @@ sealed class MainForm : Form
 
     async Task ChooseDisc()
     {
-        using var dialog = new OpenFileDialog
-        {
-            Title = "Choose your Scooby-Doo! Night of 100 Frights disc image",
-            Filter = "GameCube disc images (*.iso;*.gcm;*.ciso)|*.iso;*.gcm;*.ciso|All files (*.*)|*.*",
-        };
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        var image = LauncherDialogs.PickPath(this, "Choose your Scooby-Doo! Night of 100 Frights disc image",
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), folder: false);
+        if (image == null) return;
         GcDisc disc;
-        try { disc = GcDisc.Open(dialog.FileName); }
+        try { disc = GcDisc.Open(image); }
         catch (Exception e) { MessageBox.Show(this, "That file can't be read: " + e.Message, AppTitle); return; }
         using (disc)
         {
@@ -773,12 +800,22 @@ sealed class MainForm : Form
         var exe = Path.Combine(play, GameExe);
         if (!File.Exists(exe)) { MessageBox.Show(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher.", AppTitle); return; }
         gamepads.Pause();  // the game has the controllers to itself
-        var game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = true });
+        gameOwnsControllers = true;
+        controllerNavigation.Reset();
+        Process? game;
+        try { game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = true }); }
+        catch (Exception e)
+        {
+            gameOwnsControllers = false;
+            gamepads.Start();
+            MessageBox.Show(this, "Couldn't start the game: " + e.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
         if (game != null)
         {
-            game.EnableRaisingEvents = true;
-            game.Exited += (_, _) => { try { BeginInvoke(() => gamepads.Start()); } catch (InvalidOperationException) { } };
+            game.Dispose(); // The status timer resumes input after this game's processes have exited.
         }
+        else { gameOwnsControllers = false; gamepads.Start(); MessageBox.Show(this, "The game did not start.", AppTitle); return; }
         WindowState = FormWindowState.Minimized;
     }
 
@@ -865,13 +902,23 @@ sealed class MainForm : Form
 
     void RefreshGamepads()
     {
+        bool running = GameRunning();
+        if (running != gameOwnsControllers)
+        {
+            gameOwnsControllers = running;
+            controllerNavigation.Reset();
+            if (running) gamepads.Pause(); else gamepads.Start();
+        }
         var pads = gamepads.Connected;
-        padStatus.Text = !gamepads.Available ? "Controller detection is not available (SDL3.dll missing from the game folder)."
+        padStatus.Text = running ? "Controller input is paused while the game runs."
+            : !gamepads.Available ? "Controller input is not available: " + gamepads.Error
+            : gamepads.Error != null ? "Controller warning: " + gamepads.Error
             : pads.Count == 0 ? "No controller connected."
             : "Connected: " + string.Join(", ", pads.Select(p => $"{p.Name} ({Gamepads.Describe(p.Kind)})"));
         // An Xbox pad and no layout chosen yet (key absent): ask once per launcher start.
         var xbox = pads.FirstOrDefault(p => p.Kind == Gamepads.Kind.Xbox);
-        if (xbox == null || askedLayout || asking || new GameConfig(configPath).Get("controller", "layout") != null) return;
+        if (xbox == null || askedLayout || asking || Form.ActiveForm != this ||
+            WindowState == FormWindowState.Minimized || new GameConfig(configPath).Get("controller", "layout") != null) return;
         askedLayout = true;
         bool? original;
         asking = true;
@@ -883,7 +930,7 @@ sealed class MainForm : Form
     }
 
     // true = original Xbox layout, false = GameCube layout, null = closed without choosing (asked again next start).
-    bool? AskXboxLayout(string padName)
+    internal bool? AskXboxLayout(string padName)
     {
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         using var dialog = new Form
@@ -908,7 +955,7 @@ sealed class MainForm : Form
         row.Controls.Add(new PlankButton("GameCube layout", (_, _) => { answer = false; dialog.Close(); }));
         body.Controls.Add(row);
         dialog.Controls.Add(body);
-        dialog.ShowDialog(this);
+        LauncherDialogs.Show(dialog, this);
         return answer;
     }
 }

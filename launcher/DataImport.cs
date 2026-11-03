@@ -1,3 +1,5 @@
+using MessageBox = ScoobyReMasked.LauncherDialogs;
+
 namespace ScoobyReMasked;
 
 // Bringing the player's files over from an earlier copy of the game: a FrightWorks or Scooby-Doo: Refrightened zip
@@ -15,16 +17,16 @@ static class DataImport
 
     sealed record Source(string Name, string UserData, string? Disc);
 
-    public static void OfferAtStart(DataPaths paths, string title)
+    public static bool OfferAtStart(DataPaths paths, string title, IWin32Window? owner = null)
     {
-        if (paths.DevTree) return;
+        if (paths.DevTree) return false;
         var userData = paths.UserData;
         if (File.Exists(Path.Combine(userData, Mark)) || File.Exists(Path.Combine(userData, OldMark)) ||
             File.Exists(paths.ConfigPath) || HasFiles(paths.Saves))
-            return;
+            return false;
         var source = FindNewest(paths);
-        if (source == null) return;
-        var answer = MessageBox.Show(
+        if (source == null) return false;
+        var answer = MessageBox.Show(owner,
             $"Found your saves and settings from an earlier version in\n{source.Name}\n\nCopy its saves, settings, controls " +
             "and mods into this one?" + (CopiesDisc(source, paths) ? " Its game files come too, so you don't have to choose the disc again." : "") +
             "\n\nThe old folder is left as it is. Extras > Folders can copy from another folder later.",
@@ -33,29 +35,27 @@ static class DataImport
         if (answer != DialogResult.Yes)
         {
             File.WriteAllText(Path.Combine(userData, Mark), $"Not copied from {source.Name}{Environment.NewLine}");
-            return;
+            return false;
         }
         var (error, _) = Import(source, paths, title);
         if (error != null)
-            MessageBox.Show($"Copying stopped: {error.Message}\n\nCopy the old folder's files by hand if something is missing.",
+            MessageBox.Show(owner, $"Copying stopped: {error.Message}\n\nCopy the old folder's files by hand if something is missing.",
                             title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         File.WriteAllText(Path.Combine(userData, Mark),
                           $"{(error == null ? "Copied" : "Partly copied")} from {source.Name}{Environment.NewLine}");
+        return true;
     }
 
     // Extras > Folders: the player picks the old game's folder (or its data, UserData or MarioWiiSaveData folder).
     public static void FromFolder(IWin32Window owner, DataPaths paths, string title)
     {
-        using var dialog = new FolderBrowserDialog
-        {
-            Description = "Choose the folder of the earlier FrightWorks or Refrightened (the one with its launcher), or a folder with a Config.toml",
-            UseDescriptionForTitle = true,
-        };
-        if (dialog.ShowDialog(owner) != DialogResult.OK) return;
-        var source = Describe(dialog.SelectedPath);
+        var folder = LauncherDialogs.PickPath(owner, "Choose an earlier FrightWorks or Refrightened folder",
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), folder: true);
+        if (folder == null) return;
+        var source = Describe(folder);
         if (source == null || SameFolder(source.UserData, paths.UserData))
         {
-            MessageBox.Show(owner, "No saves or settings of another copy of the game are in\n" + dialog.SelectedPath, title,
+            MessageBox.Show(owner, "No saves or settings of another copy of the game are in\n" + folder, title,
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }

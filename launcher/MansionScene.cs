@@ -60,11 +60,15 @@ sealed class MansionScene : Control
     double nextStrike, strikeAt = -100, nextEvent;
     List<PointF[]>? bolt;
     string? hover;
+    int focusedSign;
 
     public MansionScene(bool animate, int seed)
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.ResizeRedraw | ControlStyles.Opaque, true);
+                 ControlStyles.ResizeRedraw | ControlStyles.Opaque | ControlStyles.Selectable, true);
+        TabStop = true;
+        AccessibleName = "Mansion menu";
+        AccessibleDescription = "D-pad or arrow keys to navigate, South or Enter to select. East closes a board.";
         this.animate = animate;
         rnd = new Random(seed);
         LoadLayout();
@@ -584,7 +588,8 @@ sealed class MansionScene : Control
 
         foreach (var sg in signs)
         {
-            bool lit = sg.Id == hover || sg.Id == active;
+            bool focused = Focused && signs.IndexOf(sg) == focusedSign;
+            bool lit = sg.Id == hover || sg.Id == active || focused;
             float breathe = (float)(Math.Sin(t * 2.6) + 1) / 2;
             if (sg.Id == "play" || lit)
             {
@@ -597,6 +602,11 @@ sealed class MansionScene : Control
             }
             if (lit) g.DrawImageUnscaled(sg.Hover!, sg.HoverAt);
             else g.DrawImageUnscaled(sg.Normal!, sg.NormalAt);
+            if (focused)
+            {
+                using var outline = new Pen(Theme.Cream, Math.Max(2, 3 * s)) { DashStyle = DashStyle.Dash };
+                g.DrawPolygon(outline, SignPoints(sg, 1.045f));
+            }
         }
 
         g.DrawImageUnscaled(title!, Theme.S(18), Theme.S(12));
@@ -687,6 +697,82 @@ sealed class MansionScene : Control
     // ----- Input -----
     string? SignAt(Point p) => signs.LastOrDefault(sg => sg.Hit != null && sg.Hit.IsVisible(p))?.Id;
 
+    internal string? FocusedSign => signs.Count == 0 ? null : signs[focusedSign].Id;
+
+    internal void Navigate(LauncherButtons action)
+    {
+        if (signs.Count == 0) return;
+        Focus();
+        if (action == LauncherButtons.Confirm) { SignClicked?.Invoke(signs[focusedSign].Id); return; }
+        int step = action switch
+        {
+            LauncherButtons.Up or LauncherButtons.Left or LauncherButtons.Previous => -1,
+            LauncherButtons.Down or LauncherButtons.Right or LauncherButtons.Next => 1,
+            _ => 0,
+        };
+        focusedSign = (focusedSign + step + signs.Count) % signs.Count;
+        AccessibilityNotifyClients(AccessibleEvents.Focus, focusedSign);
+        Invalidate();
+    }
+
+    protected override bool IsInputKey(Keys keyData) =>
+        (keyData & Keys.KeyCode) is Keys.Up or Keys.Down or Keys.Left or Keys.Right || base.IsInputKey(keyData);
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        var action = e.KeyCode switch
+        {
+            Keys.Up or Keys.Left => LauncherButtons.Up,
+            Keys.Down or Keys.Right => LauncherButtons.Down,
+            Keys.Enter or Keys.Space => LauncherButtons.Confirm,
+            _ => LauncherButtons.None,
+        };
+        if (action != LauncherButtons.None) { Navigate(action); e.Handled = e.SuppressKeyPress = true; }
+        base.OnKeyDown(e);
+    }
+
+    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+    protected override AccessibleObject CreateAccessibilityInstance() => new MenuAccessibility(this);
+
+    sealed class MenuAccessibility(MansionScene scene) : ControlAccessibleObject(scene)
+    {
+        public override AccessibleRole Role => AccessibleRole.MenuBar;
+        public override int GetChildCount() => scene.signs.Count;
+        public override AccessibleObject? GetChild(int index) =>
+            index >= 0 && index < scene.signs.Count ? new SignAccessibility(scene, index, this) : null;
+        public override AccessibleObject? GetFocused() => scene.Focused ? GetChild(scene.focusedSign) : null;
+        public override AccessibleObject? HitTest(int x, int y)
+        {
+            var id = scene.SignAt(scene.PointToClient(new Point(x, y)));
+            int index = scene.signs.FindIndex(s => s.Id == id);
+            return index >= 0 ? GetChild(index) : base.HitTest(x, y);
+        }
+    }
+
+    sealed class SignAccessibility(MansionScene scene, int index, AccessibleObject parent) : AccessibleObject
+    {
+        public override string? Name { get => scene.signs[index].Id; set { } }
+        public override AccessibleRole Role => AccessibleRole.MenuItem;
+        public override AccessibleObject? Parent => parent;
+        public override string DefaultAction => "Open";
+        public override AccessibleStates State => AccessibleStates.Focusable |
+            (scene.Focused && scene.focusedSign == index ? AccessibleStates.Focused : AccessibleStates.None);
+        public override Rectangle Bounds => scene.RectangleToScreen(Rectangle.Round(scene.signs[index].Hit?.GetBounds() ?? RectangleF.Empty));
+        public override void DoDefaultAction()
+        {
+            scene.focusedSign = index;
+            scene.SignClicked?.Invoke(scene.signs[index].Id);
+        }
+        public override void Select(AccessibleSelection flags)
+        {
+            scene.focusedSign = index;
+            scene.Focus();
+            scene.Invalidate();
+        }
+    }
+
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
@@ -708,7 +794,12 @@ sealed class MansionScene : Control
     protected override void OnMouseClick(MouseEventArgs e)
     {
         base.OnMouseClick(e);
-        if (e.Button == MouseButtons.Left && SignAt(e.Location) is string id) SignClicked?.Invoke(id);
+        if (e.Button == MouseButtons.Left && SignAt(e.Location) is string id)
+        {
+            focusedSign = signs.FindIndex(sg => sg.Id == id);
+            Focus();
+            SignClicked?.Invoke(id);
+        }
     }
 
     protected override void Dispose(bool disposing)

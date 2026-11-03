@@ -148,7 +148,7 @@ static class Theme
 }
 
 // A small wooden plank button: purple (or lime for the main action), lighter on hover.
-sealed class PlankButton : Control
+sealed class PlankButton : Button
 {
     bool hover, down;
     public bool Primary { get; init; }
@@ -159,7 +159,12 @@ sealed class PlankButton : Control
     public PlankButton(string text, EventHandler onClick, bool primary = false)
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
+                 ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        UseVisualStyleBackColor = false;
+        UseMnemonic = false;
+        SetStyle(ControlStyles.Opaque, false);
+        TabStop = true;
+        AccessibleRole = AccessibleRole.PushButton;
         BackColor = Color.Transparent;
         Text = text;
         Primary = primary;
@@ -174,6 +179,8 @@ sealed class PlankButton : Control
 
     float EmPx => Theme.S(Primary ? 20 : 16);
 
+    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
     protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { hover = down = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e) { down = true; Invalidate(); base.OnMouseDown(e); }
@@ -204,6 +211,11 @@ sealed class PlankButton : Control
         using (var edge = new Pen(Theme.Ink, Theme.S(2)) { LineJoin = LineJoin.Round }) g.DrawPath(edge, plank);
         Color text = !Enabled ? Color.FromArgb(150, 140, 160) : lime ? Theme.Ink : Theme.Cream;
         Theme.Text(g, Text, EmPx, r, text, Theme.Ink, lime || !Enabled ? 0 : Theme.S(3));
+        if (Focused)
+        {
+            using var focus = new Pen(Theme.Gold, Theme.S(2)) { DashStyle = DashStyle.Dash };
+            g.DrawRectangle(focus, 3, 3, Width - 7, Height - 7);
+        }
     }
 }
 

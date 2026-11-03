@@ -72,6 +72,11 @@ long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
 screenshot and **F1** opens this page in your browser. The title screen and main menu list
 these keys in the corner.
 
+The launcher itself also works with a controller, including Settings, Mods, Extras, prompts and file/folder
+browsing. D-pad / left stick moves focus, South (A / Cross / Nintendo B) confirms, East backs out, bumpers
+move between controls and the right stick scrolls. Select a dropdown to choose, then confirm to apply or back
+to cancel. Launcher navigation does not change your game mappings; keyboard and mouse still work.
+
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
 free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
 [ffmpeg](https://ffmpeg.org): the launcher offers to download it when you turn the tools on) and a **DEV** mark with the
