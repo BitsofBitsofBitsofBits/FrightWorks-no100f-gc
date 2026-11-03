@@ -8,6 +8,55 @@
 
 namespace no100f_devmenu {
 
+struct Powerup {
+    const char* key;  // Existing sd2.ini / command-file identity, independent of display order.
+    const char* label;
+    uint32_t bit;  // Zero denotes the separate Map-received boolean, not a gadget bit.
+    bool unused = false;
+};
+
+inline constexpr Powerup kPowerupList[] = {
+    {"Map", "Map", 0},
+    {"Shovel", "Shovel", 1u << 13},
+    {"Spring", "Springs", 1u << 9},
+    {"FootballHelmet", "Helmet", 1u << 11},
+    {"LampShade", "Lamp", 1u << 5},
+    {"Slippers", "Slippers", 1u << 4},
+    {"BlackKnight", "Knight Armor", 1u << 6},
+    {"StickyBoots", "Galoshes (Boots)", 1u << 2},
+    {"LightningBolt", "Super Smash", 1u << 10},
+    {"LightningBoltStun", "Super Sonic Smash (Stun)", 1u << 14},
+    {"Umbrella", "Umbrella", 1u << 12},
+    {"Plungers", "Plunger Boots", 1u << 3},
+    {"BubbleGum", "Bubblegum", 1u << 0},
+    {"SoapBar", "Soap Bubbles", 1u << 1},
+    {"FlowerPot", "Flower Pot", 1u << 7, true},
+    {"DivingHelmet", "Diving Helmet", 1u << 8, true},
+};
+inline constexpr const char* kUnusedPowerupHeading = "--UNUSED--";
+
+constexpr uint32_t PowerupMask(bool includeUnused) {
+    uint32_t mask = 0;
+    for (const auto& power : kPowerupList)
+        if (includeUnused || !power.unused) mask |= power.bit;
+    return mask;
+}
+
+inline constexpr uint32_t kAllPowerups = PowerupMask(true);
+inline constexpr uint32_t kMainGamePowerups = PowerupMask(false);
+
+constexpr uint32_t WithPowerupBits(uint32_t current, uint32_t mask, uint32_t bits) {
+    return (current & ~mask) | (bits & mask);
+}
+
+constexpr bool PowerupEnabled(const Powerup& power, uint32_t value) {
+    return power.bit ? (value & power.bit) != 0 : value != 0;
+}
+
+constexpr uint32_t WithPowerup(const Powerup& power, uint32_t value, bool on) {
+    return power.bit ? WithPowerupBits(value, power.bit, on ? power.bit : 0) : (on ? 1u : 0u);
+}
+
 // Which button skips what is playing: A for a recorded cutscene, Start for the title intro / attract demo (mode 2).
 enum class SkipControl { None, Confirm, Start };
 
