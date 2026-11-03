@@ -1,11 +1,12 @@
-# Puts the files a game folder needs besides the program into its UserData folder: the built-in HD texture pack
-# (texture_pack\ScoobyHD, kept out of git, downloaded when missing) and the button prompt icons
-# (tools\make-button-icons.py).
-#   powershell -ExecutionPolicy Bypass -File tools\stage-userdata.ps1 -UserData <folder> [-Required]
-# Used by build-no100f.ps1 (Play\UserData, after every build) and package-scooby.ps1 (the release). Only what changed
+# Puts the files the game ships besides the program into its folder (beside "FrightWorks Game.exe"): the built-in HD
+# texture pack in texture_replacements\ScoobyHD (texture_pack\ScoobyHD, kept out of git, downloaded when missing) and
+# the button prompt icons in button_icons (tools\make-button-icons.py). They are program files: the game indexes the
+# player's own UserData\texture_replacements first, and an installed game's folder is replaced on every update.
+#   powershell -ExecutionPolicy Bypass -File tools\stage-assets.ps1 -GameDir <folder> [-Required]
+# Used by build-no100f.ps1 (Play\, after every build) and package-scooby.ps1 (the release's data\). Only what changed
 # is copied or rebuilt. -Required (packaging) stops on anything missing; without it a missing piece is a warning, so a
 # test build still finishes.
-[CmdletBinding()] param([Parameter(Mandatory)][string]$UserData, [switch]$Required)
+[CmdletBinding()] param([Parameter(Mandatory)][string]$GameDir, [switch]$Required)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -14,10 +15,21 @@ function Fail([string]$Text) {
     Write-Warning $Text
 }
 
-New-Item -ItemType Directory -Force $UserData | Out-Null
+New-Item -ItemType Directory -Force $GameDir | Out-Null
+
+# Builds before 2026-11 staged both into UserData, where the old copy would now win over the new one: remove them. A
+# link (the debug kit links the pack there) is only unlinked, never emptied.
+foreach ($old in 'UserData\texture_replacements\ScoobyHD', 'UserData\button_icons') {
+    $path = Join-Path $GameDir $old
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    if (-not $item) { continue }
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { [IO.Directory]::Delete($path, $false) }
+    else { Remove-Item -LiteralPath $path -Recurse -Force }
+    Write-Host "Removed the old copy in $path"
+}
 
 # 1. HD texture pack. texture_pack\ScoobyHD (git-ignored) = dogerki's pack, downloaded from the Internet Archive the
-# first time, plus tools\hd-pack-additions\ScoobyHD on top. UserData gets a mirror of it (other packs in
+# first time, plus tools\hd-pack-additions\ScoobyHD on top. The game folder gets a mirror of it (other packs in
 # texture_replacements are left alone).
 $packSource = Join-Path $root 'texture_pack\ScoobyHD'
 $packUrl = 'https://archive.org/download/dolphin-scooby-doo-night-of-100-frights-hd-texture-pack/' +
@@ -63,7 +75,7 @@ if (Test-Path -LiteralPath $packSource) {
     robocopy (Join-Path $PSScriptRoot 'hd-pack-additions\ScoobyHD') $packSource /E /NJH /NJS /NFL /NDL /NP /R:1 /W:1 | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "copying the HD pack additions failed (robocopy exit code $LASTEXITCODE)" }
 }
-$pack = Join-Path $UserData 'texture_replacements\ScoobyHD'
+$pack = Join-Path $GameDir 'texture_replacements\ScoobyHD'
 if (Test-Path -LiteralPath $packSource) {
     New-Item -ItemType Directory -Force $pack | Out-Null
     robocopy $packSource $pack /MIR /NJH /NJS /NFL /NDL /NP /R:1 /W:1 | Out-Null
@@ -76,7 +88,7 @@ if (Test-Path -LiteralPath $packSource) {
 
 # 2. Button prompt icons, drawn from tools\button-art over the HD pack's layout. Rebuilt when the tool or the art is
 # newer than the icons (or the folder has the old layout).
-$icons = Join-Path $UserData 'button_icons'
+$icons = Join-Path $GameDir 'button_icons'
 $layout = Join-Path $icons 'layout.txt'
 $tool = Join-Path $root 'tools\make-button-icons.py'
 $inputs = @(Get-Item -LiteralPath $tool) + @(Get-ChildItem -LiteralPath (Join-Path $root 'tools\button-art') -Recurse -File)

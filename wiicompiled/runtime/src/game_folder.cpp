@@ -119,9 +119,9 @@ std::string Problem(const fs::path& root) {
 
 bool EnsureConfigured() {
 #if defined(_WIN32)
-    // A "game" folder next to the program needs no questions, and wins over the saved folder: every
-    // install shares Documents\MarioWiiSaveData, so this is how two installs play two games (say the
-    // original and a mod), each with its own saves (nand_path.h keeps saves per game).
+    // A "game" folder next to the program needs no questions, and wins over the saved folder: installs
+    // without the portable marker share one user data folder, so this is how two installs play two games
+    // (say the original and a mod), each with its own saves (nand_path.h keeps saves per game).
     if (const fs::path beside = Find(ProgramDirectory() / "game"); !beside.empty() && Problem(beside).empty()) {
         if (RuntimeConfigFile::DvdRoot().empty()) {
             RuntimeConfigFile::SetDvdRoot(beside);

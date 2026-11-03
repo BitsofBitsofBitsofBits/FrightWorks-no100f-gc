@@ -135,7 +135,7 @@ void CARDSetBasePath(const char* path, const s32 chan) {
     Log.fatal("CARDSetBasePath() called after CARDInit()!");
   }
 
-  std::filesystem::path filePath(path);
+  std::filesystem::path filePath = fs_path_from_string(path);  // UTF-8, like every path aurora is given
 
   if (filePath.has_filename() && !std::filesystem::is_directory(filePath)) {
     filePath = filePath.remove_filename();

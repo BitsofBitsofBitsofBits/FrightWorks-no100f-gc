@@ -23,10 +23,11 @@ void EnsureCardInit() {
     static bool done = false;
     if (done) return;
     done = true;
-    const auto dir = RuntimeConfigFile::ApplicationDataDirectory() / "Saves" / "MemoryCard";
+    const auto dir = RuntimeConfigFile::SavesDirectory() / "MemoryCard";
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
-    const std::string path = dir.string();
+    // UTF-8: Saved Games sits under the user's name, which the ANSI code page may not hold.
+    const std::string path = RuntimeConfigFile::PathToUtf8(dir);
     CARDSetBasePath(path.c_str(), 0);
     CARDSetBasePath(path.c_str(), 1);
     // Saves are filed under the booted disc's game/maker code (disc header at 0x80000000), like the console does.

@@ -4,13 +4,14 @@ using static ScoobyReMasked.Theme;
 namespace ScoobyReMasked;
 
 // The launcher window: the haunted mansion (MansionScene) whose signs are the menu. Play starts the game; Settings,
-// Mods and Extras open a board over the left of the house. Everything it changes goes to data\UserData\Config.toml,
+// Mods and Extras open a board over the left of the house. Everything it changes goes to Config.toml (DataPaths),
 // the keys the game's F10 menu uses. No game data or character art is shipped.
 sealed class MainForm : Form
 {
-    internal const string GameExe = "FrightWorks Game.exe", AppTitle = "FrightWorks: Night of 100 Frights";
+    internal const string GameExe = DataPaths.GameExe, AppTitle = "FrightWorks: Night of 100 Frights";
     const string ProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
 
+    readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
     readonly string? shotDir;
     readonly MansionScene scene;
@@ -18,7 +19,8 @@ sealed class MainForm : Form
     Label discStatus = null!, dumpHelp = null!;
     PlankButton chooseDisc = null!;
     ThemedBar progress = null!, ffmpegBar = null!;
-    Label ffmpegStatus = null!;
+    Label ffmpegStatus = null!, savesNote = null!;
+    PlankButton savesDefault = null!;
     PlankButton ffmpegButton = null!;
     CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
     Action<bool>? showControlsTab;
@@ -32,13 +34,9 @@ sealed class MainForm : Form
     {
         this.shotDir = shotDir;
         K = DeviceDpi / 96f;
-        (root, play) = FindGame();
-        userData = Path.Combine(play, "UserData");
-        configPath = Path.Combine(userData, "Config.toml");
-        modsDir = Path.Combine(userData, "mods");
+        paths = DataPaths.Find();
+        (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
-        // Release: the disc lives in data\Disc next to the game. Dev tree (Play\): the shared Disc\ at the root.
-        discDir = IsRelease ? Path.Combine(play, "Disc", "DATA") : Path.Combine(root, "Disc", "DATA");
 
         Text = AppTitle;
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch { }
@@ -80,21 +78,6 @@ sealed class MainForm : Form
         };
     }
 
-    // The game folder: data\ beside the launcher (release), or Play\ above launcher\publish (dev tree).
-    internal static (string root, string game) FindGame()
-    {
-        for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
-            foreach (var sub in new[] { "data", "Play" })
-                if (File.Exists(Path.Combine(d.FullName, sub, GameExe))) return (d.FullName, Path.Combine(d.FullName, sub));
-        return (AppContext.BaseDirectory, Path.Combine(AppContext.BaseDirectory, "data"));
-    }
-
-    bool IsRelease => Path.GetFileName(play) == "data";
-
-    // Where F2 in the game saves (beside the launcher in a release, Play\Screenshots in the dev tree).
-    string ScreenshotsDir => IsRelease ? Path.Combine(root, "Screenshots") : Path.Combine(play, "Screenshots");
-    string VideosDir => IsRelease ? Path.Combine(root, "Videos") : Path.Combine(play, "Videos");
-
     // Headless visual check (--shots <dir>): the main screen, a lightning flash and every board, then exit.
     void TakeShots(string dir)
     {
@@ -116,6 +99,11 @@ sealed class MainForm : Form
             ShowBoard(id);
             Shot(char.ToUpperInvariant(id[0]) + id[1..]);
         }
+        ShowBoard("extras");
+        var extras = boards["extras"].Body;
+        extras.AutoScrollPosition = new Point(0, extras.DisplayRectangle.Height);  // the bottom: folders and saves
+        Shot("Extras-Folders");
+        extras.AutoScrollPosition = Point.Empty;
         ShowBoard("settings");
         showControlsTab?.Invoke(true);
         Shot("Settings-Controls");
@@ -295,7 +283,7 @@ sealed class MainForm : Form
     // ----- Mods -----
     void BuildMods(FlowLayoutPanel body)
     {
-        body.Controls.Add(Note("A mod is a folder in data\\UserData\\mods. Its files\\ folder mirrors the disc's files\\ (replacing game files), " +
+        body.Controls.Add(Note("A mod is a folder in the mods folder (the button below opens it). Its files\\ folder mirrors the disc's files\\ (replacing game files), " +
                                "and its textures\\ folder holds texture replacements. Untick a mod to switch it off; when two mods change the same file, the later name wins."));
         var list = new FlowLayoutPanel
         {
@@ -372,11 +360,22 @@ sealed class MainForm : Form
         body.Controls.Add(Title("Folders"));
         var folders = Row();
         folders.MaximumSize = new Size(S(520), 0);  // wrap instead of widening the page
+        folders.Controls.Add(new PlankButton("Saves", (_, _) => OpenFolder(paths.Saves)));
+        folders.Controls.Add(new PlankButton("Settings and mods", (_, _) => OpenFolder(userData)));
+        folders.Controls.Add(new PlankButton("Screenshots", (_, _) => OpenFolder(paths.Screenshots)));
+        folders.Controls.Add(new PlankButton("Videos", (_, _) => OpenFolder(paths.Videos)));
         folders.Controls.Add(new PlankButton("Game", (_, _) => OpenFolder(play)));
-        folders.Controls.Add(new PlankButton("Saves and settings", (_, _) => OpenFolder(userData)));
-        folders.Controls.Add(new PlankButton("Screenshots", (_, _) => OpenFolder(ScreenshotsDir)));
-        folders.Controls.Add(new PlankButton("Videos", (_, _) => OpenFolder(VideosDir)));
         body.Controls.Add(folders);
+        savesNote = Note("");
+        body.Controls.Add(savesNote);
+        var saveRow = Row();
+        saveRow.MaximumSize = new Size(S(520), 0);
+        saveRow.Controls.Add(new PlankButton("Change the saves folder", (_, _) => ChooseSavesFolder()));
+        savesDefault = new PlankButton("Back to the usual folder", (_, _) => MoveSaves(null));
+        saveRow.Controls.Add(savesDefault);
+        saveRow.Controls.Add(new PlankButton("Copy from an earlier version", (_, _) => { DataImport.FromFolder(this, paths, AppTitle); RefreshDisc(); RefreshSaves(); }));
+        body.Controls.Add(saveRow);
+        RefreshSaves();
 
         body.Controls.Add(Title("About"));
         var version = typeof(MainForm).Assembly.GetName().Version;
@@ -385,6 +384,92 @@ sealed class MainForm : Form
                                "Luckiest Guy by Astigmatic and in-game menu text in Roboto by Christian Robertson (both Apache 2.0). " +
                                "Scooby-Doo is a trademark of Hanna-Barbera / Warner Bros.; this is an unofficial fan project."));
         body.Controls.Add(new PlankButton("Project page", (_, _) => Process.Start(new ProcessStartInfo(ProjectUrl) { UseShellExecute = true })));
+    }
+
+    // ----- The saves folder ([paths] saves_dir) -----
+    void RefreshSaves()
+    {
+        bool custom = !string.IsNullOrWhiteSpace(new GameConfig(configPath).Get("paths", "saves_dir"));
+        savesNote.Text = "Saves are in " + paths.Saves + (custom ? " (your choice)." : ".") +
+                         " Settings and mods are in " + userData + ".";
+        savesDefault.Visible = custom;
+    }
+
+    void ChooseSavesFolder()
+    {
+        using var dialog = new FolderBrowserDialog
+        {
+            Description = "Choose the folder for your saves", UseDescriptionForTitle = true, SelectedPath = paths.Saves,
+        };
+        if (dialog.ShowDialog(this) == DialogResult.OK) MoveSaves(dialog.SelectedPath);
+    }
+
+    // Points [paths] saves_dir at target (null = the usual folder) and offers to move the saves already there. Files the
+    // new folder already has are left in both places.
+    void MoveSaves(string? target)
+    {
+        var from = paths.Saves;
+        var to = Path.GetFullPath(target ?? paths.DefaultSaves);
+        if (string.Equals(Path.TrimEndingDirectorySeparator(from), Path.TrimEndingDirectorySeparator(to), StringComparison.OrdinalIgnoreCase))
+        {
+            if (target == null) { var c = new GameConfig(configPath); c.Remove("paths", "saves_dir"); c.Save(); RefreshSaves(); }
+            return;
+        }
+        // An installed game's folder (%LOCALAPPDATA%\FrightWorks) is replaced on update and deleted on uninstall.
+        var program = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(root)) ?? root;
+        if (!paths.Portable && (to + "\\").StartsWith(program + "\\", StringComparison.OrdinalIgnoreCase))
+        {
+            MessageBox.Show(this, "That folder is part of the installed game, which an update replaces. Choose another one.", AppTitle);
+            return;
+        }
+        if (GameRunning())
+        {
+            MessageBox.Show(this, "Close the game first: it is using the saves.", AppTitle);
+            return;
+        }
+        var files = Directory.Exists(from) ? Directory.GetFiles(from, "*", SearchOption.AllDirectories) : Array.Empty<string>();
+        var answer = files.Length == 0 ? DialogResult.No
+            : MessageBox.Show(this, $"Move your saves from\n{from}\nto\n{to}?\n\nNo uses the new folder without moving them.",
+                              AppTitle, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        if (answer == DialogResult.Cancel) return;
+        int kept = 0;
+        try
+        {
+            Directory.CreateDirectory(to);
+            if (answer == DialogResult.Yes)
+                foreach (var f in files)
+                {
+                    var dest = Path.Combine(to, Path.GetRelativePath(from, f));
+                    if (File.Exists(dest)) { kept++; continue; }
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                    File.Copy(f, dest);
+                    File.Delete(f);
+                }
+        }
+        catch (Exception e)
+        {
+            MessageBox.Show(this, "Moving the saves stopped: " + e.Message + "\n\nThe saves folder is unchanged.", AppTitle,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        var cfg = new GameConfig(configPath);
+        if (target == null) cfg.Remove("paths", "saves_dir"); else cfg.SetString("paths", "saves_dir", to);
+        cfg.Save();
+        RefreshSaves();
+        if (kept > 0)
+            MessageBox.Show(this, $"{kept} save file(s) already in {to} were kept; the old copies are still in {from}.", AppTitle);
+    }
+
+    bool GameRunning()
+    {
+        var exe = Path.Combine(play, GameExe);
+        foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(GameExe)))
+        {
+            try { if (string.Equals(p.MainModule?.FileName, exe, StringComparison.OrdinalIgnoreCase)) return true; }
+            catch (Exception) { return true; }  // can't tell: assume it's ours
+            finally { p.Dispose(); }
+        }
+        return false;
     }
 
     // The hubs' holiday events ([game] holiday): the game checks the date when a hub loads. "auto" uses today's date,
@@ -435,14 +520,14 @@ sealed class MainForm : Form
     {
         bool dev = new GameConfig(configPath).Get("game", "dev_tools") == "true";
         bool busy = ffmpegCancel != null;
-        var found = dev && !busy ? FfmpegSetup.Find(root, play) : null;
+        var found = dev && !busy ? FfmpegSetup.Find(paths) : null;
         ffmpegStatus.Visible = dev || busy;
         ffmpegButton.Visible = dev && !busy && found == null;
         if (busy || !dev) return;
         ffmpegStatus.Text = found != null
             ? "F3 videos use ffmpeg from " + found + "."
             : "F3 videos need ffmpeg, which isn't installed. The launcher can download it (about 200 MB, the free " +
-              "win64 build from github.com/BtbN/FFmpeg-Builds) into " + FfmpegSetup.InstallDir(root, IsRelease) + ".";
+              "win64 build from github.com/BtbN/FFmpeg-Builds) into " + FfmpegSetup.InstallDir(paths) + ".";
         ffmpegStatus.ForeColor = found != null ? Good : Warn;
         if (found == null && offerDownload &&
             MessageBox.Show(this, "F3 video recording needs ffmpeg, which isn't installed.\n\nDownload it now? (about 200 MB, " +
@@ -468,7 +553,7 @@ sealed class MainForm : Form
             ffmpegStatus.Text = p.total > 0 ? $"Downloading ffmpeg: {p.done >> 20} of {p.total >> 20} MB" : $"Downloading ffmpeg: {p.done >> 20} MB";
         });
         string? error = null;
-        try { await FfmpegSetup.Download(root, IsRelease, report, ffmpegCancel.Token); }
+        try { await FfmpegSetup.Download(paths, report, ffmpegCancel.Token); }
         catch (OperationCanceledException) when (ffmpegCancel.IsCancellationRequested) { return; }  // the launcher closed
         catch (Exception e) { error = e.Message; }
         finally
@@ -484,7 +569,7 @@ sealed class MainForm : Form
     // ----- The disc and starting the game -----
     (bool ok, string text) DiscState()
     {
-        var boot = Path.Combine(discDir, "sys", "boot.bin");
+        var boot = Path.Combine(paths.PlayableDisc, "sys", "boot.bin");
         if (!File.Exists(boot)) return (false, "No game disc set up yet. Choose your Scooby-Doo! Night of 100 Frights disc image.");
         var id = System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(boot), 0, 6);
         return id == GcDisc.WantedId ? (true, "Scooby-Doo! Night of 100 Frights (GIHE78) is set up.") : (false, $"The Disc folder holds {id}, not Scooby-Doo! Night of 100 Frights USA (GIHE78).");
@@ -536,7 +621,7 @@ sealed class MainForm : Form
                 if (Directory.Exists(discDir)) Directory.Delete(discDir, true);
                 Directory.Move(staging, discDir);
                 var cfg = new GameConfig(configPath);
-                cfg.Set("paths", "dvd_root", IsRelease ? "'../Disc/DATA'" : "'../../Disc/DATA'");  // relative to UserData, so the folder can move
+                cfg.Set("paths", "dvd_root", paths.DvdRootValue);  // relative to UserData, so the folder can move
                 cfg.Save();
             }
             catch (Exception e) { MessageBox.Show(this, "Extraction failed: " + e.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error); }

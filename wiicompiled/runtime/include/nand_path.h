@@ -118,7 +118,7 @@ inline std::filesystem::path ManagedNandRootPath() {
         if (ownerKey == key) {
             return shared;
         }
-        const std::filesystem::path own = RuntimeConfigFile::ApplicationDataDirectory() / "Saves" / key / "NAND";
+        const std::filesystem::path own = RuntimeConfigFile::SavesDirectory() / key / "NAND";
         RT_LOGF(RT_TAG_NAND, "this game's saves: %s\n", RuntimeConfigFile::PathToUtf8(own).c_str());
         return own;
     }();

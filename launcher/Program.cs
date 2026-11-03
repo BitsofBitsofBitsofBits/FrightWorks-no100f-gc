@@ -31,8 +31,9 @@ static class Program
         int shots = Array.IndexOf(args, "--shots");
         if (shots < 0 && !args.Contains("--selftest"))
         {
-            var (root, game) = MainForm.FindGame();
-            RefrightenedImport.Offer(root, game, MainForm.AppTitle);
+            var paths = DataPaths.Find();
+            if (paths.Portable) paths.RemoveOldShippedCopies();
+            DataImport.OfferAtStart(paths, MainForm.AppTitle);
         }
         var form = new MainForm(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null);
         if (args.Contains("--selftest")) { form.Shown += (_, _) => form.Close(); }

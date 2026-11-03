@@ -233,15 +233,8 @@ HANDLE Job() {
     return job;
 }
 
-// The game's folder (Play\ in a source build) and the release root above data\.
-std::filesystem::path RootFolder() {
-    const auto exeDir = RuntimeConfigFile::ExecutableDirectory();
-    std::filesystem::path root = exeDir ? *exeDir : std::filesystem::current_path();
-    if (root.filename() == "data") root = root.parent_path();
-    return root;
-}
-
-// PATH (and the game's folder), then beside the launcher (where it installs ffmpeg), then the debug kit's copy.
+// PATH (and the game's folder), then beside the launcher (where a portable launcher installs ffmpeg), the user data
+// folder (where an installed launcher puts it), then the debug kit's copy.
 std::optional<std::filesystem::path> FindFfmpeg() {
     wchar_t found[MAX_PATH * 2] = {};
     if (SearchPathW(nullptr, L"ffmpeg.exe", nullptr, static_cast<DWORD>(std::size(found)), found, nullptr) > 0) {
@@ -252,6 +245,7 @@ std::optional<std::filesystem::path> FindFfmpeg() {
         bases.push_back(*exeDir);
         bases.push_back(exeDir->parent_path());
     }
+    bases.push_back(RuntimeConfigFile::ApplicationDataDirectory());
     for (const auto& base : bases) {
         for (const char* rel : {"ffmpeg.exe", "ffmpeg/bin/ffmpeg.exe", "tools/debug/local/ffmpeg/bin/ffmpeg.exe"}) {
             std::error_code ec;
@@ -515,8 +509,9 @@ void Writer(std::shared_ptr<Session> session) {
     txt.close();
     RT_LOG(RT_TAG_RUNTIME) << "recording " << (saved ? "saved: " : "NOT saved: ") << Utf8(saved ? mp4 : video) << " ("
                            << written << " frames, " << dropped << " dropped)" << std::endl;
-    Notice(saved ? "Video saved: Videos\\" + Utf8(mp4.filename())
-                 : "Video not saved: " + (failure.empty() ? "see Videos\\" + Utf8(logPath.filename()) : failure),
+    const std::string folder = RuntimeConfigFile::CaptureDirectoryLabel(true);
+    Notice(saved ? "Video saved: " + folder + Utf8(mp4.filename())
+                 : "Video not saved: " + (failure.empty() ? "see " + folder + Utf8(logPath.filename()) : failure),
            saved ? mp4 : failure.empty() ? logPath : std::filesystem::path());
     g_saving = false;
     SetEvent(g_idle);
@@ -534,7 +529,7 @@ void Start() {
         Notice("F3 needs ffmpeg: the launcher can download it (Extras > Developer tools)");
         return;
     }
-    const std::filesystem::path folder = RootFolder() / "Videos";
+    const std::filesystem::path folder = RuntimeConfigFile::CaptureDirectory(true);
     std::error_code ec;
     std::filesystem::create_directories(folder, ec);
     const std::string stamp = "FrightWorks_" + LocalTime("%Y-%m-%d_%H-%M-%S");

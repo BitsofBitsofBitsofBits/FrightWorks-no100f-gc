@@ -1,4 +1,4 @@
-"""Builds the per-controller button prompt icons (Play/UserData/button_icons).
+"""Builds the per-controller button prompt icons (Play/button_icons, beside the game).
 
 The game draws its button prompts from one GameCube button picture (an atlas: Y, X, A, B). The game puts the atlas
 together at run time (aurora texture_replacement.cpp) from these files, so the prompts can follow the player's button
@@ -14,7 +14,7 @@ Icons come from Kenney's Input Prompts (CC0, tools/button-art: only the ones use
 Every icon is drawn at the size of the biggest GameCube button (A), centred where that button is and kept inside its
 quarter of the atlas; the GameCube B button is smaller. The atlas is the HD pack's size.
 
-    python tools/make-button-icons.py [--out Play/UserData/button_icons]
+    python tools/make-button-icons.py [--out Play/button_icons]
 Needs ImageMagick (magick) to render the SVGs, and the HD pack in texture_pack/ScoobyHD for the layout.
 """
 import argparse
@@ -73,7 +73,7 @@ def render_svg(svg, size, tmp, dark_symbol):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(ROOT, "Play", "UserData", "button_icons"))
+    ap.add_argument("--out", default=os.path.join(ROOT, "Play", "button_icons"))
     a = ap.parse_args()
     base = Image.open(os.path.join(ROOT, "texture_pack", "ScoobyHD", ATLAS)).convert("RGBA")
     boxes = regions(base)

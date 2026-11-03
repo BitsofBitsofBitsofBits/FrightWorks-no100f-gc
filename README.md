@@ -51,7 +51,9 @@ Settings are in the launcher (**Settings**) and in game (**F10**, or the control
 long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
 screenshot to the `Screenshots` folder and **F1** opens this page in your browser. The title screen and main menu list
 these keys in the corner. Saves, settings
-and mods live in `data\UserData`; unzip a new release over the old folder to update.
+and mods live in `data\UserData`; unzip a new release over the old folder to update. **Extras > Folders** opens them,
+can put the saves in another folder (say, one that's backed up), and copies saves and settings over from an earlier
+FrightWorks or Refrightened folder.
 
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
 free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
@@ -102,7 +104,7 @@ powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
 The game builds to `Play\`; the package goes to `dist\`. The first build downloads dogerki's HD texture pack
 (604 MB, from the [Internet Archive](https://archive.org/details/dolphin-scooby-doo-night-of-100-frights-hd-texture-pack))
 into `texture_pack\ScoobyHD` (not in git) and adds the HD Creeper frames from `tools\hd-pack-additions`. Every build
-copies the pack and the button prompt icons into `Play\UserData`; the icons need Python and ImageMagick.
+copies the pack and the button prompt icons into `Play\` beside the game; the icons need Python and ImageMagick.
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
 

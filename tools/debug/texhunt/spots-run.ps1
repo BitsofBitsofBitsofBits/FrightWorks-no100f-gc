@@ -21,7 +21,7 @@ $ms = Join-Path $root 'tools\debug\manual-session.ps1'
 $cfg = Join-Path $play 'UserData\Config.toml'
 $cmdFile = Join-Path $play 'devmenu.txt'
 $logFile = Join-Path $play 'devmenu.log'
-$link = Join-Path $play 'UserData\texture_replacements\ScoobyHD'
+$link = Join-Path $play 'texture_replacements\ScoobyHD'
 $outDir = Join-Path $root 'autotest\texhunt\spots'
 New-Item -ItemType Directory -Force $outDir | Out-Null
 if ($Branch) {
