@@ -50,12 +50,9 @@ sealed class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         KeyPreview = true;
 
-        var version = typeof(MainForm).Assembly.GetName().Version;
         scene = new MansionScene(shotDir == null && SystemInformation.UIEffectsEnabled, shotDir == null ? Environment.TickCount : 1)
         {
             Dock = DockStyle.Fill,
-            Credit = "by Loneranger419 · based on Refrightened by JosiahG",
-            Version = version == null ? "" : version.ToString(3),
         };
         scene.SignClicked += OnSign;
         scene.Resize += (_, _) => PlaceBoards();
@@ -382,7 +379,8 @@ sealed class MainForm : Form
         body.Controls.Add(folders);
 
         body.Controls.Add(Title("About"));
-        body.Controls.Add(Note("FrightWorks by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. Built on WiiCompiled (GPLv3) " +
+        var version = typeof(MainForm).Assembly.GetName().Version;
+        body.Controls.Add(Note("FrightWorks " + (version == null ? "" : "v" + version.ToString(3) + " ") + "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. Built on WiiCompiled (GPLv3) " +
                                "and Aurora (MIT). HD texture pack by dogerki. Button prompts by Kenney (CC0). Lettering in " +
                                "Luckiest Guy by Astigmatic and in-game menu text in Roboto by Christian Robertson (both Apache 2.0). " +
                                "Scooby-Doo is a trademark of Hanna-Barbera / Warner Bros.; this is an unofficial fan project."));
