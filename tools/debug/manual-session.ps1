@@ -1,7 +1,7 @@
 # Single-window manual playtest helper for texture / visual bugs.
 # Never spawns workers, never scripts input, never auto-kills after N seconds.
 #
-#   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start
+#   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start [-Sound]
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 shot [-Label glitch]
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 status
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
@@ -9,9 +9,12 @@
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare [-Boot ..]  # test config + boot mod, no game
 #   powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 restore     # put the user's setup back
 #
-# Every test runs with the same config (written below: windowed 1600x900, fps60, msaa 4, HD off unless -HdTextures), not
-# the user's own. start/prepare first save the user's setup (Play\UserData\Config.toml and any *.controller files, where
-# aurora keeps F10 controller remaps) to tools\debug\local\user-setup\, unless a saved copy is already there (a test is
+# Every test runs with the same config (written below: windowed 1600x900, fps60, msaa 4, HD off unless -HdTextures,
+# sound muted unless -Sound), not the user's own. Sound: [audio] volume = 0.05 and muted = true; -Sound (the human is
+# testing or playing it, or an audio bug/enhancement) writes muted = false, so the game plays at 5%. Mute and volume are
+# SDL output gain only: AUDIO_RAW_DUMP captures are the same either way.
+# start/prepare first save the user's setup (Play\UserData\Config.toml and any *.controller files, where aurora keeps
+# F10 controller remaps) to tools\debug\local\user-setup\, unless a saved copy is already there (a test is
 # running, or one didn't finish: the copy there is still the user's). stop and restore put it back, delete the copy and
 # remove the zz-manual boot mod. Scripts that run the game themselves: prepare, launch, then stop/restore in a finally.
 #
@@ -37,6 +40,7 @@ param(
     [string]$Label = '',
     [switch]$HdTextures,
     [switch]$AllPowerups,
+    [switch]$Sound,
     [int]$Width = 1600,
     [int]$Height = 900
 )
@@ -161,6 +165,7 @@ function Write-PlayConfig([string]$bootLevel, [bool]$unlockAllPowerups) {
 
     $dvd = ($disc -replace '\\', '/')
     $hd = if ($HdTextures) { 'true' } else { 'false' }
+    $muted = if ($Sound) { 'false' } else { 'true' }
     @"
 [paths]
 dvd_root = '$dvd'
@@ -175,7 +180,13 @@ skip_intro = true
 fps60 = true
 msaa = 4
 texture_replacements = $hd
+
+[audio]
+volume = 0.05
+muted = $muted
 "@ | Set-Content -LiteralPath (Join-Path $play 'UserData\Config.toml') -Encoding utf8
+
+    Write-Host "sound: $(if ($Sound) { 'on at 5% (-Sound)' } else { 'muted (-Sound: on at 5%)' })"
 
     $needIni = [bool]$bootLevel -or $unlockAllPowerups
     if (-not $needIni) {
@@ -246,7 +257,7 @@ switch ($Command) {
             Write-Host "status: alive pid=$($p.ProcessId) path=$($p.ExecutablePath)"
         }
         if ($session) {
-            Write-Host "status: session boot=$($session.boot) allPowerups=$($session.allPowerups) started=$($session.started)"
+            Write-Host "status: session boot=$($session.boot) allPowerups=$($session.allPowerups) sound=$(if ($session.PSObject.Properties['sound']) { $session.sound } else { '?' }) started=$($session.started)"
         }
         if ($procs.Count -gt 1) {
             Write-Host 'status: WARNING more than one Play instance - use stop then start'
@@ -295,6 +306,7 @@ switch ($Command) {
             pid         = $p.Id
             boot        = $Boot
             allPowerups = [bool]$AllPowerups
+            sound       = [bool]$Sound
             started     = (Get-Date).ToString('o')
             exe         = $exe
         }
