@@ -197,8 +197,8 @@ useful:
 
 Each task can get its own git worktree: a second folder with its own branch, build and `Play\`, sharing the big
 read-only folders (disc files, HD pack, toolchain) with the main checkout through links. Each worktree gets its own
-Claude Code session in a Windows Terminal tab; one session in the main checkout, named `main`, coordinates them (the
-`parallel-work` skill).
+Claude Code session in a Windows Terminal tab; one session in the main checkout, named `coordinator`, coordinates them
+(the `parallel-work` skill). Not `main`: in SendMessage, "main" means the sender's own conversation.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name main
@@ -208,7 +208,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name ins
 powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name installer
 ```
 
-- `open -Name main` opens a tab in the main checkout running the coordinating session. Ask it to start, check on or
+- `open -Name main` opens a tab in the main checkout running the coordinating session (`coordinator`). Ask it to start, check on or
   finish tasks; it runs the commands below and can message the other sessions.
 - `new` creates `..\FrightWorks-worktrees\<name>` from `origin/main` (or checks out an existing branch) and opens a
   tab there running `claude -n <name>` (`-NoOpen` to skip). With `-Task`, the goal goes into the worktree's `TASK.md`
@@ -216,7 +216,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   `-SkipTools`/`-SkipTranslate` (or `new ... -Build`).
 - `open -Name <name>` starts a closed session again: a new conversation that picks the task up from `TASK.md`
   (`-Continue` to resume the last conversation instead). `new`/`open` start the tab without the Claude Code
-  variables of the shell that runs them, so a session started from the main session is its own session: listed by
+  variables of the shell that runs them, so a session started from the coordinator is its own session: listed by
   ListAgents, its conversation saved for `-Continue`.
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
@@ -235,4 +235,4 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
 `.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
 (graphics and state bugs), `game-logic-debug` (60 fps, timing and gameplay bugs, dev menu, postool),
 `manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) `audio-debug` (crackle, clicks, fuzz) and `parallel-work`
-(worktrees and their sessions, run from the main session).
+(worktrees and their sessions, run from the coordinator).

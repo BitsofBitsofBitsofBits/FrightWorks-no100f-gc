@@ -18,10 +18,11 @@
 # Sessions: new opens a Windows Terminal tab in the worktree running `claude -n <name>` (-NoOpen: don't). With -Task,
 # the goal goes into TASK.md and the session starts on it right away. open starts the session again later: a new
 # conversation that picks the task up from TASK.md (-Continue: claude -c, the folder's last conversation).
-# The tab starts without the Claude Code variables of the shell that ran this, so a session started from main's tool
-# shell is a session of its own (listed by ListAgents, its conversation saved), not a child of main.
-# `open -Name main` opens the main checkout's session: the coordinating one, which creates and removes worktrees and
-# can message the others by name (session name = worktree name).
+# The tab starts without the Claude Code variables of the shell that ran this, so a session started from the
+# coordinator's tool shell is a session of its own (listed by ListAgents, its conversation saved), not its child.
+# `open -Name main` opens the main checkout's session, named `coordinator`: it creates and removes worktrees and can
+# message the others by name (session name = worktree name). Not `main`: in SendMessage, "main" always means the
+# sender's own conversation, so workers could not reach a session of that name.
 # -Build runs the first full build there (translator tools, translate, compile).
 # remove refuses while the worktree has uncommitted or untracked work, a program running from it (it first stops the
 # dotnet build servers a launcher or translator build leaves running there) or its Claude session. It unlinks the
@@ -49,6 +50,9 @@ if ($LASTEXITCODE -ne 0) { throw 'not inside a git checkout' }
 $main = (Resolve-Path (Split-Path ($common -replace '/', '\') -Parent)).Path
 if (-not $Base) { $Base = Join-Path (Split-Path $main -Parent) 'FrightWorks-worktrees' }
 
+# Session name of the main checkout's coordinating session (open -Name main).
+$coordinator = 'coordinator'
+
 function Invoke-Git { & git -C $main @args; if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed" } }
 
 # UTF-8 without a BOM (Windows PowerShell's -Encoding utf8 writes one; Claude Code reads CLAUDE.md's @imports per line).
@@ -73,6 +77,7 @@ function Get-WorktreePath {
         if ($Command -eq 'open') { return $main }
         throw "-Name main is the main checkout's session; pick another name"
     }
+    if ($Name -eq $coordinator) { throw "-Name ${coordinator}: the main checkout's session has that name; pick another" }
     Join-Path $Base $Name
 }
 
@@ -83,8 +88,8 @@ function Open-Session([string]$path, [string]$title, [string]$prompt, [bool]$con
     if ($prompt) { $claude += $prompt }
     $wt = Get-Command wt -ErrorAction SilentlyContinue
     if (-not $wt) { Write-Host "open: Windows Terminal (wt) not found; run: cd `"$path`"; $($claude -join ' ')"; return }
-    # The new tab gets this process's environment. Run from a Claude Code session's tool shell (as main does), that
-    # includes Claude Code's own variables, and the new claude would start as a child of that session: no
+    # The new tab gets this process's environment. Run from a Claude Code session's tool shell (as the coordinator
+    # does), that includes Claude Code's own variables, and the new claude would start as a child of that session: no
     # ~/.claude/sessions entry (ListAgents/SendMessage can't find it), no saved transcript (open -Continue can't resume
     # it). Drop them here (this process only), except any the user set themselves (User or Machine environment).
     foreach ($v in @(Get-ChildItem Env: | Where-Object { $_.Name -in 'CLAUDECODE', 'CLAUDE_PID', 'AI_AGENT' -or $_.Name -like 'CLAUDE_CODE_*' })) {
@@ -133,7 +138,8 @@ switch ($Command) {
         $path = Get-WorktreePath
         if (-not (Test-Path -LiteralPath $path)) { throw "no worktree $path" }
         $prompt = if ($Continue -or $Name -eq 'main') { '' } else { 'Read TASK.md and carry on with the task from its Status.' }
-        Open-Session $path $Name $prompt ([bool]$Continue)
+        $title = if ($Name -eq 'main') { $coordinator } else { $Name }
+        Open-Session $path $title $prompt ([bool]$Continue)
     }
     'new' {
         $path = Get-WorktreePath
@@ -184,10 +190,11 @@ Notes for this task go here, not in AGENTS.md (AGENTS.md is shared by every work
 This worktree has its own Play\ and autotest\; Disc\, texture_pack\, toolchain\ and tools\debug\local\* are links to
 the main checkout's (read only: never delete or rewrite them from here). Game runs take turns (game-run lock).
 
-This session is named ``$Name``. The main checkout's session (named ``main``) creates and removes worktrees and may
-message you (SendMessage). When the goal is done, or you are stuck on something only the human can decide, say so here
-and send ``main`` a one-line status if ListAgents shows it. Keep Status below current: a session reopened later
-(worktree.ps1 open) starts from this file, not from this conversation.
+This session is named ``$Name``. The main checkout's session (named ``$coordinator``) creates and removes worktrees and
+may message you (SendMessage). When the goal is done, or you are stuck on something only the human can decide, say so
+here and send ``$coordinator`` a one-line status if ListAgents shows it (not ``main``: that means your own
+conversation). Keep Status below current: a session reopened later (worktree.ps1 open) starts from this file, not
+from this conversation.
 
 ## Goal
 $goal
