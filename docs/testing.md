@@ -211,6 +211,17 @@ useful:
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
 - **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>`
   draws every page to `<dir>\<Page>.png`.
+- **Isolated launcher layout regression** (Windows, .NET 8 SDK or newer):
+  `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
+  This builds the launcher and checks Settings/Display, Controls, Mods and Extras at normal, minimum and smaller
+  window sizes, reopening and growing/shrinking layouts, long mod names, nested scrolling, dropdown widths, keyboard
+  button activation, and preservation of custom HDR and unknown config values. It creates a disposable portable
+  fixture and page screenshots only in the output directory; it never starts the game or uses the player's data.
+  It also moves its own test window across existing monitors and back, logging actual DPI transitions without
+  changing display settings. An optional trailing zero-based monitor index selects the starting monitor.
+  Additional font/size stress at 125%, 150%, 200% and back to 100% is **simulated**, separate from those native
+  transitions. Also check first-open painting interactively. The rounded board region should only change on resize, not on ordinary layout,
+  and page content should scroll vertically without hiding dropdown arrows or producing horizontal scrollbars.
 - **Screen recording**: `tools\debug\capture\record.ps1`.
 
 ## 8. Looking at the game's code and data
