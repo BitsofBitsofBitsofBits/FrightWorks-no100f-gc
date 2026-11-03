@@ -1,4 +1,5 @@
 # Record the running game's client area to an mp4.
+# Records this checkout's game (Play\ or autotest\ copies), never another worktree's or the user's own.
 # record.ps1 -Out <file.mp4> [-Seconds 5] [-Method ddagrab|gdigrab] [-Toggle]
 #   ddagrab (default): Desktop Duplication of the monitor holding the window, with the window made topmost for the
 #     capture so nothing covers it; DPI-aware, works on any monitor. Window capture of the swapchain (gdigrab
@@ -9,6 +10,7 @@ param([Parameter(Mandatory)][string]$Out, [int]$Seconds = 5, [ValidateSet('ddagr
       [switch]$Toggle)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+. (Join-Path $PSScriptRoot '..\kit-common.ps1')
 $ffBin = & (Join-Path $PSScriptRoot 'get-ffmpeg.ps1')   # PATH, else tools\debug\local\ffmpeg (downloaded once)
 Add-Type @'
 using System; using System.Runtime.InteropServices;
@@ -24,7 +26,9 @@ public static class RecWin {
 '@ -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Windows.Forms
 [RecWin]::SetProcessDPIAware() | Out-Null
-$g = Get-Process 'FrightWorks Game' -ErrorAction Stop | Sort-Object WorkingSet64 -Descending | Select-Object -First 1
+$g = @(Get-CheckoutGames $root | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }) |
+    Sort-Object WorkingSet64 -Descending | Select-Object -First 1
+if (-not $g) { throw "no game running from $root" }
 $h = $g.MainWindowHandle
 [RecWin]::SetForegroundWindow($h) | Out-Null
 Start-Sleep -Milliseconds 500

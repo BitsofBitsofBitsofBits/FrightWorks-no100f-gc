@@ -15,6 +15,10 @@
 # running, or one didn't finish: the copy there is still the user's). stop and restore put it back, delete the copy and
 # remove the zz-manual boot mod. Scripts that run the game themselves: prepare, launch, then stop/restore in a finally.
 #
+# Worktrees: everything here stays inside this checkout (its Play\, its user-setup copy); games started from other
+# checkouts and the user's own game are never touched. prepare/start take the machine-wide game-run lock (kit-common.ps1)
+# and wait while another checkout holds it; stop/restore give it back.
+#
 # Default boot (when -Boot is omitted): e001 — first Hedge Maze section
 # ("On Edge in the Hedge 1"). Override with -Boot <level> if needed.
 #   ... start -Boot h002
@@ -42,6 +46,7 @@ $env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-i
 Set-StrictMode -Version 3.0
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\manual-session.ps1
+. (Join-Path $PSScriptRoot 'kit-common.ps1')
 $play = Join-Path $root 'Play'
 $exe = Join-Path $play 'FrightWorks Game.exe'
 $outDir = Join-Path $root 'autotest\manual'
@@ -112,8 +117,8 @@ function Stop-AutomationLeftovers {
                 $hit = $true; break
             }
         }
-        # Any game copy running from autotest\ work trees (never from Play\).
-        if ($path -and $path -match '[\\/]autotest[\\/]') { $hit = $true }
+        # Any game copy running from this checkout's autotest\ (never from Play\, never another checkout's).
+        if ($path -and $path.StartsWith((Join-Path $root 'autotest') + '\', [StringComparison]::OrdinalIgnoreCase)) { $hit = $true }
         if ($hit) {
             Write-Host "automation: kill $($_.ProcessId) $($_.Name)"
             Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
@@ -214,14 +219,17 @@ switch ($Command) {
         Remove-Item -LiteralPath $statePath -ErrorAction SilentlyContinue
         Write-Host 'stop: session cleared'
         Restore-UserSetup
+        Exit-GameLock $root
     }
     'restore' {
         if (@(Get-PlayGameProcesses).Count) { Write-Host 'restore: the game is still running; it may write its config when it closes' }
         Restore-UserSetup
+        Exit-GameLock $root
     }
     'prepare' {
         Assert-PlayReady
         if (@(Get-PlayGameProcesses).Count) { throw 'prepare: the game is running from Play\; close it (or run stop) first' }
+        Enter-GameLock $root "manual-session prepare -Boot $Boot"
         Save-UserSetup
         Write-PlayConfig -bootLevel $Boot -unlockAllPowerups:([bool]$AllPowerups)
         Write-Host 'prepare: test config + boot mod written; launch the game yourself, then stop (or restore) when done'
@@ -254,10 +262,9 @@ switch ($Command) {
             Write-Host 'start: use "shot" to capture, or "stop" then "start" to relaunch'
             exit 0
         }
-        # Refuse to start if other game copies are still up outside Play (shouldn't after stop-tests).
-        $strays = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -match '^FrightWorks Game\.exe$|Scooby' -and $_.ExecutablePath -and $_.ExecutablePath -ne $exe
-        }
+        # Other game copies from this checkout (autotest\ copies; shouldn't be any after stop-tests). Games from other
+        # checkouts and the user's own are left alone: the game-run lock below keeps test runs apart.
+        $strays = @(Get-CheckoutGames $root | Where-Object { $_.ExecutablePath -ne $exe })
         if ($strays) {
             foreach ($s in $strays) {
                 Write-Host "start: killing stray $($s.ProcessId) $($s.ExecutablePath)"
@@ -265,6 +272,7 @@ switch ($Command) {
             }
             Start-Sleep -Seconds 1
         }
+        Enter-GameLock $root "manual-session start -Boot $Boot"
         Save-UserSetup
         Write-PlayConfig -bootLevel $Boot -unlockAllPowerups:([bool]$AllPowerups)
         # Inherit caller env into the game process (Start-Process default). Log selected diags if set.

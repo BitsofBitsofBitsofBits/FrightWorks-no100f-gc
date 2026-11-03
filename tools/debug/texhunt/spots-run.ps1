@@ -13,6 +13,7 @@ $label = if ($Tag) { "$Mode-$Tag" } else { $Mode }  # file name suffix: <spot>-<
 $ErrorActionPreference = 'Stop'
 $env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
+. (Join-Path $PSScriptRoot '..\kit-common.ps1')  # Stop-CheckoutGames: only this checkout's game
 Set-Location $root
 $play = Join-Path $root 'Play'
 $exe = Join-Path $play 'FrightWorks Game.exe'
@@ -109,7 +110,7 @@ try {
     }
     & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
 } finally {
-    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Stop-CheckoutGames $root
     Start-Sleep 1
     if ($linked) { [IO.Directory]::Delete($link, $false) }  # the junction only
     & powershell -ExecutionPolicy Bypass -File $ms restore | Out-Null  # your settings back, zz-manual removed

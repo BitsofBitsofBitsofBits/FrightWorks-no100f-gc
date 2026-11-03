@@ -27,6 +27,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\play-patched.ps1
+. (Join-Path $PSScriptRoot 'kit-common.ps1')  # game-run lock while the game is open
 $patchDir = Join-Path $PSScriptRoot 'patches'
 $exe = Join-Path $root 'Play\FrightWorks Game.exe'
 # powershell -File passes "-Patch a,b" as one string
@@ -83,7 +84,7 @@ if (Get-Process | Where-Object { $_.Path -eq $exe }) { throw "the game is alread
 $applied = New-Object System.Collections.Generic.List[object]
 & git -C $root cat-file -e 'HEAD:wiicompiled/runtime/src/no100f_devmenu.cpp' 2>$null
 $builtInDevmenu = $LASTEXITCODE -eq 0
-$hdOld = $null; $hdSet = $false; $linked = $false
+$hdOld = $null; $hdSet = $false; $linked = $false; $locked = $false
 try {
     if ($HdTextures) {
         $pack = Join-Path $root 'texture_pack\ScoobyHD'
@@ -118,10 +119,13 @@ try {
         Build -Translate:(-not $SkipTranslate)
         "playing   $(Split-Path -Leaf $exe) (patches come out when it closes)"
     }
+    Enter-GameLock $root "play-patched $($names -join ',')"
+    $locked = $true
     $game = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
     $game.WaitForExit()
     "closed    exit code $($game.ExitCode)"
 } finally {
+    if ($locked) { Exit-GameLock $root }
     if ($hdSet) { Set-HdLine $hdOld | Out-Null }
     if ($linked) { [IO.Directory]::Delete($packLink, $false) }  # the junction only, not the pack
     if ($hdSet -or $linked) { "hd        texture pack setting and link put back" }
