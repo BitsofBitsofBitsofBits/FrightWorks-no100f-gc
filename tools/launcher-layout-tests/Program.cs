@@ -17,6 +17,39 @@ static class LauncherLayoutTests
         if (!condition) throw new InvalidOperationException(message);
     }
 
+    // Simulated monitor layouts: the same cases and expected text as the game's wiicompiled/runtime/tests/monitor_labels_tests.cpp.
+    static void CheckMonitorLabels(Assembly assembly)
+    {
+        var labels = assembly.GetType("ScoobyReMasked.Monitors")!.GetMethod("Labels", BindingFlags.Static | BindingFlags.Public)!;
+        (string, Rectangle, bool) M(string name, int x, int y, int w, int h, bool primary = false) => (name, new Rectangle(x, y, w, h), primary);
+        void Case(string name, (string, Rectangle, bool)[] layout, params string[] expected)
+        {
+            var got = (List<string>)labels.Invoke(null, new object[] { layout.ToList() })!;
+            Check(got.SequenceEqual(expected), $"Monitor labels, {name}: {string.Join(" | ", got)}");
+        }
+        Case("no clash: names and places differ",
+            new[] { M("XB271HU", 0, 0, 2560, 1440, true), M("G215HV", 640, -1080, 1920, 1080), M("VS248", 2560, 0, 1920, 1080), M("VS248", 2560, -1080, 1920, 1080) },
+            "XB271HU (2560x1440, main)", "G215HV (1920x1080, above)", "VS248 (1920x1080, right)", "VS248 (1920x1080, above right)");
+        Case("two matching to the right: numbered left to right, whatever the list order",
+            new[] { M("Main", 0, 0, 2560, 1440, true), M("VS248", 4480, 0, 1920, 1080), M("VS248", 2560, 0, 1920, 1080) },
+            "Main (2560x1440, main)", "VS248 (1920x1080, right 2)", "VS248 (1920x1080, right 1)");
+        Case("same left edge: numbered top to bottom",
+            new[] { M("Main", 0, 0, 2560, 1440, true), M("VS248", 2560, 980, 1920, 1080), M("VS248", 2560, -100, 1920, 1080) },
+            "Main (2560x1440, main)", "VS248 (1920x1080, right 2)", "VS248 (1920x1080, right 1)");
+        Case("each clash counts on its own",
+            new[] { M("Main", 0, 0, 2560, 1440, true), M("VS248", -1920, 0, 1920, 1080), M("VS248", -3840, 0, 1920, 1080), M("VS248", 2560, 0, 1920, 1080), M("VS248", 4480, 0, 1920, 1080) },
+            "Main (2560x1440, main)", "VS248 (1920x1080, left 2)", "VS248 (1920x1080, left 1)", "VS248 (1920x1080, right 1)", "VS248 (1920x1080, right 2)");
+        Case("same place but another size or name: no number",
+            new[] { M("Main", 0, 0, 2560, 1440, true), M("VS248", 2560, 0, 1920, 1080), M("VS248", 4480, 0, 1280, 1024), M("G215HV", 5760, 0, 1920, 1080) },
+            "Main (2560x1440, main)", "VS248 (1920x1080, right)", "VS248 (1280x1024, right)", "G215HV (1920x1080, right)");
+        Case("below and above left",
+            new[] { M("Main", 0, 0, 2560, 1440, true), M("VS248", 0, 1440, 1920, 1080), M("VS248", -1920, -1080, 1920, 1080) },
+            "Main (2560x1440, main)", "VS248 (1920x1080, below)", "VS248 (1920x1080, above left)");
+        Case("overlapping the main monitor: no place word, number only on a clash",
+            new[] { M("Main", 0, 0, 2560, 1440, true), M("VS248", 100, 100, 1920, 1080), M("VS248", 200, 100, 1920, 1080), M("G215HV", 300, 100, 1920, 1080) },
+            "Main (2560x1440, main)", "VS248 (1920x1080, 1)", "VS248 (1920x1080, 2)", "G215HV (1920x1080)");
+    }
+
     [STAThread]
     static int Main(string[] args)
     {
@@ -237,6 +270,7 @@ static class LauncherLayoutTests
                 Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
                 monitorBox.SelectedIndex = 0;
                 Check(File.ReadAllText(config).Contains("fullscreen_display = \"auto\""), "Automatic monitor was not saved");
+                CheckMonitorLabels(assembly);
                 var layout = (ComboBox)type.GetField("layoutBox", Private)!.GetValue(form)!;
                 layout.SelectedIndex = 0;
                 selectTab(true);

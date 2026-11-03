@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 namespace ScoobyReMasked;
 
 // The connected monitors for Settings > Display > Fullscreen monitor, with the same ids, labels, order and matching as
-// the game (aurora-main/lib/window.cpp query_monitors, find_monitor, get_monitors): both read Windows' display config.
+// the game (aurora-main/lib/window.cpp query_monitors, find_monitor; monitor_labels.hpp): both read Windows' display config.
 static class Monitors
 {
     public sealed record Monitor(string Id, string Label);
@@ -11,23 +11,38 @@ static class Monitors
     public static List<Monitor> List()
     {
         var targets = Targets();
-        var screens = Screen.AllScreens.OrderByDescending(s => s.Primary).ToList();
-        var main = screens.FirstOrDefault(s => s.Primary)?.Bounds ?? default;
-        var monitors = new List<Monitor>();
-        foreach (var screen in screens)
+        var screens = Screen.AllScreens.OrderByDescending(s => s.Primary).Where(s => targets.ContainsKey(s.DeviceName)).ToList();
+        var labels = Labels(screens.Select(s => (targets[s.DeviceName].name, s.Bounds, s.Primary)).ToList());
+        return screens.Select((s, i) => new Monitor(targets[s.DeviceName].id, labels[i])).ToList();
+    }
+
+    // "VS248 (1920x1080, above right)": name, size and place relative to the main monitor. Monitors whose labels would
+    // match get a number, left to right, then top to bottom: "VS248 (1920x1080, right 2)". Same text as the game; both
+    // are checked against the same cases (tools/launcher-layout-tests, runtime/tests/monitor_labels_tests.cpp).
+    public static List<string> Labels(IReadOnlyList<(string name, Rectangle bounds, bool primary)> monitors)
+    {
+        var main = monitors.FirstOrDefault(m => m.primary).bounds;
+        string Place((string name, Rectangle bounds, bool primary) m)
         {
-            if (!targets.TryGetValue(screen.DeviceName, out var target)) continue;
-            var r = screen.Bounds;
-            string place = "main";
-            if (!screen.Primary)
-            {
-                string vertical = r.Bottom <= main.Top ? "above" : r.Top >= main.Bottom ? "below" : "";
-                string horizontal = r.Right <= main.Left ? "left" : r.Left >= main.Right ? "right" : "";
-                place = (vertical + " " + horizontal).Trim();
-            }
-            monitors.Add(new Monitor(target.id, $"{target.name} ({r.Width}x{r.Height}{(place.Length > 0 ? ", " + place : "")})"));
+            if (m.primary) return "main";
+            string vertical = m.bounds.Bottom <= main.Top ? "above" : m.bounds.Top >= main.Bottom ? "below" : "";
+            string horizontal = m.bounds.Right <= main.Left ? "left" : m.bounds.Left >= main.Right ? "right" : "";
+            return (vertical + " " + horizontal).Trim();
         }
-        return monitors;
+        var labels = new string[monitors.Count];
+        var clashes = Enumerable.Range(0, monitors.Count).GroupBy(i =>
+            (monitors[i].name, monitors[i].bounds.Width, monitors[i].bounds.Height, place: Place(monitors[i])));
+        foreach (var clash in clashes)
+        {
+            int number = 0;
+            foreach (int i in clash.OrderBy(i => monitors[i].bounds.Left).ThenBy(i => monitors[i].bounds.Top))
+            {
+                number++;
+                string tail = (clash.Key.place + (clash.Count() > 1 ? " " + number : "")).Trim();
+                labels[i] = $"{clash.Key.name} ({clash.Key.Width}x{clash.Key.Height}{(tail.Length > 0 ? ", " + tail : "")})";
+            }
+        }
+        return labels.ToList();
     }
 
     // What a saved id means now: that monitor, else the only connected one of its model (plugged into another port).

@@ -6,6 +6,7 @@
 #endif
 #include "input.hpp"
 #include "internal.hpp"
+#include "monitor_labels.hpp"
 
 #include <aurora/aurora.h>
 #include <aurora/event.h>
@@ -969,29 +970,18 @@ uint32_t get_monitors(AuroraMonitor* monitors, uint32_t maxCount) {
 #if defined(_WIN32)
   const auto found = query_monitors();
   const NativeMonitor* selected = find_monitor(found, g_fullscreenMonitor);
-  RECT mainBounds{};
+  std::vector<MonitorLabelInput> inputs;
   for (const auto& monitor : found) {
-    if (monitor.primary) {
-      mainBounds = monitor.bounds;
-    }
-  }
-  uint32_t count = 0;
-  for (const auto& monitor : found) {
-    if (count == maxCount) {
-      break;
-    }
     const RECT& r = monitor.bounds;
-    std::string place = monitor.primary ? "main" : "";
-    if (!monitor.primary) {
-      const char* vertical = r.bottom <= mainBounds.top ? "above" : r.top >= mainBounds.bottom ? "below" : "";
-      const char* horizontal = r.right <= mainBounds.left ? "left" : r.left >= mainBounds.right ? "right" : "";
-      place = std::string(vertical) + (*vertical != '\0' && *horizontal != '\0' ? " " : "") + horizontal;
-    }
+    inputs.push_back({monitor.name, r.left, r.top, r.right, r.bottom, monitor.primary});
+  }
+  const std::vector<std::string> labels = monitor_labels(inputs);
+  uint32_t count = 0;
+  for (size_t i = 0; i < found.size() && count < maxCount; ++i) {
     AuroraMonitor& out = monitors[count++];
-    std::snprintf(out.id, sizeof(out.id), "%s", monitor.id.c_str());
-    std::snprintf(out.label, sizeof(out.label), "%s (%ldx%ld%s%s)", monitor.name.c_str(), r.right - r.left,
-                  r.bottom - r.top, place.empty() ? "" : ", ", place.c_str());
-    out.selected = &monitor == selected;
+    std::snprintf(out.id, sizeof(out.id), "%s", found[i].id.c_str());
+    std::snprintf(out.label, sizeof(out.label), "%s", labels[i].c_str());
+    out.selected = &found[i] == selected;
   }
   return count;
 #else
