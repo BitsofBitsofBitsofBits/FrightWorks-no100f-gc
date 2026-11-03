@@ -285,17 +285,22 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0,
     GXEnd();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetZMode(true, GX_LEQUAL, false);
-    const auto particle = [](std::vector<uint8_t>& raw, float z, std::array<u8, 4> color, bool tilt = false) {
+    const auto particle = [](std::vector<uint8_t>& raw, float z, std::array<u8, 4> color,
+                             bool nonPlanar = false, bool rotated = false) {
       unsigned vertex = 0;
       for (const auto& xy : std::array<std::array<float, 2>, 6>{
                {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
-        const float vz = z + (tilt && vertex == 1 ? .2f : 0.f);
-        for (const float value : {xy[0] * -z, xy[1] * -z, vz}) {
+        const float vz = z + (nonPlanar && vertex == 1 ? .2f : 0.f) + (rotated ? xy[0] * .2f : 0.f);
+        const float size = rotated ? .15f : 1.f;
+        for (const float value : {xy[0] * -z * size, xy[1] * -z * size, vz}) {
           const auto bits = std::bit_cast<uint32_t>(value);
           for (int shift : {24, 16, 8, 0}) raw.push_back(bits >> shift);
         }
         raw.insert(raw.end(), color.begin(), color.end());
-        raw.insert(raw.end(), 8, 0);
+        for (const float value : {(xy[0] + 1.f) * .5f, (1.f - xy[1]) * .5f}) {
+          const auto bits = std::bit_cast<uint32_t>(value);
+          for (int shift : {24, 16, 8, 0}) raw.push_back(bits >> shift);
+        }
         ++vertex;
       }
     };
@@ -323,8 +328,14 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0,
       GXEnd();
     };
     std::vector<uint8_t> green;
-    particle(green, -2, {0, 255, 0, 128});
+    const u8 alpha = variant == 22 ? 64 : variant == 23 ? 255 : variant == 24 ? 0 : 128;
+    particle(green, -2, {0, 255, 0, alpha});
     send(green);
+    if (variant >= 21) {
+      std::vector<uint8_t> leaf;
+      particle(leaf, -3, {111, 83, 49, 180}, false, true);
+      send(leaf);
+    }
     if (variant == 13) quad(-3, {255, 255, 255, 128});
     if (variant == 14) GXSetScissor(32, 0, 32, 64);
     if (variant == 15) {
@@ -446,6 +457,18 @@ int main(int argc, char** argv) {
           check_alpha_pixel(pixels, 4, left);
           check_alpha_pixel(pixels, 12, right);
         }
+        for (unsigned variant : {21, 22, 23, 24}) {
+          const auto pixels = run_alpha_order(mode, variant, path);
+          const auto left = variant == 22 ? std::array{95, 32, 128} :
+                            variant == 23 ? std::array{0, 127, 128} :
+                            variant == 24 ? std::array{127, 0, 128} : std::array{63, 64, 128};
+          const auto right = variant == 22 ? std::array{24, 56, 199} :
+                             variant == 23 ? std::array{0, 127, 128} :
+                             variant == 24 ? std::array{32, 32, 223} : std::array{16, 80, 175};
+          check_alpha_pixel(pixels, 4, left);
+          check_alpha_pixel(pixels, 12, right);
+          if (variant == 24) check_alpha_pixel(pixels, 8, {48, 38, 173});
+        }
       }
     }
     check_alpha_pixel(run_alpha_order(gx::CutoutMode::TwoPassAll, 2), 4, {32, 128, 95});
@@ -455,6 +478,15 @@ int main(int argc, char** argv) {
         const auto particles = run_alpha_order(mode, 11, path);
         check_alpha_pixel(particles, 4, {63, 64, 128});
         check_alpha_pixel(particles, 12, {32, 64, 191});
+        for (unsigned variant : {21, 22, 23, 24}) {
+          const auto pixels = run_alpha_order(mode, variant, path);
+          check_alpha_pixel(pixels, 4, variant == 22 ? std::array{95, 32, 128} :
+                                     variant == 23 ? std::array{0, 127, 128} :
+                                     variant == 24 ? std::array{127, 0, 128} : std::array{63, 64, 128});
+          check_alpha_pixel(pixels, 12, variant == 22 ? std::array{32, 48, 207} :
+                                      variant == 23 ? std::array{32, 95, 160} :
+                                      variant == 24 ? std::array{32, 32, 223} : std::array{32, 64, 191});
+        }
       }
     }
     gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);

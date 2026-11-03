@@ -41,6 +41,43 @@ TEST(BillboardDepth, DecodesBigEndianCameraPlaneQuadsAndRejectsOtherGeometry) {
 }
 
 namespace {
+TEST(ParticleDepth, RecognizesRotatedPlanarSpritesButRejectsMeshesAndMalformedInputs) {
+  std::vector<uint8_t> bytes;
+  for (const auto& xy : std::array<std::array<float, 2>, 6>{
+           {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
+    const auto put = [&](float value) {
+      const auto bits = std::bit_cast<uint32_t>(value);
+      for (int shift : {24, 16, 8, 0}) bytes.push_back(bits >> shift);
+    };
+    put(xy[0]); put(xy[1]); put(-3.f - xy[0]);
+    bytes.insert(bytes.end(), {111, 83, 49, 180});
+    put((xy[0] + 1.f) * .5f); put((1.f - xy[1]) * .5f);
+  }
+  constexpr std::array<float, 4> row{0, 0, 1, 0};
+  EXPECT_EQ(aurora::gx::billboard_depths(bytes, row), (std::vector<float>{3}));
+  const auto valid = bytes;
+  const auto put = [&](size_t offset, float value) {
+    const auto bits = std::bit_cast<uint32_t>(value);
+    for (unsigned byte = 0; byte < 4; ++byte) bytes[offset + byte] = bits >> (24 - byte * 8);
+  };
+  put(24 + 8, -4.25f);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  put(24 + 16, .75f);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  put(24 + 20, 1.f);
+  put(48 + 20, 0.f);
+  put(96 + 20, 0.f);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  ++bytes[24 + 12];
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  put(24 + 16, std::numeric_limits<float>::quiet_NaN());
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+}
+
 std::vector<u8> draw(GXPrimitive primitive, u16 count, GXVtxFmt format = GX_VTXFMT0) {
   std::vector<u8> bytes{static_cast<u8>(primitive | format), static_cast<u8>(count >> 8),
                         static_cast<u8>(count)};
