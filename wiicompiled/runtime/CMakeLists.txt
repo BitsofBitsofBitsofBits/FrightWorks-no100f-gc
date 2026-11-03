@@ -434,17 +434,6 @@ target_include_directories(no100f_window_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_compile_features(no100f_window_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_window_tests COMMAND no100f_window_tests)
 
-add_executable(no100f_title_backdrop_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_title_backdrop_tests.cpp")
-target_include_directories(no100f_title_backdrop_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
-target_compile_features(no100f_title_backdrop_tests PRIVATE cxx_std_17)
-add_test(NAME no100f_title_backdrop_tests COMMAND no100f_title_backdrop_tests)
-
-add_executable(no100f_map_backdrop_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_map_backdrop_tests.cpp")
-target_include_directories(no100f_map_backdrop_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
-target_compile_features(no100f_map_backdrop_tests PRIVATE cxx_std_17)
-target_compile_options(no100f_map_backdrop_tests PRIVATE -ffast-math -fno-finite-math-only)
-add_test(NAME no100f_map_backdrop_tests COMMAND no100f_map_backdrop_tests)
-
 add_executable(no100f_devmenu_state_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_devmenu_state_tests.cpp")
 target_include_directories(no100f_devmenu_state_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_devmenu_state_tests PRIVATE cxx_std_17)
@@ -458,6 +447,17 @@ add_executable(no100f_xbox_layout_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_
 target_include_directories(no100f_xbox_layout_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_xbox_layout_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_xbox_layout_tests COMMAND no100f_xbox_layout_tests)
+
+add_executable(no100f_title_backdrop_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_title_backdrop_tests.cpp")
+target_include_directories(no100f_title_backdrop_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_title_backdrop_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_title_backdrop_tests COMMAND no100f_title_backdrop_tests)
+
+add_executable(no100f_map_backdrop_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_map_backdrop_tests.cpp")
+target_include_directories(no100f_map_backdrop_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_map_backdrop_tests PRIVATE cxx_std_17)
+target_compile_options(no100f_map_backdrop_tests PRIVATE -ffast-math -fno-finite-math-only)
+add_test(NAME no100f_map_backdrop_tests COMMAND no100f_map_backdrop_tests)
 
 # The input expression engine is self-contained, so it can be exercised without
 # linking the runtime or SDL.
