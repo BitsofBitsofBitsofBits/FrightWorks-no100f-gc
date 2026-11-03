@@ -215,7 +215,9 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   and the session starts on it. Its first build must be a full one: `toolsuild-no100f.ps1` without
   `-SkipTools`/`-SkipTranslate` (or `new ... -Build`).
 - `open -Name <name>` starts a closed session again: a new conversation that picks the task up from `TASK.md`
-  (`-Continue` to resume the last conversation instead).
+  (`-Continue` to resume the last conversation instead). `new`/`open` start the tab without the Claude Code
+  variables of the shell that runs them, so a session started from the main session is its own session: listed by
+  ListAgents, its conversation saved for `-Continue`.
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its
