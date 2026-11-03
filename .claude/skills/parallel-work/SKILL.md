@@ -44,7 +44,9 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
 - ListAgents: which sessions are running. SendMessage to `<name>` to ask for a status or pass on a decision from the
   human; the answer arrives as a message. Don't report a worker's state you haven't heard back.
 - A closed tab: `worktree.ps1 open -Name <name>` starts a new session that picks the task up from `TASK.md` (so keep
-  workers writing their Status there). `-Continue` tries `claude -c` (the folder's last conversation) instead.
+  workers writing their Status there). `-Continue` tries `claude -c` (the folder's last conversation) instead. That
+  only works for sessions started after the environment fix (branch `tools/worktree-session-env`): earlier ones,
+  started from main's tool shell, ran as children of main and saved no conversation (and weren't in ListAgents).
 - The human tests a worktree's build with its own `Play\FrightWorks Game.exe`, or its launcher (the worker runs
   `tools\build-launcher.ps1` there, then `launcher\publish\FrightWorks.exe`). The human's own `Play\` is untouched.
 - When one PR merges and another worktree's branch needs it: ask that worker to merge `origin/main` into its branch.
