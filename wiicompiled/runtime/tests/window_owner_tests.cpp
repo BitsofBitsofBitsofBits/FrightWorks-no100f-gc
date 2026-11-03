@@ -174,9 +174,11 @@ int main(int argc, char** argv) {
                         ++joystickCount;
                     } else if (event.type == SDL_EVENT_GAMEPAD_UPDATE_COMPLETE) {
                         Require(event.gdevice.which == 3, "Preserve the gamepad update device");
+                        Require(gamepadCount == 2 && !sawKey, "Complete the retained gamepad state before key input");
                         ++gamepadComplete;
                     } else if (event.type == SDL_EVENT_JOYSTICK_UPDATE_COMPLETE) {
                         Require(event.jdevice.which == 4, "Preserve the joystick update device");
+                        Require(joystickCount == 2 && !sawKey, "Complete the retained joystick state before key input");
                         ++joystickComplete;
                     }
                 }
