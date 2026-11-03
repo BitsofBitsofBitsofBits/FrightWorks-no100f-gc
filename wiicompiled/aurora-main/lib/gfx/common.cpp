@@ -1135,7 +1135,7 @@ void map_staging_buffer() {
       });
 }
 
-static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
+static bool begin_frame_impl(bool newFrame, bool capacityResume = false) {
   ZoneScoped;
   {
     ZoneScopedN("Wait for buffer map");
@@ -1182,7 +1182,7 @@ static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
 
   g_drawCallCount = 0;
   g_mergedDrawCallCount = 0;
-  if (clearEfb) {
+  if (newFrame) {
     gx::begin_frame_interpolation();
   }
   discard_suspended_efb_pass();
@@ -1190,10 +1190,11 @@ static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
 
   push_render_pass(RenderPass{});
   set_efb_targets(g_renderPasses[0]);
-  g_renderPasses[0].clearColorValue = gx::g_gxState.clearColor;
-  g_renderPasses[0].clearDepthValue = gx::clear_depth_value();
-  g_renderPasses[0].clearColor = clearEfb;
-  g_renderPasses[0].clearDepth = clearEfb;
+  // The EFB keeps its contents from one frame to the next, as on hardware: only a copy that asks for it clears it
+  // (resolve_pass). A frame that draws nothing shows the last picture again, not the copy-clear colour (white in
+  // NO100F, whose copies never clear: the movie player's blank presents around every Bink movie flashed white).
+  g_renderPasses[0].clearColor = false;
+  g_renderPasses[0].clearDepth = false;
   g_currentRenderPass = 0;
   // Refresh paired render viewport/scissor from logical state in case the FB size changed.
   const auto mappedRenderState = gx::map_logical_render_state();
