@@ -2837,8 +2837,8 @@ static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t verte
   return gfx::staging_has_space(demand);
 }
 
-static std::vector<float> raw_billboard_depths(GXPrimitive prim, GXVtxFmt fmt,
-                                               const uint8_t* vertices, uint32_t vertexBytes) {
+static std::vector<float> direct_billboard_depths(GXPrimitive prim, GXVtxFmt fmt,
+                                                 const uint8_t* vertices, uint32_t vertexBytes) {
   const auto mode = cutout_mode();
   if ((mode != CutoutMode::TwoPass && mode != CutoutMode::TwoPassAll) ||
       prim != GX_TRIANGLES || g_gxState.projType != GX_PERSPECTIVE ||
@@ -2930,7 +2930,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
                        matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
                        interpolationIdentityActive,
-                       raw_billboard_depths(prim, fmt, vertices, vertexBytes));
+                       direct_billboard_depths(prim, fmt, vertices, vertexBytes));
   g_rawFullscreenOverlay = false;
   return true;
 }
@@ -3069,6 +3069,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     g_gxState.stateDirty = true;
   }
 
+  const auto particleDepths = direct_billboard_depths(prim, fmt, data + pos, totalVtxBytes);
   DrawData* mergeTarget = nullptr;
   // NSMBW debugging: NSMBW_NO_MERGE turns draw merging off.
   static const int noMergeMode = [] {
@@ -3083,7 +3084,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   // Decide admission before allocating anything. The merged path needs only
   // vertices and indices; it must not resolve pipelines or upload arrays.
   // Try to merge with previous draw call
-  if (!g_gxState.stateDirty && !noMerge) LIKELY {
+  if (!g_gxState.stateDirty && !noMerge && particleDepths.empty()) LIKELY {
     auto* lastDraw = gfx::get_last_draw_command<DrawData>();
     // Expanded lines/points have different vertex interpretation even with one instance.
     // Triangle-list output has no restart index; index 65535 is usable.
@@ -3148,7 +3149,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
                        matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive);
+                       interpolationIdentityActive, particleDepths);
   if (fullScreenQuad) {
     g_gxState.proj = widenedProj;
     g_gxState.stateDirty = true;

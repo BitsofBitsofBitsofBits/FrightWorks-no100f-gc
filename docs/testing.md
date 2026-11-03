@@ -115,8 +115,9 @@ mismatch with console rendering. Compatible direct XYZ/RGBA/ST camera-facing tri
 sorted back-to-front across emitter batches, without changing their alpha or depth tests. This prevents distant
 ground mist from blending over a nearer cloud everywhere except where opaque scenery blocks that mist.
 Particle index views share the original vertex/uniform uploads. The GPU regression includes indexed opaque
-geometry and a raw batch containing particles on both sides of a separately submitted cloud, equal-depth
-stability, and unsupported-geometry/blend/camera/scissor barriers. Normal pass encoding, explicit deferred
+geometry and a batch containing particles on both sides of a separately submitted cloud, equal-depth
+stability, and unsupported-geometry/blend/camera/scissor barriers. The same cases exercise the raw bridge,
+ordinary `GXBegin`/`GXEnd`, and both mixed submission orders. Normal pass encoding, explicit deferred
 flushes and detached sealed-frame encoding all apply the same particle sorter.
 Sorting does not cross viewport/scissor changes, camera/projection changes, other translucent geometry or
 clear/copy/pass boundaries. Non-planar, indexed, unusual-depth and frame-interpolated draws keep submission order.
