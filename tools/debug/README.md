@@ -14,7 +14,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | --- | --- |
 | `.claude\skills\` | the Claude Code skills (tracked; the rest of `.claude\` is git-ignored) |
 | `tools\debug\` | these tools |
-| `tools\debug\local\` | git-ignored, machine-local: `user-setup\` (the user's Config.toml + controller files while a test runs; `manual-session.ps1 restore` puts them back), Dolphin disc copies, a downloaded ffmpeg |
+| `tools\debug\local\` | git-ignored, machine-local: `user-setup\` (the user's Config.toml + controller files while a test runs; `manual-session.ps1 restore` puts them back), Dolphin disc copies, a downloaded ffmpeg, `kenney-input-prompts\` (the whole Kenney Input Prompts pack, CC0, from kenney.nl: pick new button art there and copy only the SVGs used into `tools\button-art\<family>\`) |
 | `autotest\` | git-ignored work data and output: shots (`autotest\manual\`), texture-hunt data (`autotest\texhunt\`), audio dumps, logs |
 
 ## Skills

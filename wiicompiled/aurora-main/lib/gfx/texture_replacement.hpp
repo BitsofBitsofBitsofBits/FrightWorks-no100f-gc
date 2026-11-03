@@ -37,5 +37,7 @@ struct ButtonIcons {
   bool operator==(const ButtonIcons&) const = default;
 };
 void set_button_icons(const ButtonIcons& icons) noexcept;
+// <UserData>/button_icons/<family> of the icons in use (UTF-8), "" when no controller is connected.
+std::string button_icon_folder() noexcept;
 bool take_button_icon_style_change() noexcept;
 } // namespace aurora::gfx::texture_replacement

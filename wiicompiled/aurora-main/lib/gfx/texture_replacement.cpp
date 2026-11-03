@@ -1035,6 +1035,12 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   return handle;
 }
 
+std::string button_icon_folder() noexcept {
+  std::lock_guard lock(s_buttonIconMutex);
+  if (s_buttonIcons.family < 0 || s_buttonIconRoot.empty()) return {};
+  return fs_path_to_string(s_buttonIconRoot / kButtonIconFamilies[s_buttonIcons.family]);
+}
+
 void set_button_icons(const ButtonIcons& requested) noexcept {
   ButtonIcons icons = requested;
   if (s_buttonIconForced >= 0) icons.family = s_buttonIconForced;

@@ -9,8 +9,11 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include "settings_overlay.h"
 #include "overlay_theme.h"
 #include "build_info.h"
+#include "no100f_credits.h"
 #include "no100f_devmenu.h"
+#include "no100f_game_state.h"
 #include "no100f_recorder.h"
+#include "memory.h"
 #include "audio_backend.h"
 #include "aurora_events.h"
 #include "controller_button_names.h"
@@ -50,6 +53,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -1497,9 +1501,8 @@ void DrawStartupScreen() {
         // The credits, in the game's own fonts when the game folder is readable (it always is once
         // the game can start), else in the overlay's font.
         constexpr const char* kTitle = "FrightWorks: Night of 100 Frights";
-        constexpr const char* kCredit =
-            "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. A Scooby-Doo! Night of 100 Frights PC recomp, "
-            "built on WiiCompiled's code.";
+        static const std::string kCredit =
+            no100f_credits::Line() + ". A Scooby-Doo! Night of 100 Frights PC recomp, built on WiiCompiled's code.";
         // At the bottom of the screen.
         constexpr const char* kReport = "";
         // Scooby-Doo! Unmasked's own font, read from the game folder (font/papermarioset_US.bfn).
@@ -1685,7 +1688,7 @@ void DrawStartupScreen() {
             const float wrapWidth = std::min(viewport->Size.x - 48.0f, 640.0f);
             ImGui::SetCursorPos(ImVec2((viewport->Size.x - wrapWidth) * 0.5f, startY + titleSize.y * 2.0f));
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
-            ImGui::TextUnformatted(kCredit);
+            ImGui::TextUnformatted(kCredit.c_str());
             ImGui::PopTextWrapPos();
             startY = ImGui::GetCursorPosY();
             const ImVec2 reportSize = ImGui::CalcTextSize(kReport);
@@ -1772,7 +1775,7 @@ Page g_page = Page::Video;
 void DrawAboutPage() {
     using namespace OverlayTheme;
     SectionTitle("FrightWorks: Night of 100 Frights");
-    ImGui::TextUnformatted("by Loneranger419 \xC2\xB7 based on Refrightened by JosiahG");
+    ImGui::TextUnformatted(no100f_credits::Line().c_str());
     Hint("A native PC port of Scooby-Doo! Night of 100 Frights (GameCube), built on WiiCompiled and Aurora. "
          "It runs your own copy of the game.");
     if (ImGui::Button("Open the project page (F1)")) {
@@ -2309,6 +2312,301 @@ void ReleaseControllers() noexcept {
     if (queued) SDL_Delay(120);
 }
 
+namespace {
+
+// The hotkey guide: a small board in the bottom-right corner while the game shows its title screen and menus, so
+// players find F10 and the other keys. Fades out for the attract demo, movies (intro, credits, trailers), in play,
+// and while F10 or the dev menu is open. A menu like the others: in F2/F3 captures only with [game] capture_overlay.
+float g_hotkeyGuideAlpha = 0.0f;
+
+// Scales the alpha of everything drawn into `list` since vertex `first` (fading a panel in and out).
+void FadeVertices(ImDrawList* list, int first, float alpha) {
+    if (alpha >= 1.0f) return;
+    for (int i = first; i < list->VtxBuffer.Size; ++i) {
+        ImU32& col = list->VtxBuffer[i].col;
+        const auto a = static_cast<ImU32>(static_cast<float>((col >> IM_COL32_A_SHIFT) & 0xFF) * alpha);
+        col = (col & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT);
+    }
+}
+
+// A controller button picture from the button icon pack in use (button_icons/<family>/<config name>.png), cropped to
+// its visible part; no id when the pack has none for that button. Loaded once per file (ImGui textures can't be
+// freed, but there are only a few: three families, a handful of buttons).
+struct ButtonIcon {
+    ImTextureID id{};
+    ImVec2 uv0{0, 0}, uv1{1, 1};
+    float aspect = 1.0f;  // width / height of the visible part
+};
+
+const ButtonIcon& LoadButtonIcon(const std::string& folder, const char* button) {
+    static std::unordered_map<std::string, ButtonIcon> cache;
+    const std::string path = folder + "/" + button + ".png";
+    if (const auto it = cache.find(path); it != cache.end()) return it->second;
+    ButtonIcon icon;
+    uint32_t w = 0, h = 0;
+    if (uint8_t* rgba = aurora_load_png_rgba(path.c_str(), &w, &h)) {
+        uint32_t x0 = w, y0 = h, x1 = 0, y1 = 0;
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x)
+                if (rgba[(static_cast<size_t>(y) * w + x) * 4 + 3] > 16) {
+                    x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x + 1), y1 = std::max(y1, y + 1);
+                }
+        if (x1 > x0 && y1 > y0) {
+            icon.id = aurora_imgui_add_texture(w, h, rgba);
+            icon.uv0 = ImVec2(float(x0) / float(w), float(y0) / float(h));
+            icon.uv1 = ImVec2(float(x1) / float(w), float(y1) / float(h));
+            icon.aspect = float(x1 - x0) / float(y1 - y0);
+        }
+        std::free(rgba);
+    }
+    return cache.emplace(path, icon).first->second;
+}
+
+// One row of a guide card: its key or button pictures (side by side), then what it does. Without all the pictures:
+// a key shows `key` in gold lettering, a controller button shows `key` on a little button-shaped chip.
+struct GuideRow {
+    std::string key;
+    std::string what;
+    bool button = false;
+    std::vector<ButtonIcon> icons;
+
+    bool HasIcons() const {
+        return !icons.empty() && std::all_of(icons.begin(), icons.end(), [](const ButtonIcon& i) { return i.id != ImTextureID{}; });
+    }
+};
+
+float IconsWidth(const GuideRow& row, float iconSize) {
+    float width = 0;
+    for (const ButtonIcon& icon : row.icons) width += iconSize * icon.aspect;
+    return width + OverlayTheme::Px(4) * static_cast<float>(row.icons.size() - 1);
+}
+
+struct GuideCard {
+    const char* title = "";
+    std::vector<GuideRow> rows;
+    // Filled by MeasureCard.
+    float keyWidth = 0, rowHeight = 0, iconSize = 0;
+    ImVec2 size;
+};
+
+void MeasureCard(GuideCard& card) {
+    using namespace OverlayTheme;
+    ImFont* heading = Heading();
+    ImFont* body = Body();
+    ImFont* small = Small();
+    const bool pictures = std::any_of(card.rows.begin(), card.rows.end(),
+                                      [](const GuideRow& r) { return r.button || r.HasIcons(); });
+    card.iconSize = std::round(body->FontSize + Px(8));
+    card.rowHeight = pictures ? card.iconSize + Px(5) : body->FontSize + Px(5);
+    float whatWidth = 0;
+    card.keyWidth = 0;
+    for (const GuideRow& row : card.rows) {
+        float keyWidth;
+        if (row.HasIcons()) keyWidth = IconsWidth(row, card.iconSize);
+        else if (!row.button) keyWidth = heading->CalcTextSizeA(body->FontSize, FLT_MAX, 0.0f, row.key.c_str()).x;
+        else keyWidth = small->CalcTextSizeA(small->FontSize, FLT_MAX, 0.0f, row.key.c_str()).x + Px(14);
+        card.keyWidth = std::max(card.keyWidth, keyWidth);
+        whatWidth = std::max(whatWidth, body->CalcTextSizeA(body->FontSize, FLT_MAX, 0.0f, row.what.c_str()).x);
+    }
+    const ImVec2 title = heading->CalcTextSizeA(heading->FontSize, FLT_MAX, 0.0f, card.title);
+    const float pad = Px(14), gap = Px(14);
+    card.size = ImVec2(pad * 2 + std::max(title.x, card.keyWidth + gap + whatWidth),
+                       pad * 2 + title.y + Px(6) + card.rowHeight * static_cast<float>(card.rows.size()));
+}
+
+void DrawCard(ImDrawList* list, const GuideCard& card, ImVec2 min) {
+    using namespace OverlayTheme;
+    ImFont* heading = Heading();
+    ImFont* body = Body();
+    ImFont* small = Small();
+    const float pad = Px(14), gap = Px(14);
+    Board(list, min, ImVec2(min.x + card.size.x, min.y + card.size.y), Px(12));
+    OutlinedText(list, heading, ImVec2(min.x + pad, min.y + pad), Col(Colour::Lime), Col(Colour::Ink), Px(2), card.title);
+    float y = min.y + pad + heading->FontSize + Px(6);
+    for (const GuideRow& row : card.rows) {
+        const float x = min.x + pad, mid = y + card.rowHeight * 0.5f;
+        if (row.HasIcons()) {
+            float left = x;
+            for (const ButtonIcon& icon : row.icons) {
+                const float w = card.iconSize * icon.aspect;
+                list->AddImage(icon.id, ImVec2(left, mid - card.iconSize * 0.5f),
+                               ImVec2(left + w, mid + card.iconSize * 0.5f), icon.uv0, icon.uv1);
+                left += w + Px(4);
+            }
+        } else if (!row.button) {
+            list->AddText(heading, body->FontSize, ImVec2(x, mid - body->FontSize * 0.5f + Px(1)), Col(Colour::Gold),
+                          row.key.c_str());
+        } else {
+            const ImVec2 text = small->CalcTextSizeA(small->FontSize, FLT_MAX, 0.0f, row.key.c_str());
+            const ImVec2 chipMin(x, mid - card.iconSize * 0.42f), chipMax(x + text.x + Px(14), mid + card.iconSize * 0.42f);
+            list->AddRectFilled(chipMin, chipMax, Col(Colour::Purple), card.iconSize * 0.3f);
+            list->AddRect(chipMin, chipMax, Col(Colour::Ink), card.iconSize * 0.3f, 0, Px(2));
+            list->AddText(small, small->FontSize, ImVec2(x + Px(7), mid - text.y * 0.5f), Col(Colour::Cream), row.key.c_str());
+        }
+        list->AddText(body, body->FontSize, ImVec2(x + card.keyWidth + gap, mid - body->FontSize * 0.5f),
+                      Col(Colour::Cream), row.what.c_str());
+        y += card.rowHeight;
+    }
+}
+
+// The pad's Back button and left bumper by family (the pack folder ends in xbox, playstation or nintendo), for when
+// the pack has no picture of them.
+bool FolderIs(const std::string& folder, std::string_view family) {
+    return folder.size() >= family.size() && folder.compare(folder.size() - family.size(), family.size(), family) == 0;
+}
+const char* BackLabel(const std::string& folder) {
+    if (FolderIs(folder, "playstation")) return "Share";
+    if (FolderIs(folder, "nintendo")) return "Minus";
+    return "View";
+}
+const char* LeftBumperLabel(const std::string& folder) {
+    if (FolderIs(folder, "playstation")) return "L1";
+    if (FolderIs(folder, "nintendo")) return "L";
+    return "LB";
+}
+
+// The guide cards in the bottom-right corner on the title screen and main menu: HOTKEYS (keyboard), and CONTROLLER
+// to its left while a controller is connected, drawn with that controller's button icons. Both fade out for the
+// attract demo, movies (intro, credits, trailers), in play, and while F10 or the dev menu is open. Menus like the
+// others: in F2/F3 captures only with [game] capture_overlay.
+void DrawHotkeyGuide() {
+    using namespace OverlayTheme;
+    uint32_t mode = 0, state = 0, movie = 0;
+    const bool show = !StartupScreenVisible() && !g_topBarVisible && !no100f_devmenu::IsOpen() &&
+                      Memory::TryRead32(no100f_game_state::kModeAddress, mode) &&
+                      Memory::TryRead32(no100f_game_state::kStateAddress, state) &&
+                      Memory::TryRead32(no100f_game_state::kMovieAddress, movie) &&
+                      no100f_game_state::IsMainMenu(mode, state, movie);
+    const float step = ImGui::GetIO().DeltaTime / 0.3f;
+    g_hotkeyGuideAlpha = std::clamp(g_hotkeyGuideAlpha + (show ? step : -step), 0.0f, 1.0f);
+    if (g_hotkeyGuideAlpha <= 0.0f) return;
+
+    const bool dev = no100f_devmenu::Enabled();
+    // Keycaps from button_icons/keyboard/<key>.png (staged with the controller icons); gold names without them.
+    static const std::string keyFolder = RuntimeConfigFile::PathToUtf8(
+        RuntimeConfigFile::ApplicationDataDirectory() / "button_icons" / "keyboard");
+    const auto key = [](const char* name, const char* what, std::initializer_list<const char*> files) {
+        GuideRow row{name, what};
+        for (const char* file : files) row.icons.push_back(LoadButtonIcon(keyFolder, file));
+        return row;
+    };
+    GuideCard keys;
+    keys.title = "Hotkeys";
+    keys.rows = {key("F10 / Esc", "Settings", {"f10", "escape"}), key("F11", "Fullscreen or window", {"f11"}),
+                 key("F2", "Screenshot", {"f2"}), key("F1", "Project page", {"f1"})};
+    if (dev) {
+        keys.rows.push_back(key("F8", "Dev menu", {"f8"}));
+        keys.rows.push_back(key("F3", "Record a video", {"f3"}));
+    }
+    MeasureCard(keys);
+
+    char folderBuffer[1024] = {};
+    const size_t folderLength = aurora_get_button_icon_folder(folderBuffer, sizeof(folderBuffer));
+    GuideCard pad;
+    pad.title = "Controller";
+    if (folderLength > 0 && folderLength < sizeof(folderBuffer)) {
+        const std::string folder(folderBuffer, folderLength);
+        if (!BackButtonBound()) pad.rows.push_back({BackLabel(folder), "Settings", true, {LoadButtonIcon(folder, "back")}});
+        if (dev) {
+            pad.rows.push_back({LeftBumperLabel(folder), "Dev menu focus on / off", true,
+                                {LoadButtonIcon(folder, "left_shoulder")}});
+        }
+    }
+    if (!pad.rows.empty()) MeasureCard(pad);
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = Px(16), rise = (1.0f - g_hotkeyGuideAlpha) * Px(12);  // slides up a little as it fades in
+    const float bottom = viewport->Pos.y + viewport->Size.y - margin + rise;
+    const ImVec2 keysMin(viewport->Pos.x + viewport->Size.x - margin - keys.size.x, bottom - keys.size.y);
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    if (ImGui::Begin("##HotkeyGuide", nullptr, kFlags)) {
+        ImDrawList* list = ImGui::GetWindowDrawList();
+        list->PushClipRectFullScreen();
+        const int firstVertex = list->VtxBuffer.Size;
+        DrawCard(list, keys, keysMin);
+        if (!pad.rows.empty()) DrawCard(list, pad, ImVec2(keysMin.x - Px(14) - pad.size.x, bottom - pad.size.y));
+        FadeVertices(list, firstVertex, g_hotkeyGuideAlpha);
+        list->PopClipRect();
+    }
+    ImGui::End();
+}
+
+// The credits pill: while the game's credits movie plays (from the main menu, the title screen's idle loop or the end
+// of the game), "FrightWorks by ..." in the bottom-right corner, over the black bar beside the 4:3 movie.
+float g_creditsPillAlpha = 0.0f;
+
+void DrawCreditsPill() {
+    using namespace OverlayTheme;
+    uint32_t movie = 0;
+    const bool show = !StartupScreenVisible() && !g_topBarVisible &&
+                      no100f_game_state::g_creditsMovie.load(std::memory_order_relaxed) &&
+                      Memory::TryRead32(no100f_game_state::kMovieAddress, movie) && movie != 0;
+    const float step = ImGui::GetIO().DeltaTime / 0.5f;
+    g_creditsPillAlpha = std::clamp(g_creditsPillAlpha + (show ? step : -step), 0.0f, 1.0f);
+    if (g_creditsPillAlpha <= 0.0f) return;
+
+    // FRIGHTWORKS  Made by <author>
+    //              with the help of <helper 1>
+    //                               <helper 2> ...
+    constexpr const char* kName = "FrightWorks";
+    constexpr const char* kHelp = "with the help of ";
+    static const std::string by = std::string("Made by ") + no100f_credits::kAuthor;
+    ImFont* heading = Heading();
+    ImFont* body = Body();
+    const auto textWidth = [body](const char* text) { return body->CalcTextSizeA(body->FontSize, FLT_MAX, 0.0f, text).x; };
+    const ImVec2 nameSize = heading->CalcTextSizeA(heading->FontSize, FLT_MAX, 0.0f, kName);
+    const float padX = Px(14), padY = Px(7), gap = Px(8), lineHeight = body->FontSize + Px(3);
+    const float helpWidth = textWidth(kHelp);
+    float textBlock = textWidth(by.c_str());
+    for (const char* helper : no100f_credits::kHelpers) textBlock = std::max(textBlock, helpWidth + textWidth(helper));
+    const size_t lines = 1 + std::size(no100f_credits::kHelpers);
+    const float firstLine = std::max(nameSize.y, lineHeight);
+    const float height = padY * 2 + firstLine + lineHeight * static_cast<float>(lines - 1);
+    const float width = padX * 2 + nameSize.x + gap + textBlock;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float margin = Px(16);
+    const ImVec2 min(viewport->Pos.x + viewport->Size.x - margin - width, viewport->Pos.y + viewport->Size.y - margin - height);
+    const ImVec2 max(min.x + width, min.y + height);
+
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoBringToFrontOnFocus;
+    if (ImGui::Begin("##CreditsPill", nullptr, kFlags)) {
+        ImDrawList* list = ImGui::GetWindowDrawList();
+        list->PushClipRectFullScreen();
+        const int firstVertex = list->VtxBuffer.Size;
+        const float rounding = Px(14);
+        list->AddRectFilled(min, max, Col(Colour::Ink, 0.72f), rounding);
+        list->AddRect(min, max, Col(Colour::Lime, 0.35f), rounding, 0, Px(1));
+        OutlinedText(list, heading, ImVec2(min.x + padX, min.y + padY + (firstLine - nameSize.y) * 0.5f + Px(1)),
+                     Col(Colour::Lime), Col(Colour::Ink), Px(2), kName);
+        const float textX = min.x + padX + nameSize.x + gap;
+        float y = min.y + padY + (firstLine - body->FontSize) * 0.5f;
+        list->AddText(body, body->FontSize, ImVec2(textX, y), Col(Colour::Cream), by.c_str());
+        bool first = true;
+        for (const char* helper : no100f_credits::kHelpers) {
+            y += lineHeight;
+            if (first) list->AddText(body, body->FontSize, ImVec2(textX, y), Col(Colour::CreamDim), kHelp);
+            list->AddText(body, body->FontSize, ImVec2(textX + helpWidth, y), Col(Colour::Cream), helper);
+            first = false;
+        }
+        FadeVertices(list, firstVertex, g_creditsPillAlpha);
+        list->PopClipRect();
+    }
+    ImGui::End();
+}
+
+} // namespace
+
 void Draw() noexcept {
     // Wait for the frame worker's DONE phase: it has replayed the previous frame's ImGui draw lists
     // and started the next ImGui frame, so all overlay callers can now safely issue ImGui commands.
@@ -2332,6 +2630,8 @@ void Draw() noexcept {
     }
     DrawNotice();
     DrawDevMark();
+    DrawHotkeyGuide();
+    DrawCreditsPill();
     no100f_recorder::DrawIndicator();
     DrawTopBar();
     no100f_devmenu::Draw();

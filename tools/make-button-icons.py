@@ -6,10 +6,13 @@ mapping (hle/input/pad.cpp):
     button_icons/layout.txt                 the atlas's file name and size, the icon size, and where each GameCube
                                             button's icon goes (top-left corner)
     button_icons/<family>/<button>.png      one icon per pad button, named like the [controller] mapping
-                                            (south, east, west, north), for xbox, playstation and nintendo
-Icons come from Kenney's Input Prompts (CC0, tools/button-art). Every icon is drawn at the size of the biggest
-GameCube button (A), centred where that button is and kept inside its quarter of the atlas; the GameCube B button is
-smaller. The atlas is the HD pack's size.
+                                            (south, east, west, north), for xbox, playstation and nintendo; also
+                                            back and left_shoulder, which only the in-game hotkey guide shows
+                                            (settings_overlay.cpp, not in the atlas)
+    button_icons/keyboard/<key>.png         the keys on the hotkey guide (f1, f2, f3, f8, f10, f11, escape)
+Icons come from Kenney's Input Prompts (CC0, tools/button-art: only the ones used; the whole pack is not in the repo).
+Every icon is drawn at the size of the biggest GameCube button (A), centred where that button is and kept inside its
+quarter of the atlas; the GameCube B button is smaller. The atlas is the HD pack's size.
 
     python tools/make-button-icons.py [--out Play/UserData/button_icons]
 Needs ImageMagick (magick) to render the SVGs, and the HD pack in texture_pack/ScoobyHD for the layout.
@@ -32,6 +35,14 @@ FAMILIES = {
                     "west": "playstation_button_color_square", "north": "playstation_button_color_triangle"},
     "nintendo": {"south": "switch_button_b", "east": "switch_button_a", "west": "switch_button_y", "north": "switch_button_x"},
 }
+# Buttons the hotkey guide shows (white art, drawn with a dark symbol like Nintendo's buttons).
+EXTRAS = {
+    "xbox": {"back": "xbox_button_view", "left_shoulder": "xbox_lb"},
+    "playstation": {"back": "playstation4_button_share", "left_shoulder": "playstation_trigger_l1"},
+    "nintendo": {"back": "switch_button_minus", "left_shoulder": "switch_button_l"},
+}
+# Keys the hotkey guide shows (white keycaps, dark lettering).
+KEYBOARD = ["f1", "f2", "f3", "f8", "f10", "f11", "escape"]
 
 
 def regions(img):
@@ -85,7 +96,17 @@ def main():
                 icon = render_svg(os.path.join(ART, family, art + ".svg"), size, tmp, family == "nintendo")
                 assert icon.size == (size, size), (art, icon.size)
                 icon.save(os.path.join(a.out, family, button + ".png"))
-            print("wrote", os.path.join(a.out, family), ", ".join(buttons))
+            for button, art in EXTRAS[family].items():
+                icon = render_svg(os.path.join(ART, family, art + ".svg"), size, tmp, True)
+                assert icon.size == (size, size), (art, icon.size)
+                icon.save(os.path.join(a.out, family, button + ".png"))
+            print("wrote", os.path.join(a.out, family), ", ".join([*buttons, *EXTRAS[family]]))
+        os.makedirs(os.path.join(a.out, "keyboard"), exist_ok=True)
+        for key in KEYBOARD:
+            icon = render_svg(os.path.join(ART, "keyboard", f"keyboard_{key}.svg"), size, tmp, True)
+            assert icon.size == (size, size), (key, icon.size)
+            icon.save(os.path.join(a.out, "keyboard", key + ".png"))
+        print("wrote", os.path.join(a.out, "keyboard"), ", ".join(KEYBOARD))
 
 
 if __name__ == "__main__":
