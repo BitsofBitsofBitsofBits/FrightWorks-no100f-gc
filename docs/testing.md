@@ -28,6 +28,14 @@ tools). Video capture needs ffmpeg on PATH, or run `tools\debug\capture\get-ffmp
 
 ## 2. Build and play
 
+For widescreen edge-culling regressions, the focused `no100f_model_culling_tests` CMake/CTest target checks sphere
+classification and the linked-model visibility gate. The GIHE78 rev 1 repair applies only to the main camera's
+widescreen entity pre-cull: a character's root atomic can be a small hat rather than a bound for the whole character.
+The entity stays eligible while a visible linked model intersects the frustum; individual atomic culling, shadow
+cameras and Original 4:3 retain their existing behavior. For a visual check, use an isolated `f001` dock session and
+move the developer camera across both horizontal edges, checking that the groundskeeper's body does not disappear
+when his hat leaves view, then repeat in Original 4:3. Do not change or load an existing save for this check.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools                  # full build
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # faster: native code only
