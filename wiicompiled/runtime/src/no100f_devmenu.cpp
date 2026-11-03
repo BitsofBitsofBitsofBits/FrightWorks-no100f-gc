@@ -616,41 +616,42 @@ void UpdateGod() {
 // 0x800BE6B8 in this bit order) into it (0x80057748); a scene change keeps it (tested i004 -> i001). Save data: the
 // 'PLYR' block reader 0x800CF2B8 reads it back.
 constexpr uint32_t kPowerups = 0x80245748u;  // globals + 0x5B8
-struct Powerup {
-    const char* key;    // sd2.ini name, for the command file
-    const char* label;  // the menu's name (what sd2.ini says it does)
-};
-constexpr Powerup kPowerupList[] = {
-    {"BubbleGum", "Bubble gum (sticky/bouncy gum wads)"},
-    {"SoapBar", "Soap bar (soap bubbles)"},
-    {"StickyBoots", "Sticky boots (anti-sticky)"},
-    {"Plungers", "Plungers (anti-slippery)"},
-    {"Slippers", "Slippers (sneak)"},
-    {"LampShade", "Lampshade (first disguise)"},
-    {"BlackKnight", "Black Knight armour (second disguise)"},
-    {"FlowerPot", "Flower pot (maybe unused)"},
-    {"DivingHelmet", "Diving helmet (last disguise, maybe unused)"},
-    {"Spring", "Springs (double jump)"},
-    {"LightningBolt", "Lightning bolt (thunder stomp)"},
-    {"FootballHelmet", "Football helmet (headbutt)"},
-    {"Umbrella", "Umbrella (float)"},
-    {"Shovel", "Shovel (dig)"},
-    {"LightningBoltStun", "Lightning bolt stun (thunder stomp stuns)"},
-};
-constexpr int kPowerupCount = static_cast<int>(std::size(kPowerupList));
-constexpr uint32_t kAllPowerups = (1u << kPowerupCount) - 1u;
+// GIHE78 rev 1: mnu4.HIP's MAP COLLECTED COND hashes "Map Item Recieved" to 0x8F103F86. The variable table
+// at 0x801D7800 resolves it to 0x800D5990, which reads r13-0x72A8. The normal grant helper (0x800D73F8,
+// dispatcher event 0x101) only writes 1 here; reset 0x800D7840 writes 0. Mirror those exact writes to toggle,
+// without changing Shovel, warp gates, room discovery or any other gadget. 0x800D7720/778C load/save it.
+constexpr uint32_t kMapReceived = 0x80270FD8u;
 
 uint32_t Powerups() { return Read32Or0(kPowerups); }
 // Only the 15 power-up bits change; any other bit in the word is left alone.
-void SetPowerups(uint32_t mask, uint32_t bits) { Memory::Write32(kPowerups, (Powerups() & ~mask) | (bits & mask)); }
+void SetPowerups(uint32_t mask, uint32_t bits) {
+    Memory::Write32(kPowerups, WithPowerupBits(Powerups(), mask, bits));
+}
+
+uint32_t PowerupAddress(const Powerup& power) { return power.bit ? kPowerups : kMapReceived; }
+
+bool HasPowerup(const Powerup& power) {
+    return PowerupEnabled(power, Read32Or0(PowerupAddress(power)));
+}
+
+void SetPowerup(const Powerup& power, bool on) {
+    const uint32_t address = PowerupAddress(power);
+    Memory::Write32(address, WithPowerup(power, Read32Or0(address), on));
+}
+
+void SetAllPowerups(bool on) {
+    // Unlock the main-game set without granting the unused gadgets. Lock all still clears every gadget.
+    SetPowerups(on ? kMainGamePowerups : kAllPowerups, on ? kMainGamePowerups : 0);
+    Memory::Write32(kMapReceived, on ? 1u : 0u);
+}
 
 std::string PowerupList() {
     const uint32_t v = Powerups();
     char b[32];
     std::snprintf(b, sizeof b, "powerups %04X:", v);
     std::string s = b;
-    for (int i = 0; i < kPowerupCount; ++i)
-        if (v & (1u << i)) s += std::string(" ") + kPowerupList[i].key;
+    for (const auto& power : kPowerupList)
+        if (HasPowerup(power)) s += std::string(" ") + power.key;
     return s;
 }
 
@@ -934,8 +935,8 @@ const Spot* FindSpot(const std::string& name, uint32_t scene) {
 //   peek ADDR [N]       log N (default 64) words from ADDR
 //   frame               peek the player frame
 //   god on|off          god mode
-//   powerups [all|none|HEX]  log the unlocked power-ups; unlock all / lock all / set the mask
-//   powerup NAME on|off unlock / lock one (sd2.ini name without eSPECIAL_, e.g. Spring)
+//   powerups [all|none|HEX]  log powers; unlock main-game set / lock everything / set gadget mask (Map unchanged)
+//   powerup NAME on|off unlock / lock one (Map or sd2.ini name without eSPECIAL_, e.g. Spring)
 //   monsters [on|off]   list this scene's monsters; all monsters off (every scene) / back on
 //   monster N|NAME on|off
 //   ents                log the scene's entity list
@@ -1014,9 +1015,9 @@ void PollCommandFile() {
             g_status = b;
         } else if (cmd == "powerups") {
             if (arg == "all") {
-                SetPowerups(kAllPowerups, kAllPowerups);
+                SetAllPowerups(true);
             } else if (arg == "none") {
-                SetPowerups(kAllPowerups, 0);
+                SetAllPowerups(false);
             } else if (!arg.empty()) {
                 SetPowerups(kAllPowerups, static_cast<uint32_t>(std::strtoul(arg.c_str(), nullptr, 16)));
             }
@@ -1030,8 +1031,7 @@ void PollCommandFile() {
             if (it == std::end(kPowerupList) || (state != "on" && state != "off")) {
                 g_status = "powerup NAME on|off (" + arg + ")";
             } else {
-                const uint32_t bit = 1u << (it - std::begin(kPowerupList));
-                SetPowerups(bit, state == "on" ? bit : 0);
+                SetPowerup(*it, state == "on");
                 g_status = PowerupList();
             }
         } else if (cmd == "monsters") {
@@ -1278,20 +1278,25 @@ void DrawMonsters() {
 }
 
 void DrawPowerups() {
-    const uint32_t v = Powerups();
-    if (ImGui::Button("Unlock all")) SetPowerups(kAllPowerups, kAllPowerups);
+    if (ImGui::Button("Unlock all")) SetAllPowerups(true);
     ImGui::SameLine();
-    if (ImGui::Button("Lock all")) SetPowerups(kAllPowerups, 0);
+    if (ImGui::Button("Lock all")) SetAllPowerups(false);
     ImGui::SameLine();
-    ImGui::TextDisabled("mask %04X", v & kAllPowerups);
+    ImGui::TextDisabled("mask %04X", Powerups() & kAllPowerups);
+    ImGui::TextDisabled("Unlock all leaves unused powers unchanged.\nLock all clears them too.");
     ImGui::TextWrapped("Changes take effect at once and stay through level changes. A new game or a loaded save "
                        "replaces them.");
     if (Read32Or0(kGameMode) != 0xB) ImGui::TextDisabled("Not in a game: starting one resets these.");
-    for (int i = 0; i < kPowerupCount; ++i) {
-        ImGui::PushID(i);
-        const uint32_t bit = 1u << i;
-        bool on = (v & bit) != 0;
-        if (OverlayTheme::Toggle(kPowerupList[i].label, &on)) SetPowerups(bit, on ? bit : 0);
+    bool unusedHeading = false;
+    for (const auto& power : kPowerupList) {
+        if (power.unused && !unusedHeading) {
+            ImGui::Separator();
+            ImGui::TextUnformatted(kUnusedPowerupHeading);
+            unusedHeading = true;
+        }
+        ImGui::PushID(power.key);
+        bool on = HasPowerup(power);
+        if (OverlayTheme::Toggle(power.label, &on)) SetPowerup(power, on);
         ImGui::PopID();
     }
 }

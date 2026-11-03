@@ -1,8 +1,62 @@
 #include "no100f_devmenu_state.h"
 
 #include <cassert>
+#include <iterator>
+#include <string_view>
 
 int main() {
+    using namespace no100f_devmenu;
+    constexpr const char* labels[] = {
+        "Map", "Shovel", "Springs", "Helmet", "Lamp", "Slippers", "Knight Armor", "Galoshes (Boots)", "Super Smash",
+        "Super Sonic Smash (Stun)", "Umbrella", "Plunger Boots", "Bubblegum", "Soap Bubbles",
+        "Flower Pot", "Diving Helmet",
+    };
+    constexpr const char* keysByBit[] = {
+        "BubbleGum", "SoapBar", "StickyBoots", "Plungers", "Slippers", "LampShade", "BlackKnight",
+        "FlowerPot", "DivingHelmet", "Spring", "LightningBolt", "FootballHelmet", "Umbrella", "Shovel",
+        "LightningBoltStun",
+    };
+    static_assert(std::size(kPowerupList) == std::size(labels));
+    static_assert(kAllPowerups == 0x7FFFu);
+    static_assert(kMainGamePowerups == 0x7E7Fu);
+    assert(std::string_view(kUnusedPowerupHeading) == "--UNUSED--");
+    uint32_t seen = 0;
+    for (size_t i = 0; i < std::size(kPowerupList); ++i) {
+        const auto& power = kPowerupList[i];
+        assert(std::string_view(power.label) == labels[i]);
+        assert(power.unused == (i >= 14));
+        if (power.bit == 0) {
+            assert(i == 0 && std::string_view(power.key) == "Map");
+            assert(!PowerupEnabled(power, 0));
+            assert(PowerupEnabled(power, 1));
+            assert(WithPowerup(power, 0, true) == 1);
+            assert(WithPowerup(power, 1, false) == 0);
+            continue;
+        }
+        assert((seen & power.bit) == 0);
+        seen |= power.bit;
+        unsigned bit = 0;
+        while ((1u << bit) != power.bit) {
+            ++bit;
+            assert(bit < std::size(keysByBit));
+        }
+        assert(std::string_view(power.key) == keysByBit[bit]);
+        for (uint32_t current : {0u, 0x80000000u, 0xFFFFFFFFu, 0xA5A51234u}) {
+            const uint32_t enabled = WithPowerup(power, current, true);
+            const uint32_t disabled = WithPowerup(power, current, false);
+            assert(PowerupEnabled(power, enabled));
+            assert(!PowerupEnabled(power, disabled));
+            assert((enabled & ~power.bit) == (current & ~power.bit));
+            assert((disabled & ~power.bit) == (current & ~power.bit));
+        }
+    }
+    assert(seen == kAllPowerups);
+    constexpr uint32_t unused = kAllPowerups & ~kMainGamePowerups;
+    assert(WithPowerupBits(0x80000000u, kMainGamePowerups, kMainGamePowerups) == 0x80007E7Fu);
+    assert((WithPowerupBits(unused, kMainGamePowerups, kMainGamePowerups) & unused) == unused);
+    assert(WithPowerupBits(0xFFFFFFFFu, kAllPowerups, 0) == 0xFFFF8000u);
+    assert(WithPowerupBits(0x80000000u, kAllPowerups, 0xFFFFFFFFu) == 0x80007FFFu);
+
     using no100f_devmenu::SkipControl;
     assert(no100f_devmenu::SkipControlFor(2, 0, false) == SkipControl::Start);
     assert(no100f_devmenu::SkipControlFor(2, 1, false) == SkipControl::Start);
