@@ -116,7 +116,8 @@ sorted back-to-front across emitter batches, without changing their alpha or dep
 ground mist from blending over a nearer cloud everywhere except where opaque scenery blocks that mist.
 Particle index views share the original vertex/uniform uploads. The GPU regression includes indexed opaque
 geometry and a raw batch containing particles on both sides of a separately submitted cloud, equal-depth
-stability, and unsupported-geometry/blend/camera/scissor barriers.
+stability, and unsupported-geometry/blend/camera/scissor barriers. Normal pass encoding, explicit deferred
+flushes and detached sealed-frame encoding all apply the same particle sorter.
 Sorting does not cross viewport/scissor changes, camera/projection changes, other translucent geometry or
 clear/copy/pass boundaries. Non-planar, indexed, unusual-depth and frame-interpolated draws keep submission order.
 The single-cut and Original/Game controls remain unchanged.

@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -30,10 +31,17 @@ std::array<uint8_t, 16 * 16 * 4 + 32> guardedBake;
 void require(bool value, const char* message) {
   if (!value) throw std::runtime_error(message);
 }
-void submit(bool final, bool download = false, bool async = false) {
+void submit(bool final, bool download = false, bool async = false, bool sealed = false) {
   auto encoder = webgpu::g_device.CreateCommandEncoder();
   if (final) gfx::end_frame(encoder); else gfx::end_batch(encoder);
-  gfx::render(encoder);
+  std::optional<gfx::SealedFrame> frame;
+  if (sealed) {
+    frame.emplace();
+    gfx::seal_frame(*frame);
+    gfx::render(*frame, encoder);
+  } else {
+    gfx::render(encoder);
+  }
   if (download) gfx::efb_ram::encode_downloads(encoder);
   if (async) gfx::efb_ram::encode_async_downloads(encoder);
   auto commands = encoder.Finish();
@@ -302,6 +310,7 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0) {
     particle(gray, variant == 17 ? -2.f : -6.f, {128, 128, 128, 128}, variant == 16);
     if (variant != 12) particle(gray, variant == 17 ? -2.f : -1.f, {0, 0, 255, 128});
     send(gray);
+    if (variant == 19) gfx::flush_deferred_draws();
   } else {
   GXSetZMode(true, GX_LEQUAL, false);
   if (variant == 4) GXSetScissor(0, 0, 32, 64);
@@ -335,7 +344,7 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0) {
   guarded.fill(0xa5);
   gfx::efb_ram::schedule(guarded.data() + 16, 16, 16, GX_TF_RGBA8, target);
   require(gfx::efb_ram::prepare_downloads(), "Alpha-order readback preparation failed");
-  submit(true, true);
+  submit(true, true, false, variant == 20);
   return Pixels(guarded.begin() + 16, guarded.begin() + 16 + 16 * 16 * 4);
 }
 
@@ -397,7 +406,7 @@ int main(int argc, char** argv) {
       }
       for (unsigned variant : {6, 7, 8, 9, 10})
         check_alpha_pixel(run_alpha_order(mode, variant), 4, {255, 255, 255});
-      for (unsigned variant : {11, 12, 13, 14, 15, 16, 17, 18}) {
+      for (unsigned variant : {11, 12, 13, 14, 15, 16, 17, 18, 19, 20}) {
         const auto pixels = run_alpha_order(mode, variant);
         const auto left = variant == 12 || variant == 14 ? std::array{127, 128, 0} :
                           variant == 13 ? std::array{95, 96, 192} :
@@ -406,7 +415,7 @@ int main(int argc, char** argv) {
         const auto right = variant == 12 ? std::array{32, 160, 95} :
                            variant == 13 ? std::array{64, 80, 207} :
                            variant == 18 ? std::array{64, 192, 255} :
-                           variant >= 14 ? std::array{32, 64, 191} : std::array{16, 80, 175};
+                           variant >= 14 && variant <= 17 ? std::array{32, 64, 191} : std::array{16, 80, 175};
         check_alpha_pixel(pixels, 4, left);
         check_alpha_pixel(pixels, 12, right);
       }

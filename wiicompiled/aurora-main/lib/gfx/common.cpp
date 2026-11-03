@@ -547,27 +547,31 @@ void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind)
   ++g_drawCallCount;
 }
 
-void flush_deferred_draws() {
-  if (!has_current_render_pass()) return;
-  auto& pass = g_renderPasses[g_currentRenderPass];
-  if (pass.deferred.empty() && pass.translucent.empty()) return;
+static void sort_particle_draws(CommandList& commands) {
   const auto sortGroup = [](const Command& command) -> HashType {
     if (command.type != CommandType::Draw || command.data.draw.type != ShaderType::GX) return 0;
     return command.data.draw.gx.particleSortGroup;
   };
-  for (auto first = pass.translucent.begin(); first != pass.translucent.end();) {
+  for (auto first = commands.begin(); first != commands.end();) {
     const auto group = sortGroup(*first);
     if (group == 0) {
       ++first;
       continue;
     }
-    auto last = std::find_if(std::next(first), pass.translucent.end(),
+    auto last = std::find_if(std::next(first), commands.end(),
                             [&](const Command& command) { return sortGroup(command) != group; });
     std::stable_sort(first, last, [](const Command& left, const Command& right) {
       return left.data.draw.gx.particleDepth > right.data.draw.gx.particleDepth;
     });
     first = last;
   }
+}
+
+void flush_deferred_draws() {
+  if (!has_current_render_pass()) return;
+  auto& pass = g_renderPasses[g_currentRenderPass];
+  if (pass.deferred.empty() && pass.translucent.empty()) return;
+  sort_particle_draws(pass.translucent);
   pass.commands.insert(pass.commands.end(), pass.deferred.begin(), pass.deferred.end());
   pass.deferred.clear();
   pass.deferredViewport.reset();
@@ -1462,6 +1466,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
     }
   }
   for (u32 i = 0; i < renderPasses.size(); ++i) {
+    sort_particle_draws(renderPasses[i].translucent);
     const auto& passInfo = renderPasses[i];
     if (encodeTextureBakes) {
       for (const auto& conv : passInfo.paletteConvs) {
