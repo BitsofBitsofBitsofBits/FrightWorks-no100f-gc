@@ -16,6 +16,9 @@ inline constexpr uint32_t kStateAddress = 0x802703C8;
 // clears it when the movie closes (0x800DAD48). Movies play inside the current mode (the credits and trailers in 2).
 inline constexpr uint32_t kMovieAddress = 0x80271050;
 
+// Set only after the loader verifies a known layout, not merely an arbitrary build's generated hash.
+inline std::atomic<bool> g_diagnosticLayoutVerified{false};
+
 // The title screen and its menus (Press Start, New Game / Load Game / Options / ...), not the attract demo or a
 // movie (credits, trailers).
 constexpr bool IsMainMenu(uint32_t mode, uint32_t state, uint32_t movie) { return mode == 2 && state == 0 && movie == 0; }

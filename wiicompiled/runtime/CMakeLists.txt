@@ -214,6 +214,7 @@ set_source_files_properties(${MKW_PPC_SEMANTIC_RUNTIME_SOURCES} PROPERTIES
     COMPILE_OPTIONS "${MKW_TRANSLATED_PPC_FP_OPTIONS}")
 # The NSMBW sampling profiler includes <windows.h>; keep it out of the unity batches.
 set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/guest_profiler.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/src/no100f_resources.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 # Match the optimization policy of the translated callers as well as their FP policy.
 set_property(SOURCE "${CMAKE_CURRENT_LIST_DIR}/src/ppc_quantized.cpp" APPEND PROPERTY
     COMPILE_OPTIONS -O2 -fno-slp-vectorize)
@@ -446,6 +447,15 @@ else()
     target_compile_options(no100f_devmenu_state_tests PRIVATE -UNDEBUG)
 endif()
 add_test(NAME no100f_devmenu_state_tests COMMAND no100f_devmenu_state_tests)
+add_executable(no100f_resources_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_resources_tests.cpp")
+target_include_directories(no100f_resources_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_resources_tests PRIVATE cxx_std_17)
+if(MSVC)
+    target_compile_options(no100f_resources_tests PRIVATE /UNDEBUG)
+else()
+    target_compile_options(no100f_resources_tests PRIVATE -UNDEBUG)
+endif()
+add_test(NAME no100f_resources_tests COMMAND no100f_resources_tests)
 add_executable(no100f_xbox_layout_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_xbox_layout_tests.cpp")
 target_include_directories(no100f_xbox_layout_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_xbox_layout_tests PRIVATE cxx_std_17)

@@ -4,6 +4,7 @@
 // pinned (scooby_logic_dol_sha256.inc, written by tools/build-no100f.ps1) and copies its sections into guest memory.
 // It replaces the translator's embedded data_sections_init.cpp.
 #include "memory.h"
+#include "no100f_game_state.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
 
@@ -62,5 +63,7 @@ extern "C" void InitializeDataSections() {
         if (size == 0 || size_t(off) + size > dol.size() || !Memory::Contains(addr, size)) continue;
         std::memcpy(Memory::GetPointer(addr, size), &dol[off], size);
     }
+    no100f_game_state::g_diagnosticLayoutVerified =
+        std::string_view(kLogicDolSha256) == "141d562a97f9d6a8794e164611a5da45f9c50b9d89049687f051b7af12e37434";
     RT_LOG(RT_TAG_RUNTIME) << "[disc] loaded game code and data from " << RuntimeConfigFile::PathToUtf8(path) << std::endl;
 }

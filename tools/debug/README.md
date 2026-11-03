@@ -47,6 +47,38 @@ Layout (paths in the skills and scripts are written from the repo root):
 | `holiday-shots.ps1` | Screenshot loop for `[game] holiday` dates per hub (needs PR #13) |
 | `patches/` | Diagnostics kept out of PRs; table in `.claude\skills\manual-yn-bisect\strip-before-pr.md` |
 
+### F8 progression diagnostics
+
+Enable Developer tools in the launcher (or `NO100F_DEV_TOOLS=1`). These controls require the verified GIHE78 rev-1
+executable layout; unavailable/modified state is reported, not treated as locked.
+
+| Tab / command in `Play\devmenu.txt` | Use and limits |
+| --- | --- |
+| Player / `player`, `health 1`, `health 5`, `snacks 500` | Read health/balance or apply one-time edits. Health is 1..5, with no kill/resurrection or simulated hit. Spendable balance is 0..99999 (a diagnostic input limit, **not** the game's maximum); it does not collect snacks or change gallery progression. New Game normally restores health to 3; later gameplay can replace edits. |
+| Player > Collected-snack progression / `snackareas`, `snackarea 1 118`, then `snackconfirm` or `snackcancel` | Advanced, separately confirmed **area-counter** edit. Select one named area 1..29; count must be 0..its live target. Shows current/target and an explicitly derived all-area sum. Can affect natural picture-gallery access and persist in a later ordinary save. Balance, other areas, physical pickup flags and scene-local counts are unchanged: this does **not** collect/remove/respawn snacks. No all-areas operation. |
+| Warps / `warps`, `warp E004 on`, `warp E004 off` | Read all 26 discovery entries or change one. These are **one-time live discovery edits**, not continuously disabled physical gates. Approaching a gate can unlock it again; normal saves can retain changes. Map, gadgets and room discovery are separate. |
+| Gallery / `gallery`, `gallery pictures locked`, `gallery movies unlocked`, `gallery movies natural` | In H003 only, test each picture/movie section with Game rules / Force locked / Force unlocked. Does not grant snacks, watched cinematics or story flags. Overrides clear when leaving the gallery/loading/returning to title. Modified or missing condition/link schemas disable the affected section. |
+| Diagnostics / `receipt`, `readiness` | Read-only local progression receipt (build, position, resolved data/save paths, player stats, Map/gadgets, warps, natural gallery state and active overrides) or interaction blockers (including player-edit death/payment gates). Paths remain in the local log; useful for checking disposable-profile isolation. No import/restore. |
+| Resources | Samples this game's process CPU and RAM approximately once per second while visible. CPU shows machine-normalized and one-core-equivalent percentages after warmup. RAM distinguishes resident working set from private committed memory. Process GPU utilization is explicitly unavailable: Aurora/WebGPU exposes no reliable process counter. Unsupported OS measurements have reasons, not zero placeholders. Nothing is uploaded. |
+
+Edits require stable gameplay, player control and no cinematic/movie or portal/queued travel/spot transfer.
+New diagnostic-only command files are consumed with explicit rejection reasons when unsafe, rather than replaying
+edits after a transition; older command-file waiting behavior is unchanged. Results go to `Play\devmenu.log`.
+Long command output scrolls within the F8 status area so diagnostic receipts cannot push the tabs off-screen.
+Commands reject extra arguments and unknown identities; there is no arbitrary memory/event editor.
+Player-stat and collected-counter edits additionally reject dead/dying players and pending snack-gate payments.
+Progression review/confirmation is shared by the UI and command surface; scene/availability changes, another
+selected area, or changed count/target invalidate it. `snackarea` only stages a change; `snackconfirm` applies it
+once and requires unchanged state. Neither path invokes the ordinary snack-grant helper or its completion sound.
+The former Power-ups tab is now Player; Map-first power-up identity/order and existing commands remain unchanged.
+
+Gallery detail rows show game-rule availability separately from effective test access. Visibility refreshes only
+through normal gallery entry/browsing; close/reopen the gallery after changes. Changing a rule does not dispatch
+UI events or reveal gallery widgets over unrelated screens.
+Clear gallery overrides restores game rules, not old progression. Normal movie playback can still update watched
+state. None of these tools invokes save/load or edits saves, but normal gameplay/save actions retain their usual
+side effects. Use an isolated disposable profile for diagnostics; never test against someone else's saves.
+
 ### `texhunt/` (HD texture packs, cut-outs, halos)
 
 Data and output go to `autotest\texhunt\` (`suspects.csv`, `devmenu_textures.txt`, `disc.pkl`, packs, shots); the
