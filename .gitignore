@@ -23,6 +23,8 @@
 /launcher/bin/
 /launcher/obj/
 /launcher/publish/
+/tools/launcher-layout-tests/bin/
+/tools/launcher-layout-tests/obj/
 
 # written by the build from the disc (build_logic_overlay.py) / build output
 /wiicompiled/projects/scooby/MAP_all.txt
