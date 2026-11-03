@@ -10,12 +10,12 @@ class RenderPassEncoder;
 
 namespace aurora::imgui {
 void create_context() noexcept;
-void initialize() noexcept;
-void shutdown() noexcept;
+void initialize();
+void shutdown();
 
 void process_event(const SDL_Event& event) noexcept;
 bool wants_capture_event(const SDL_Event& event) noexcept;
-void new_frame(const AuroraWindowSize& size) noexcept;
+void new_frame(const AuroraWindowSize& size);
 // Build this frame's ImGui draw data. Idempotent for the rest of the frame: the lists are built
 // once and every presentation slot replays them. Reset by new_frame.
 void render_frame_data() noexcept;

@@ -1,4 +1,6 @@
 #include "imgui.hpp"
+#include <aurora/window_owner.hpp>
+#include <stdexcept>
 
 #include <cstddef>
 #include <cstring>
@@ -56,7 +58,7 @@ void create_context() noexcept {
   io.WantSaveIniSettings = false;
 }
 
-void initialize() noexcept {
+void initialize() {
   ZoneScoped;
   SDL_Renderer* renderer = window::get_sdl_renderer();
   ImGui_ImplSDL3_InitForSDLRenderer(window::get_sdl_window(), renderer);
@@ -74,7 +76,7 @@ void initialize() noexcept {
   }
 }
 
-void shutdown() noexcept {
+void shutdown() {
   ZoneScoped;
   // Startup can fail before either backend initializes. A context alone does
   // not mean its renderer/platform backend owns resources to release.
@@ -137,7 +139,9 @@ bool wants_capture_event(const SDL_Event& event) noexcept {
   }
 }
 
-void new_frame(const AuroraWindowSize& size) noexcept {
+void new_frame(const AuroraWindowSize& size) {
+  if (window_owner::enabled() && (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable))
+    throw std::runtime_error("Window owner does not support ImGui multi-viewports");
   ZoneScoped;
   ImVec2 framebufferScale{
       size.width > 0 ? static_cast<float>(size.native_fb_width) / static_cast<float>(size.width) : 1.0f,

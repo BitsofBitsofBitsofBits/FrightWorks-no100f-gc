@@ -35,6 +35,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
+#include <aurora/window_owner_sdl.hpp>
 
 #include <array>
 #include <algorithm>
@@ -1741,7 +1742,8 @@ void DrawExitPrompt() {
     ImGui::PopFont();
     Hint("Progress since your last save is lost.");
     ImGui::Dummy(ImVec2(0, Px(4)));
-    if (Plank("QUIT##confirm", true, ImVec2(Px(140), Px(42)))) ExitForAuroraWindowClose();
+    // Unwind at the next guest event boundary, not through the noexcept draw callback.
+    if (Plank("QUIT##confirm", true, ImVec2(Px(140), Px(42)))) aurora::window_owner::request_close();
     ImGui::SameLine(0.0f, Px(10));
     if (Plank("CANCEL##cancel", false, ImVec2(Px(140), Px(42)))) g_exitPromptOpen = false;
     if (!g_exitPromptOpen) ImGui::CloseCurrentPopup();

@@ -4,6 +4,7 @@
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
+#include <aurora/window_owner_sdl.hpp>
 
 #include <array>
 #include <mutex>

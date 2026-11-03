@@ -1,4 +1,5 @@
 #include <aurora/aurora.h>
+#include <aurora/window_owner.hpp>
 
 #ifdef AURORA_ENABLE_GX
 #include "gfx/common.hpp"
@@ -237,8 +238,8 @@ enum class ImGuiFramePolicy {
 };
 
 bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy = ImGuiFramePolicy::Immediate,
-                      bool* imguiNewFrameOwed = nullptr) noexcept;
-bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) noexcept;
+                      bool* imguiNewFrameOwed = nullptr);
+bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed);
 void end_frame_impl(bool pumpEvents, bool drainFifo);
 
 // The two publication points of a frame-worker cycle, cleared together under `mutex`. Sealed:
@@ -304,7 +305,7 @@ bool frame_worker_requested() noexcept {
 
 #ifdef AURORA_ENABLE_GX
 // Returns false when a stop request was observed mid-cycle.
-bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept;
+bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame);
 #endif
 
 void frame_worker_main() noexcept {
@@ -332,7 +333,14 @@ void frame_worker_main() noexcept {
     // The CPU already decoded the sealed frame at its GX boundary; the worker only owns
     // encode/submit/present, so it never touches the producer's next FIFO buffer.
 #ifdef AURORA_ENABLE_GX
-    if (!run_frame_worker_cycle(sealedFrame)) {
+    try {
+      if (!run_frame_worker_cycle(sealedFrame)) break;
+    } catch (...) {
+      if (!window_owner::enabled()) std::terminate();
+      window_owner::report_failure(std::current_exception());
+      std::lock_guard lock(g_frameWorker.mutex);
+      g_frameWorker.stop = true;
+      g_frameWorker.framePrepared = false;
       break;
     }
 #endif
@@ -371,15 +379,15 @@ bool frame_worker_phase_reached(FrameWorkerPhase phase) noexcept {
                                            : g_frameWorker.ready.load(std::memory_order_acquire);
 }
 
-bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::microseconds timeout) noexcept;
+bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::microseconds timeout);
 
-void wait_for_frame_worker_private(FrameWorkerPhase phase) noexcept {
+void wait_for_frame_worker_private(FrameWorkerPhase phase) {
   constexpr auto kWaitServiceInterval = std::chrono::milliseconds(1);
   while (!wait_for_frame_worker_private_for(phase, kWaitServiceInterval)) {
   }
 }
 
-bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::microseconds timeout) noexcept {
+bool wait_for_frame_worker_private_for(FrameWorkerPhase phase, std::chrono::microseconds timeout) {
   // Each phase's state is published before its flag is set, which keeps the common
   // display-list path out of the worker control mutex.
   if (frame_worker_phase_reached(phase)) {
@@ -888,7 +896,7 @@ constexpr std::array<AuroraBackend, 0> PreferredBackendOrder{};
 bool g_initialFrame = false;
 
 
-AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) noexcept {
+AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) {
   g_config = config;
   Log.info("Aurora initializing");
   log_system_information();
@@ -1651,7 +1659,7 @@ wgpu::BindGroup encode_presentation_snapshot(wgpu::CommandEncoder& encoder,
 }
 #endif
 
-void shutdown() noexcept {
+void shutdown() {
   stop_frame_worker();
 #ifdef AURORA_ENABLE_GX
   stop_presenter();
@@ -1671,7 +1679,7 @@ void shutdown() noexcept {
   window::shutdown();
 }
 
-const AuroraEvent* update() noexcept {
+const AuroraEvent* update() {
   ZoneScoped;
   if (g_initialFrame) {
     g_initialFrame = false;
@@ -1680,7 +1688,7 @@ const AuroraEvent* update() noexcept {
   return window::poll_events();
 }
 
-bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) noexcept {
+bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) {
   ZoneScoped;
 #ifdef AURORA_ENABLE_GX
   webgpu::fail_if_device_lost();
@@ -1746,7 +1754,7 @@ bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imgui
 #endif
 }
 
-bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) noexcept {
+bool begin_frame_render_state_impl(ImGuiFramePolicy imguiPolicy, bool* imguiNewFrameOwed) {
 #ifdef AURORA_ENABLE_GX
   std::lock_guard gpuLock(g_rendererGpuMutex);
   // Note the debt before gfx::begin_frame() can fail: the synchronous path always started the
@@ -2044,7 +2052,7 @@ void record_frame_telemetry() {
 
 // One complete frame-worker cycle. The scene encode only leaves the renderer mutex when
 // interpolation actually inserts slots; otherwise both phases publish together.
-bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
+bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) {
   ZoneScopedN("Frame worker cycle");
   webgpu::fail_if_device_lost();
   SealedFrameContext ctx;
@@ -2161,7 +2169,8 @@ void end_frame_impl(bool pumpEvents, bool drainFifo) {
 #endif
 }
 
-bool begin_frame() noexcept {
+bool begin_frame() {
+  if (window_owner::enabled()) window_owner::check();
 #ifdef AURORA_ENABLE_GX
   // The asynchronous fast path below can return a logically prepared frame
   // without entering begin_frame_impl(), so loss must be checked before it.
@@ -2255,17 +2264,24 @@ void end_frame() {
 }
 } // namespace
 
-void wait_for_frame_worker() noexcept { wait_for_frame_worker_private(FrameWorkerPhase::Done); }
-std::chrono::nanoseconds wait_for_frame_worker_sealed() noexcept {
+void wait_for_frame_worker() {
+  wait_for_frame_worker_private(FrameWorkerPhase::Done);
+  if (window_owner::enabled()) window_owner::check();
+}
+std::chrono::nanoseconds wait_for_frame_worker_sealed() {
+  if (window_owner::enabled()) window_owner::check();
   if (g_frameWorker.sealed.load(std::memory_order_acquire)) {
     return std::chrono::nanoseconds::zero();
   }
   const auto started = std::chrono::steady_clock::now();
   wait_for_frame_worker_private(FrameWorkerPhase::Sealed);
+  if (window_owner::enabled()) window_owner::check();
   return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started);
 }
-bool wait_for_frame_worker_for(std::chrono::microseconds timeout) noexcept {
-  return wait_for_frame_worker_private_for(FrameWorkerPhase::Done, timeout);
+bool wait_for_frame_worker_for(std::chrono::microseconds timeout) {
+  const bool result = wait_for_frame_worker_private_for(FrameWorkerPhase::Done, timeout);
+  if (window_owner::enabled()) window_owner::check();
+  return result;
 }
 std::recursive_mutex& renderer_gpu_mutex() noexcept { return g_rendererGpuMutex; }
 void submit_staging_commands(const wgpu::CommandBuffer& commands) {

@@ -10,6 +10,7 @@
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_timer.h>
+#include <aurora/window_owner_sdl.hpp>
 
 #include <algorithm>
 #include <array>

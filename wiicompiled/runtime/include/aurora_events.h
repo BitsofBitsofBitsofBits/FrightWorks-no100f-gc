@@ -7,6 +7,7 @@
 
 #include <aurora/aurora.h>
 #include <aurora/event.h>
+#include <aurora/window_owner.hpp>
 #include <dolphin/gx/GXAurora.h>
 
 #include <cstdlib>
@@ -56,12 +57,11 @@ inline void Flush(bool force = false) {
 }
 } // namespace WindowPlacementPersistence
 
-// The close event can be consumed while execution is inside a guest fiber
-// (for example, OSSleepThread).  Running normal C++/CRT shutdown from that
-// fiber re-enters runtime teardown and can fault while the fiber machinery is
-// still active.  A window close is an intentional successful exit, so end the
-// process directly and do not run the crash/atexit paths.
-[[noreturn]] inline void ExitForAuroraWindowClose() noexcept {
+// The owner path transfers close requests from guest fibers to the scheduler before
+// teardown. Platforms without an owner keep their direct successful-exit path.
+[[noreturn]] inline void ExitForAuroraWindowClose() {
+    if (aurora::window_owner::enabled())
+        throw aurora::window_owner::CloseRequested();
     no100f_recorder::FinishForExit();  // a running F3 video: finish the file first
     settings_overlay::ReleaseControllers();
     WindowPlacementPersistence::Flush(true);
@@ -74,6 +74,8 @@ inline void Flush(bool force = false) {
 
 // Update cached Aurora window/framebuffer dimensions based on pending events.
 inline void ProcessAuroraEvents(const AuroraEvent* events) {
+    if (aurora::window_owner::enabled()) aurora::window_owner::check();
+    if (aurora::window_owner::consume_close_request()) ExitForAuroraWindowClose();
     if (!events) {
         return;
     }

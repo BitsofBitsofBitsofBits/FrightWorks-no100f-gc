@@ -47,6 +47,7 @@
 #include <vector>
 
 #include <SDL3/SDL.h>
+#include <aurora/window_owner_sdl.hpp>
 #include <dolphin/pad.h>
 
 #include "abi_bridge.h"

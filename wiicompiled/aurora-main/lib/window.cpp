@@ -40,6 +40,7 @@ extern "C" void Android_UnlockActivityMutex(void);
 #include <vector>
 
 #include "dolphin/vi/vi_internal.hpp"
+#include <aurora/window_owner_sdl.hpp>
 
 namespace aurora::window {
 namespace {
@@ -102,7 +103,14 @@ LRESULT CALLBACK aurora_window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
   if (g_prevWindowProc == nullptr) {
     return DefWindowProc(hwnd, msg, wparam, lparam);
   }
-  return CallWindowProc(g_prevWindowProc, hwnd, msg, wparam, lparam);
+  const auto result = CallWindowProc(g_prevWindowProc, hwnd, msg, wparam, lparam);
+  // SDL_PumpEvents stays inside Windows' move/size and menu loops. Publish after SDL has
+  // handled each native message, not only after the outer pump eventually returns.
+  if (sizeChanged || msg == WM_MOVE || msg == WM_SETFOCUS || msg == WM_KILLFOCUS ||
+      msg == WM_SHOWWINDOW || msg == WM_DPICHANGED) {
+    window_owner::refresh_window_state();
+  }
+  return result;
 }
 
 void install_window_proc_hook() noexcept {
@@ -379,6 +387,10 @@ const AuroraEvent* poll_events() {
 }
 
 bool create_window(AuroraBackend backend) {
+  if (window_owner::enabled() && !window_owner::is_owner())
+    return window_owner::call([=] { return create_window(backend); });
+  if (window_owner::enabled() && (backend == BACKEND_OPENGL || backend == BACKEND_OPENGLES))
+    throw std::runtime_error("Window owner does not support SDL OpenGL contexts");
   SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
 #if TARGET_OS_IOS || TARGET_OS_TV
   flags |= SDL_WINDOW_FULLSCREEN;
@@ -455,6 +467,8 @@ bool create_window(AuroraBackend backend) {
 }
 
 bool create_renderer() {
+  if (window_owner::enabled())
+    throw std::runtime_error("Window owner requires WebGPU, not the SDL renderer fallback");
   if (g_window == nullptr) {
     return false;
   }
@@ -473,6 +487,10 @@ bool create_renderer() {
 }
 
 void destroy_window() {
+  if (window_owner::enabled() && !window_owner::is_owner()) {
+    window_owner::call([] { destroy_window(); });
+    return;
+  }
 #if defined(_WIN32)
   uninstall_window_proc_hook();
 #endif
@@ -493,6 +511,8 @@ void show_window() {
 }
 
 bool initialize() {
+  if (window_owner::enabled() && !window_owner::is_owner())
+    return window_owner::call([] { return initialize(); });
   /* We don't want to initialize anything input related here, otherwise the add events will get lost to the void */
   TRY(SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight"), "Error setting {}: {}", SDL_HINT_ORIENTATIONS,
       SDL_GetError());
@@ -517,15 +537,21 @@ bool initialize() {
 }
 
 bool initialize_event_watch() {
+  if (window_owner::enabled() && !window_owner::is_owner())
+    return window_owner::call([] { return initialize_event_watch(); });
   TRY(SDL_AddEventWatch(lifecycle_event_watch, nullptr), "Error adding SDL event watch: {}", SDL_GetError());
   return true;
 }
 
 void shutdown() {
+  if (window_owner::enabled() && !window_owner::is_owner()) {
+    window_owner::call([] { shutdown(); });
+    return;
+  }
   SDL_RemoveEventWatch(lifecycle_event_watch, nullptr);
   destroy_window();
   TRY_WARN(SDL_EnableScreenSaver(), "Error enabling screensaver: {}", SDL_GetError());
-  SDL_Quit();
+  if (!window_owner::enabled()) SDL_Quit();
 }
 
 AuroraWindowSize get_window_size() {
@@ -533,9 +559,20 @@ AuroraWindowSize get_window_size() {
   int height = 0;
   int native_fb_w = 0;
   int native_fb_h = 0;
-  ASSERT(SDL_GetWindowSize(g_window, &width, &height), "Failed to get window size: {}", SDL_GetError());
-  ASSERT(SDL_GetWindowSizeInPixels(g_window, &native_fb_w, &native_fb_h), "Failed to get window size in pixels: {}",
-         SDL_GetError());
+  float scale = 1.f;
+  if (window_owner::enabled() && !window_owner::is_owner()) {
+    const auto state = window_owner::native_state();
+    width = state.width;
+    height = state.height;
+    native_fb_w = state.pixelsWidth;
+    native_fb_h = state.pixelsHeight;
+    scale = state.scale;
+  } else {
+    ASSERT(SDL_GetWindowSize(g_window, &width, &height), "Failed to get window size: {}", SDL_GetError());
+    ASSERT(SDL_GetWindowSizeInPixels(g_window, &native_fb_w, &native_fb_h), "Failed to get window size in pixels: {}",
+           SDL_GetError());
+    scale = SDL_GetWindowDisplayScale(g_window);
+  }
 
   int fb_w = native_fb_w;
   int fb_h = native_fb_h;
@@ -592,7 +629,6 @@ AuroraWindowSize get_window_size() {
     fb_h = scaledH;
   }
 
-  const float scale = SDL_GetWindowDisplayScale(g_window);
   return {
       .width = static_cast<uint32_t>(width),
       .height = static_cast<uint32_t>(height),
@@ -629,7 +665,7 @@ bool is_presentable() noexcept {
          g_surfaceReady.load(std::memory_order_acquire);
 }
 
-void pump_events() noexcept {
+void pump_events() {
   if (g_window != nullptr) {
     SDL_SyncWindow(g_window);
   }
@@ -681,6 +717,10 @@ void set_fullscreen(bool fullscreen) {
 bool get_fullscreen() { return (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0u; }
 
 void set_display_mode(AuroraDisplayMode mode) {
+  if (window_owner::enabled() && !window_owner::is_owner()) {
+    window_owner::submit([=] { set_display_mode(mode); }, 20);
+    return;
+  }
   if (g_window == nullptr) {
     return;
   }
@@ -695,6 +735,9 @@ void set_display_mode(AuroraDisplayMode mode) {
     return;
   }
 
+  // Native messages can be published to the guest before the SDL call returns.
+  // Do not persist fullscreen dimensions as the player's windowed placement.
+  g_displayMode.store(mode, std::memory_order_release);
   bool success = true;
   if (mode == AURORA_DISPLAY_MODE_WINDOWED) {
     success = SDL_SetWindowFullscreen(g_window, false);
@@ -719,6 +762,7 @@ void set_display_mode(AuroraDisplayMode mode) {
     SDL_DisplayMode closest{};
     if (desktop == nullptr ||
         !SDL_GetClosestFullscreenDisplayMode(display, desktop->w, desktop->h, targetHz, true, &closest)) {
+      g_displayMode.store(currentMode, std::memory_order_release);
       Log.warn("No exclusive fullscreen mode near {:.0f} Hz is available: {}", targetHz, SDL_GetError());
       return;
     }
@@ -742,10 +786,10 @@ void set_display_mode(AuroraDisplayMode mode) {
   }
 
   if (!success) {
+    g_displayMode.store(currentMode, std::memory_order_release);
     Log.warn("Failed to change display mode: {}", SDL_GetError());
     return;
   }
-  g_displayMode.store(mode, std::memory_order_release);
   g_nativeResizePending.store(true, std::memory_order_release);
   TRY_WARN(push_custom_event(CustomEvent::FutureResize), "Failed to queue fullscreen resize event: {}",
            SDL_GetError());

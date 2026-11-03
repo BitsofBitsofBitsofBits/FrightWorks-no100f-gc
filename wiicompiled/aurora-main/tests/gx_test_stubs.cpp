@@ -39,9 +39,9 @@ std::deque<std::vector<uint8_t>> s_uniformAllocations;
 // --- aurora::g_config ---
 namespace aurora {
 AuroraConfig g_config{};
-void wait_for_frame_worker() noexcept {}
-std::chrono::nanoseconds wait_for_frame_worker_sealed() noexcept { return {}; }
-bool wait_for_frame_worker_for(std::chrono::microseconds) noexcept { return true; }
+void wait_for_frame_worker() {}
+std::chrono::nanoseconds wait_for_frame_worker_sealed() { return {}; }
+bool wait_for_frame_worker_for(std::chrono::microseconds) { return true; }
 std::recursive_mutex& renderer_gpu_mutex() noexcept {
   static std::recursive_mutex mutex;
   return mutex;
