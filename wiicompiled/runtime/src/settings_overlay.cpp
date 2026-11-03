@@ -673,7 +673,8 @@ void DrawRebindPrompt() {
 
 void DrawKeyBinding(const char* label, int scancode, RebindKind kind, uint16_t target,
                     float width = OverlayTheme::Px(220.0f)) {
-    const std::string caption = std::string(KeyBindingName(scancode)) + "##binding";
+    // ### : the same control after a rebind changes its caption, or a controller's focus would be lost.
+    const std::string caption = std::string(KeyBindingName(scancode)) + "###binding";
     if (ImGui::Button(caption.c_str(), ImVec2(width, 0.0f))) BeginRebind(kind, target, label);
     ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::TextUnformatted(label);
@@ -1067,7 +1068,7 @@ void DrawGamepadSettings(uint32_t selectedGamePort) {
         };
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(bindingWidth);
-        const std::string primaryCaption = std::string(current.label) + "##primary";
+        const std::string primaryCaption = std::string(current.label) + "###primary";
         if (ImGui::Button(primaryCaption.c_str(), ImVec2(bindingWidth, 0.0f))) {
             BeginRebind(RebindKind::Controller, kControllerButtons[i].padButton, kControllerButtons[i].label);
         }
@@ -1091,7 +1092,7 @@ void DrawGamepadSettings(uint32_t selectedGamePort) {
                 ImGui::BeginGroup();
                 const char* altLabel = altBound ? NativeButtonForValue(altIt->nativeButton).label : "None";
                 ImGui::SetNextItemWidth(bindingWidth);
-                const std::string altCaption = std::string(altLabel) + "##alt";
+                const std::string altCaption = std::string(altLabel) + "###alt";
                 if (ImGui::Button(altCaption.c_str(), ImVec2(bindingWidth, 0.0f))) {
                     BeginRebind(RebindKind::Controller, kControllerButtons[i].padButton, kControllerButtons[i].label, true);
                 }
