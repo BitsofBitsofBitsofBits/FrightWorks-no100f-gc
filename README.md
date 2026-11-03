@@ -4,8 +4,9 @@ A statically recompiled PC port of **Scooby-Doo! Night of 100 Frights** (GameCub
 translated ahead of time to C++ with [WiiCompiled](https://github.com/patchzyy/Wiicompiled) and compiled into a Windows
 program, so there is no CPU emulator; the console's graphics, audio and system calls are reimplemented underneath.
 
-FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-glitch/Scooby-Doo-Refrightened) by JosiahG. This repository is the GameCube version;
-ports of the other console versions may follow.
+FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-glitch/Scooby-Doo-Refrightened) by JosiahG,
+from which it split off on October 31, 2026. This repository is the GameCube version; ports of the other console versions
+may follow.
 
 > **Artists wanted:** the launcher needs new art in the style of the original show. [Details below](#wanted-an-artist-for-the-launcher).
 
