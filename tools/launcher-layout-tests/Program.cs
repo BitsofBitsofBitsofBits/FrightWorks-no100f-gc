@@ -35,7 +35,7 @@ static class LauncherLayoutTests
         Directory.CreateDirectory(userData);
         File.WriteAllText(Path.Combine(game, "portable.txt"), "");
         string config = Path.Combine(userData, "Config.toml");
-        const string initialConfig = "# Preserve custom calibration and unknown values.\n[video]\nhdr = true\nhdr_paper_white_nits = 237.5\nhdr_peak_nits = 1234.0\nunknown_setting = 42\n[controller]\nlayout = \"xbox_original\"\n";
+        const string initialConfig = "# Preserve custom calibration and unknown values.\n[video]\nhdr = true\nhdr_paper_white_nits = 237.5\nhdr_peak_nits = 1234.0\nunknown_setting = 42\nfullscreen_display = \"NOPE0000/gone\"\n[controller]\nlayout = \"xbox_original\"\n";
         File.WriteAllText(config, initialConfig);
         for (int i = 0; i < 20; i++)
             Directory.CreateDirectory(Path.Combine(userData, "mods", $"{i:D2}-" + new string('M', 100)));
@@ -223,7 +223,7 @@ static class LauncherLayoutTests
                 Call(displayTab, "OnKeyDown", new KeyEventArgs(Keys.Space));
                 Call(displayTab, "OnKeyUp", new KeyEventArgs(Keys.Space));
                 Application.DoEvents();
-                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 11);
+                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 12);
                 Check(display.Visible, "Space did not select the Display tab");
                 var window = Descendants(display).OfType<ComboBox>().First();
                 window.SelectedIndex = 1;
@@ -232,6 +232,11 @@ static class LauncherLayoutTests
                 Check(saved.Contains("hdr = true") && saved.Contains("hdr_paper_white_nits = 237.5") &&
                     saved.Contains("hdr_peak_nits = 1234.0") && saved.Contains("unknown_setting = 42"),
                     "Changing another setting overwrote custom HDR/unknown values");
+                var monitorBox = Descendants(display).OfType<ComboBox>().ElementAt(1);
+                Check((string)monitorBox.SelectedItem! == "Saved monitor (not connected)", "A missing monitor is not shown as saved");
+                Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
+                monitorBox.SelectedIndex = 0;
+                Check(File.ReadAllText(config).Contains("fullscreen_display = \"auto\""), "Automatic monitor was not saved");
                 var layout = (ComboBox)type.GetField("layoutBox", Private)!.GetValue(form)!;
                 layout.SelectedIndex = 0;
                 selectTab(true);
