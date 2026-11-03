@@ -2136,17 +2136,22 @@ static HashType draw_geometry_signature(GXVtxFmt fmt, const uint8_t* vertices,
     }
   }
 
-  // Identical index streams can address different vertex arrays.
+  // Identical index streams can address different vertex arrays, so hash the positions they hold, not where they
+  // are: animated meshes (the manor curtains) are written to pooled buffers each frame, and the buffer one instance
+  // used last frame goes to another instance this frame. By address they matched the wrong instance exactly. By
+  // content, rewritten meshes fall back to the material identity, and identical copies are told apart by distance.
+  // Positions alone are enough: draws that differ only in other attributes pair by distance, which is all a pair is.
   for (int i = GX_VA_POS; i <= GX_VA_TEX7; ++i) {
     if (g_gxState.vtxDesc[i] != GX_INDEX8 && g_gxState.vtxDesc[i] != GX_INDEX16) {
       continue;
     }
     const auto& array = g_gxState.arrays[i];
     const auto attribute = static_cast<uint32_t>(i);
-    const auto source = reinterpret_cast<uintptr_t>(array.data);
     hasher.update(attribute);
-    hasher.update(source);
     hasher.update(array.stride);
+    if (i == GX_VA_POS && array.data != nullptr) {
+      hasher.update(static_cast<const uint8_t*>(array.data), array.size);
+    }
   }
   return static_cast<HashType>(hasher.digest());
 }
