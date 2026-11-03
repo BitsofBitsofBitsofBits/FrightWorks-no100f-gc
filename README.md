@@ -22,7 +22,7 @@ may follow.
 
 - Up to 4K, true widescreen (16:9, fill, cinematic 2.39:1) or original 4:3
 - 30 or 60 fps, MSAA anti-aliasing, HDR
-- Restored Creeper window animation in Mystic Manor's Mystery Machine courtyard
+- Added Creeper window animation from the XBOX edition of the game to the Mystic Manor's Mystery Machine courtyard
 - Built-in HD texture pack (can be switched off)
 - Gamepads and keyboard, remappable in the launcher (**Settings** > **Controls**) or in game (**F10** > Controls);
   button prompts match your Xbox, PlayStation or Nintendo controller and follow remapped face buttons
