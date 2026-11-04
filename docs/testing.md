@@ -11,7 +11,7 @@ the walkthrough.
 
 ## 1. One-time setup
 
-You need Python 3 and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
+You need Python 3.8 or newer and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
 build downloads its own compiler, CMake and Ninja into `toolchain\` the first time.
 
 ```powershell
@@ -287,6 +287,14 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   (`-Continue` to resume the last conversation instead). `new`/`open` start the tab without the Claude Code
   variables of the shell that runs them, so a session started from the coordinator is its own session: listed by
   ListAgents, its conversation saved for `-Continue`.
+- `worktree.ps1` is a thin wrapper: the work is done by `tools\debug\worktree.py` (Python 3.8+, standard library only).
+  The wrapper finds a real Python (not the Microsoft Store stub) and passes every argument through, so the commands
+  above are unchanged. `remove` unlinks every junction/symlink first (at any depth), checks none is left, and only
+  then lets git remove the folder: it never deletes recursively through a link, so `Disc\`, `toolchain\` etc. of
+  the main checkout are safe. It refuses rather than guess when it cannot list the running programs.
+- `-Model <name|full ID>` and `-Effort <low|medium|high|xhigh|max>` (on `new` and `open`, also with `-Continue`) are
+  passed to `claude` as `--model` / `--effort`, only when given. They are not remembered: a later `open` without them
+  starts on the defaults. No semicolons in `-Model` (Windows Terminal splits its command line there).
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its
