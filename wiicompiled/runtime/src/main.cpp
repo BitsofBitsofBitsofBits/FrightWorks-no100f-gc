@@ -1587,6 +1587,11 @@ int RuntimeMain(int argc, char** argv) {
 
 
         aurora_set_hdr(RuntimeConfigFile::Hdr(), RuntimeConfigFile::HdrPaperWhiteNits(), RuntimeConfigFile::HdrPeakNits());
+        // Known before the window exists when starting fullscreen, so it opens on the chosen monitor. A game starting
+        // in a window opens at its own spot and gets the choice in InitializeRuntimeSettings.
+        if (RuntimeConfigFile::DisplayMode("borderless") != "windowed") {
+            aurora_set_fullscreen_monitor(RuntimeConfigFile::FullscreenDisplay().c_str());
+        }
         const AuroraInfo auroraInfo = aurora_initialize(0, nullptr, &auroraConfig);
         if (auroraInfo.initializationStatus != AURORA_INITIALIZATION_SUCCESS) {
             throw std::runtime_error(auroraInfo.initializationError != nullptr

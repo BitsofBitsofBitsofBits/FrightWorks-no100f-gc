@@ -2,11 +2,12 @@
 
 #include "memory.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -28,15 +29,47 @@
 namespace MusicAttenuation {
 namespace {
 
-constexpr uint32_t kSoundManagerPointer = 0u;  // SPM sound manager; unmapped here so the feature stays off
-constexpr uint32_t kArchivePlayerOffset = 0x5BCu;
-constexpr uint32_t kSoundPlayersOffset = 0x34u;
-constexpr uint32_t kSoundPlayerVolumeOffset = 0x2Cu;
-constexpr uint32_t kSoundPlayerStride = 0x5Cu;
-// The PAL revo_kart.brsar allocates 12 SoundPlayers, with player 11 being
-// PL_MAX rather than a playable bus. The game's PlayersVolumeMgr likewise
-// owns 11 volume tracks, so the usable buses are players 0 through 10.
-constexpr size_t kSoundPlayerCount = 11;
+// NO100F sound engine (iSnd over the GameCube MIX library). Every frame the engine works out each playing sound's
+// volume (fn_800D928C: the sound's own volume, 3D distance, the game's own music/SFX option and master volume) and
+// sets it as the voice's MIX fader with MIXAdjustFader (0x800DD2A0, only caller). Sound records: 64 x 0x48 bytes
+// from 0x80237E18; 0-5 are disc streams (voice = word 0 of the 0x104-byte stream slot at 0x8024C258), 6-63 are
+// ARAM sounds (voice = word 0 of the 0x20-byte slot at 0x8024BB18). Record +0x00 = sound id, +0x04 = play serial,
+// +0x14 = flags. Flag 0x400 puts a sound on the engine's music volume: zMusic's tracks and the menu music, but also
+// every streamed-sound asset of a level bank (the engine's lookup fn_800D98C8 marks those: dialog lines and the
+// in-engine cutscene soundtracks).
+constexpr uint32_t kSoundRecords = 0x80237E18u;
+constexpr uint32_t kSoundRecordStride = 0x48u;
+constexpr uint32_t kSoundRecordCount = 64u;
+constexpr uint32_t kSoundRecordSerialOffset = 0x04u;
+constexpr uint32_t kSoundRecordFlagsOffset = 0x14u;
+constexpr uint16_t kSoundFlagMusic = 0x400u;
+// Sound banks, one per loaded HIP with sounds, searched last to first like fn_800D98C8: count at 0x8027101C
+// (r13-0x7264), 0x108-byte entries from 0x8024C870, +0x104 = header {+0 sounds, +8 streamed sounds, entries of 0x64
+// bytes from +0xC with the sound id at +0x60}. Bank 0 = boot.HIP, 1 = mnu4.HIP (menu sounds, loaded all game),
+// 2 and up = the level's.
+constexpr uint32_t kSoundBankCount = 0x8027101Cu;
+constexpr uint32_t kSoundBanks = 0x8024C870u;
+constexpr uint32_t kSoundBankStride = 0x108u;
+constexpr uint32_t kSoundBankMax = 12u;
+constexpr uint32_t kSoundBankHeaderOffset = 0x104u;
+constexpr uint32_t kSoundEntryStride = 0x64u;
+constexpr uint32_t kSoundEntryIdOffset = 0x60u;
+constexpr int kMenuSoundBank = 1;
+constexpr uint32_t kStreamSlots = 0x8024C258u;
+constexpr uint32_t kStreamSlotStride = 0x104u;
+constexpr uint32_t kStreamSlotCount = 6u;
+constexpr uint32_t kSampleSlots = 0x8024BB18u;
+constexpr uint32_t kSampleSlotStride = 0x20u;
+constexpr uint32_t kSampleSlotCount = 58u;
+// MIX channels: one 0x60-byte entry per AX voice index (AXVPB +0x18); +0x04 mode flags, +0x1C fader (0.1 dB).
+constexpr uint32_t kMixChannels = 0x8024D680u;
+constexpr uint32_t kMixChannelStride = 0x60u;
+constexpr uint32_t kMixChannelModeOffset = 0x04u;
+constexpr uint32_t kMixChannelFaderOffset = 0x1Cu;
+constexpr uint32_t kMixModeUpdateMix = 0x40000000u;
+constexpr uint32_t kAxVoiceIndexOffset = 0x18u;
+// MIXUpdateSettings clamps input + fader to [-904, +60]; this takes any fader to silence.
+constexpr int32_t kMixSilentOffset = -904 - 60;
 
 std::atomic<bool> g_enabled{false};
 std::atomic<bool> g_externalMediaPlaying{false};
@@ -48,72 +81,11 @@ std::atomic<float> g_uiVolume{1.0f};
 std::atomic<float> g_voicesVolume{1.0f};
 std::once_flag g_monitorStart;
 
-// These fields are touched only from the guest scheduler thread.
-uint32_t g_soundPlayerArray = 0;
-std::array<float, kSoundPlayerCount> g_requestedSoundPlayerVolumes{};
-std::array<float, kSoundPlayerCount> g_lastAppliedSoundPlayerVolumes{};
-std::array<bool, kSoundPlayerCount> g_haveSoundPlayerVolumes{};
-
-uint32_t FloatBits(float value) noexcept {
-    static_assert(sizeof(float) == sizeof(uint32_t));
-    uint32_t bits = 0;
-    std::memcpy(&bits, &value, sizeof(bits));
-    return bits;
-}
-
-float BitsFloat(uint32_t bits) noexcept {
-    static_assert(sizeof(float) == sizeof(uint32_t));
-    float value = 0.0f;
-    std::memcpy(&value, &bits, sizeof(value));
-    return value;
-}
-
-float ClampSoundPlayerVolume(float volume) noexcept {
-    // Match nw4r::snd::SoundPlayer::SetVolume at 0x800A35E0 exactly,
-    // including its NaN behavior (unordered compares select the upper bound).
+float ClampVolume(float volume) noexcept {
     if (volume <= 1.0f) {
         return volume < 0.0f ? 0.0f : volume;
     }
     return 1.0f;
-}
-
-bool WriteGuestFloat(uint32_t address, float value) noexcept {
-    try {
-        Memory::Write32(address, FloatBits(value));
-        return true;
-    } catch (const Memory::AccessViolation&) {
-        return false;
-    }
-}
-
-bool ReadGuestFloat(uint32_t address, float& value) noexcept {
-    uint32_t bits = 0;
-    if (!Memory::TryRead32(address, bits)) {
-        return false;
-    }
-    value = BitsFloat(bits);
-    return true;
-}
-
-uint32_t ResolveSoundPlayerArray() noexcept {
-    // NSMBW: Mario Kart's sound-manager pointer (0x809C2898) and its offsets describe MKW's
-    // revo_kart.brsar setup; in NSMBW that address lies inside d_enemiesNP's data. Report "no
-    // players" so TickGuest never writes guest memory until NSMBW's SndAudioMgr is mapped.
-    return 0;
-#if 0  // NSMBW: MKW sound-manager walk
-    uint32_t soundManager = 0;
-    uint32_t archivePlayer = 0;
-    uint32_t soundPlayers = 0;
-    if (!Memory::TryRead32(kSoundManagerPointer, soundManager) || soundManager == 0 ||
-        !Memory::TryRead32(soundManager + kArchivePlayerOffset, archivePlayer) || archivePlayer == 0 ||
-        !Memory::TryRead32(archivePlayer + kSoundPlayersOffset, soundPlayers)) {
-        return 0;
-    }
-
-    // revo_kart.brsar names player 0 YPPL_BGM. Players 1-10 are the
-    // independent UI, object, engine, race, vehicle, and voice players.
-    return soundPlayers;
-#endif
 }
 
 enum class SoundCategory {
@@ -123,24 +95,68 @@ enum class SoundCategory {
     Voices,
 };
 
-SoundCategory CategoryForPlayer(size_t playerIndex) noexcept {
-    switch (playerIndex) {
-    case 0:
-        return SoundCategory::Music;
-    case 1:
-    case 7:
-        return SoundCategory::Ui;
-    case 8:
-    case 9:
-    case 10:
-        return SoundCategory::Voices;
-    default:
-        return SoundCategory::SoundEffects;
+// Category of each record's current sound, keyed by its play serial (touched only from the guest thread).
+std::array<uint32_t, kSoundRecordCount> g_recordSerial = [] {
+    std::array<uint32_t, kSoundRecordCount> serials{};
+    serials.fill(~0u);
+    return serials;
+}();
+std::array<SoundCategory, kSoundRecordCount> g_recordCategory{};
+
+// The sound record playing on an AX voice, or -1 when the voice is not one of the engine's (Bink movie audio).
+int FindSoundRecord(uint32_t voice) noexcept {
+    for (uint32_t i = 0; i < kStreamSlotCount; ++i) {
+        if (Memory::Read32(kStreamSlots + i * kStreamSlotStride) == voice) {
+            return static_cast<int>(i);
+        }
     }
+    for (uint32_t i = 0; i < kSampleSlotCount; ++i) {
+        if (Memory::Read32(kSampleSlots + i * kSampleSlotStride) == voice) {
+            return static_cast<int>(kStreamSlotCount + i);
+        }
+    }
+    return -1;
 }
 
-float CategoryVolume(size_t playerIndex) noexcept {
-    switch (CategoryForPlayer(playerIndex)) {
+// The bank a sound id is found in by the engine's own lookup order, or -1.
+int FindSoundBank(uint32_t id) noexcept {
+    const uint32_t count = std::min(Memory::Read32(kSoundBankCount), kSoundBankMax);
+    for (uint32_t bank = count; bank-- > 0;) {
+        const uint32_t header = Memory::Read32(kSoundBanks + bank * kSoundBankStride + kSoundBankHeaderOffset);
+        if (header == 0) {
+            continue;
+        }
+        const uint32_t sounds = Memory::Read32(header) + Memory::Read32(header + 8);
+        for (uint32_t i = 0; i < sounds; ++i) {
+            if (Memory::Read32(header + 0xC + i * kSoundEntryStride + kSoundEntryIdOffset) == id) {
+                return static_cast<int>(bank);
+            }
+        }
+    }
+    return -1;
+}
+
+SoundCategory CategoryForSound(uint32_t id, uint16_t flags) noexcept {
+    const int bank = FindSoundBank(id);
+    if (flags & kSoundFlagMusic) {
+        return bank > kMenuSoundBank ? SoundCategory::Voices : SoundCategory::Music;
+    }
+    return bank == kMenuSoundBank ? SoundCategory::Ui : SoundCategory::SoundEffects;
+}
+
+SoundCategory CategoryForRecord(int index) noexcept {
+    const uint32_t record = kSoundRecords + static_cast<uint32_t>(index) * kSoundRecordStride;
+    const uint32_t serial = Memory::Read32(record + kSoundRecordSerialOffset);
+    if (g_recordSerial[index] != serial) {
+        g_recordSerial[index] = serial;
+        g_recordCategory[index] =
+            CategoryForSound(Memory::Read32(record), Memory::Read16(record + kSoundRecordFlagsOffset));
+    }
+    return g_recordCategory[index];
+}
+
+float CategoryVolume(SoundCategory category) noexcept {
+    switch (category) {
     case SoundCategory::Music:
         return g_musicVolume.load(std::memory_order_acquire);
     case SoundCategory::SoundEffects:
@@ -153,27 +169,15 @@ float CategoryVolume(size_t playerIndex) noexcept {
     return 1.0f;
 }
 
-bool FindSoundPlayerIndex(uint32_t soundPlayer, uint32_t soundPlayerArray, size_t& playerIndex) noexcept {
-    if (soundPlayer == 0 || soundPlayerArray == 0 || soundPlayer < soundPlayerArray) {
-        return false;
+// A linear volume as a MIX fader offset in 0.1 dB.
+int32_t FaderOffset(float volume) noexcept {
+    if (volume >= 1.0f) {
+        return 0;
     }
-    const uint32_t offset = soundPlayer - soundPlayerArray;
-    if (offset % kSoundPlayerStride != 0) {
-        return false;
+    if (volume <= 0.0f) {
+        return kMixSilentOffset;
     }
-    const size_t index = static_cast<size_t>(offset / kSoundPlayerStride);
-    if (index >= kSoundPlayerCount) {
-        return false;
-    }
-    playerIndex = index;
-    return true;
-}
-
-float AppliedSoundPlayerVolume(size_t playerIndex, float requestedVolume, bool attenuated) noexcept {
-    if (playerIndex == 0 && attenuated) {
-        return 0.0f;
-    }
-    return requestedVolume * CategoryVolume(playerIndex);
+    return std::max(kMixSilentOffset, static_cast<int32_t>(std::lround(200.0f * std::log10(volume))));
 }
 
 bool ShouldAttenuate() noexcept {
@@ -521,81 +525,37 @@ bool IsMediaControlInitializationComplete() noexcept {
 }
 
 void SetMusicVolume(float volume) noexcept {
-    g_musicVolume.store(ClampSoundPlayerVolume(volume), std::memory_order_release);
+    g_musicVolume.store(ClampVolume(volume), std::memory_order_release);
 }
 
 void SetSoundEffectsVolume(float volume) noexcept {
-    g_soundEffectsVolume.store(ClampSoundPlayerVolume(volume), std::memory_order_release);
+    g_soundEffectsVolume.store(ClampVolume(volume), std::memory_order_release);
 }
 
 void SetUiVolume(float volume) noexcept {
-    g_uiVolume.store(ClampSoundPlayerVolume(volume), std::memory_order_release);
+    g_uiVolume.store(ClampVolume(volume), std::memory_order_release);
 }
 
 void SetVoicesVolume(float volume) noexcept {
-    g_voicesVolume.store(ClampSoundPlayerVolume(volume), std::memory_order_release);
+    g_voicesVolume.store(ClampVolume(volume), std::memory_order_release);
 }
 
-void TickGuest() noexcept {
-    const bool attenuated = ShouldAttenuate();
-    const uint32_t soundPlayerArray = ResolveSoundPlayerArray();
-    if (soundPlayerArray == 0) {
-        g_soundPlayerArray = 0;
-        g_haveSoundPlayerVolumes.fill(false);
-        return;
+void AdjustMixFader(uint32_t voice, int32_t delta) {
+    // MIXAdjustFader: fader += delta, then flag the channel for MIXUpdateSettings. The engine asks for
+    // delta = wanted - MIXGetFader(voice) every frame, so adding the category offset here gives wanted + offset
+    // (the offset from the frame before cancels out) and a slider change reaches playing sounds on the next frame.
+    int32_t offset = 0;
+    const int record = FindSoundRecord(voice);
+    if (record >= 0) {
+        const SoundCategory category = CategoryForRecord(record);
+        offset = (category == SoundCategory::Music && ShouldAttenuate()) ? kMixSilentOffset
+                                                                         : FaderOffset(CategoryVolume(category));
     }
-
-    if (soundPlayerArray != g_soundPlayerArray) {
-        g_soundPlayerArray = soundPlayerArray;
-        g_haveSoundPlayerVolumes.fill(false);
-    }
-
-    for (size_t playerIndex = 0; playerIndex < kSoundPlayerCount; ++playerIndex) {
-        const uint32_t soundPlayer = soundPlayerArray + static_cast<uint32_t>(playerIndex) * kSoundPlayerStride;
-        float currentVolume = 0.0f;
-        if (!ReadGuestFloat(soundPlayer + kSoundPlayerVolumeOffset, currentVolume)) {
-            continue;
-        }
-
-        // Direct/generated stores can bypass the SetVolume override. When the
-        // observed value is not the value last written by this layer, treat it
-        // as the game's new base volume and multiply it on the way out. This
-        // also preserves the requested BGM volume while it is muted at zero.
-        if (!g_haveSoundPlayerVolumes[playerIndex] ||
-            currentVolume != g_lastAppliedSoundPlayerVolumes[playerIndex]) {
-            g_requestedSoundPlayerVolumes[playerIndex] = ClampSoundPlayerVolume(currentVolume);
-            g_haveSoundPlayerVolumes[playerIndex] = true;
-        }
-
-        const float applied = AppliedSoundPlayerVolume(
-            playerIndex, g_requestedSoundPlayerVolumes[playerIndex], attenuated);
-        if (currentVolume != applied &&
-            WriteGuestFloat(soundPlayer + kSoundPlayerVolumeOffset, applied)) {
-            g_lastAppliedSoundPlayerVolumes[playerIndex] = applied;
-        } else if (currentVolume == applied) {
-            g_lastAppliedSoundPlayerVolumes[playerIndex] = applied;
-        }
-    }
-}
-
-void SetSoundPlayerVolume(uint32_t soundPlayer, float requestedVolume) {
-    const float clamped = ClampSoundPlayerVolume(requestedVolume);
-    float applied = clamped;
-    const uint32_t soundPlayerArray = ResolveSoundPlayerArray();
-    size_t playerIndex = 0;
-    if (FindSoundPlayerIndex(soundPlayer, soundPlayerArray, playerIndex)) {
-        if (soundPlayerArray != g_soundPlayerArray) {
-            g_soundPlayerArray = soundPlayerArray;
-            g_haveSoundPlayerVolumes.fill(false);
-        }
-        g_requestedSoundPlayerVolumes[playerIndex] = clamped;
-        g_haveSoundPlayerVolumes[playerIndex] = true;
-        applied = AppliedSoundPlayerVolume(playerIndex, clamped, ShouldAttenuate());
-        g_lastAppliedSoundPlayerVolumes[playerIndex] = applied;
-    }
-    // Preserve the original function's access semantics. An invalid player is
-    // a guest bug and must not be converted into a silent successful call.
-    Memory::Write32(soundPlayer + kSoundPlayerVolumeOffset, FloatBits(applied));
+    const uint32_t channel = kMixChannels + Memory::Read32(voice + kAxVoiceIndexOffset) * kMixChannelStride;
+    const int32_t fader = static_cast<int32_t>(Memory::Read32(channel + kMixChannelFaderOffset));
+    Memory::Write32(channel + kMixChannelFaderOffset, static_cast<uint32_t>(fader + delta + offset));
+    Memory::Write32(channel + kMixChannelModeOffset,
+                    Memory::Read32(channel + kMixChannelModeOffset) | kMixModeUpdateMix);
 }
 
 } // namespace MusicAttenuation

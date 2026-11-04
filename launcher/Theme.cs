@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
@@ -151,21 +152,22 @@ static class Theme
 sealed class PlankButton : Button
 {
     bool hover, down;
-    public bool Primary { get; init; }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public bool Primary { get; init; }
     bool selected;
-    public bool Selected { get => selected; set { selected = value; Invalidate(); } }  // a tab that is open
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public bool Selected { get => selected; set { selected = value; Invalidate(); } }  // a tab that is open
     readonly int seed;
 
     public PlankButton(string text, EventHandler onClick, bool primary = false)
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
                  ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
-        UseVisualStyleBackColor = false;
-        UseMnemonic = false;
-        SetStyle(ControlStyles.Opaque, false);
         TabStop = true;
         AccessibleRole = AccessibleRole.PushButton;
         BackColor = Color.Transparent;
+        UseVisualStyleBackColor = false;
+        // ButtonBase assumes its own painter fills the rectangle; our plank leaves transparent corners.
+        SetStyle(ControlStyles.Opaque, false);
+        UseMnemonic = false;
         Text = text;
         Primary = primary;
         seed = text.GetHashCode();
@@ -181,6 +183,13 @@ sealed class PlankButton : Button
 
     protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
     protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        using var path = Theme.TextPath(Text, EmPx, new RectangleF(0, 0, 2000, 200));
+        return new Size((int)Math.Ceiling(path.GetBounds().Width) + Theme.S(34), Theme.S(Primary ? 42 : 36));
+    }
+
     protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
     protected override void OnMouseLeave(EventArgs e) { hover = down = false; Invalidate(); base.OnMouseLeave(e); }
     protected override void OnMouseDown(MouseEventArgs e) { down = true; Invalidate(); base.OnMouseDown(e); }
@@ -211,11 +220,8 @@ sealed class PlankButton : Button
         using (var edge = new Pen(Theme.Ink, Theme.S(2)) { LineJoin = LineJoin.Round }) g.DrawPath(edge, plank);
         Color text = !Enabled ? Color.FromArgb(150, 140, 160) : lime ? Theme.Ink : Theme.Cream;
         Theme.Text(g, Text, EmPx, r, text, Theme.Ink, lime || !Enabled ? 0 : Theme.S(3));
-        if (Focused)
-        {
-            using var focus = new Pen(Theme.Gold, Theme.S(2)) { DashStyle = DashStyle.Dash };
-            g.DrawRectangle(focus, 3, 3, Width - 7, Height - 7);
-        }
+        if (Focused && ShowFocusCues)
+            ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(ClientRectangle, -Theme.S(6), -Theme.S(6)), text, bottom);
     }
 }
 
@@ -225,8 +231,9 @@ sealed class ThemedCombo : ComboBox
     public ThemedCombo()
     {
         DropDownStyle = ComboBoxStyle.DropDownList;
+        AutoSize = true;
         DrawMode = DrawMode.OwnerDrawFixed;
-        FlatStyle = FlatStyle.Flat;
+        FlatStyle = FlatStyle.Standard;
         BackColor = Theme.Field;
         ForeColor = Theme.Cream;
         Font = Theme.Body;
@@ -234,6 +241,28 @@ sealed class ThemedCombo : ComboBox
         Width = Theme.S(320);
         Cursor = Cursors.Hand;
         Margin = Theme.S(0, 4, 0, 4);
+    }
+
+    public override Size GetPreferredSize(Size proposedSize)
+    {
+        var size = base.GetPreferredSize(proposedSize);
+        // Owner-drawn item heights can exceed the stock combo's font-based preferred height.
+        size.Height = Math.Max(size.Height, Height);
+        return size;
+    }
+
+    protected override void OnDpiChangedAfterParent(EventArgs e)
+    {
+        base.OnDpiChangedAfterParent(e);
+        ItemHeight = Math.Max(Theme.S(24), Font.Height + Theme.S(6));
+    }
+
+    protected override void OnDropDown(EventArgs e)
+    {
+        int textWidth = Items.Cast<object>().Select(item => TextRenderer.MeasureText(GetItemText(item), Font).Width).DefaultIfEmpty(0).Max();
+        DropDownWidth = Math.Min(Screen.FromControl(this).WorkingArea.Width,
+            Math.Max(Width, textWidth + SystemInformation.GetVerticalScrollBarWidthForDpi(DeviceDpi) + Theme.S(16)));
+        base.OnDropDown(e);
     }
 
     // The wheel over a closed list scrolls the page instead of changing the choice (it used to change a setting, and save
@@ -263,6 +292,7 @@ sealed class ThemedCombo : ComboBox
         r.Inflate(-Theme.S(6), 0);
         TextRenderer.DrawText(e.Graphics, Items[e.Index]?.ToString(), Font, r, Theme.Cream,
                               TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.EndEllipsis);
+        e.DrawFocusRectangle();
     }
 }
 
@@ -270,8 +300,8 @@ sealed class ThemedCombo : ComboBox
 sealed class ThemedBar : Control
 {
     int value, maximum = 100;
-    public int Value { get => value; set { this.value = value; Invalidate(); } }
-    public int Maximum { get => maximum; set { maximum = Math.Max(1, value); Invalidate(); } }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public int Value { get => value; set { this.value = value; Invalidate(); } }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public int Maximum { get => maximum; set { maximum = Math.Max(1, value); Invalidate(); } }
 
     public ThemedBar()
     {
@@ -297,6 +327,20 @@ sealed class Board : Panel
     public readonly Panel Body;
     readonly string title;
     readonly PlankButton close;
+    Size regionSize;
+    int regionDpi;
+
+    // Buffer the native child windows as a unit, not just the board's painted background.
+    protected override CreateParams CreateParams
+    {
+        get { var cp = base.CreateParams; cp.ExStyle |= 0x02000000; return cp; } // WS_EX_COMPOSITED
+    }
+
+    protected override void OnDpiChangedAfterParent(EventArgs e)
+    {
+        base.OnDpiChangedAfterParent(e);
+        PerformLayout();
+    }
 
     public Board(string title, Action onClose)
     {
@@ -306,9 +350,12 @@ sealed class Board : Panel
         BackColor = Theme.BoardBottom;
         Padding = Theme.S(26, 74, 18, 22);
         Visible = false;
-        close = new PlankButton("X", (_, _) => onClose()) { Anchor = AnchorStyles.Top | AnchorStyles.Right };
+        close = new PlankButton("X", (_, _) => onClose())
+        {
+            Anchor = AnchorStyles.Top | AnchorStyles.Right, AccessibleName = "Close " + title,
+        };
         Controls.Add(close);
-        Body = new ScrollBody { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.Transparent };
+        Body = new ScrollBody { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Theme.BoardBottom };
         Controls.Add(Body);
     }
 
@@ -316,7 +363,74 @@ sealed class Board : Panel
     // old pixels and repainting only the new strip, which smeared the rows; repaint the whole page after every scroll.
     sealed class ScrollBody : Panel
     {
+        bool sizing;
         public ScrollBody() => DoubleBuffered = true;
+
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            if (!sizing)
+            {
+                sizing = true;
+                try
+                {
+                    // Reserve the vertical gutter even before the hidden page has a preferred height.
+                    int width = Math.Max(1, Width - Padding.Horizontal - SystemInformation.GetVerticalScrollBarWidthForDpi(DeviceDpi));
+                    foreach (Control child in Controls) Fit(child, width);
+                }
+                finally { sizing = false; }
+            }
+            base.OnLayout(e);
+        }
+
+        static void Fit(Control control, int width)
+        {
+            width = Math.Max(1, width - control.Margin.Horizontal);
+            control.SuspendLayout();
+            try
+            {
+                if (control is FlowLayoutPanel flow)
+                {
+                    if (flow.AutoSize)
+                    {
+                        flow.MaximumSize = new Size(width, 0);
+                        flow.MinimumSize = new Size(width, 0);
+                        flow.Width = width;
+                    }
+                    else flow.Width = Math.Min(Theme.S(480), width);
+                    int contentWidth = (flow.AutoSize ? width : flow.Width) - flow.Padding.Horizontal -
+                        (flow.AutoScroll ? SystemInformation.GetVerticalScrollBarWidthForDpi(flow.DeviceDpi) : 0);
+                    foreach (Control child in flow.Controls) Fit(child, contentWidth);
+                }
+                else if (control is TableLayoutPanel table)
+                {
+                    table.MaximumSize = new Size(width, 0);
+                    table.MinimumSize = new Size(width, 0);
+                    table.Width = width;
+                    if (table.ColumnStyles.Count == 0)
+                    {
+                        table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+                        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                    }
+                    foreach (Control child in table.Controls)
+                    {
+                        int column = table.GetPositionFromControl(child).Column;
+                        if (column < 0) column = table.Controls.GetChildIndex(child) % table.ColumnCount;
+                        int columnWidth = (int)(width * (column == 0 ? 0.35f : 0.65f));
+                        if (child is ComboBox) child.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+                        else Fit(child, columnWidth);
+                    }
+                }
+                else if (control is Label or CheckBox)
+                    control.MaximumSize = new Size(width, 0);
+                else if (control is PlankButton button)
+                {
+                    var preferred = button.GetPreferredSize(Size.Empty);
+                    button.Size = new Size(Math.Min(preferred.Width, width), preferred.Height);
+                }
+                else control.Width = Math.Min(control.Width, width);
+            }
+            finally { control.ResumeLayout(true); }
+        }
 
         protected override void OnScroll(ScrollEventArgs se) { base.OnScroll(se); Repaint(); }
         protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Repaint(); }
@@ -333,8 +447,15 @@ sealed class Board : Panel
         base.OnLayout(e);
         if (close == null) return;  // layout runs from the constructor, before the close plank exists
         close.Location = new Point(Width - close.Width - Theme.S(16), Theme.S(16));
-        using var shape = Theme.Rounded(new RectangleF(0, 0, Width, Height), Theme.S(16));
-        Region = new Region(shape);
+        if ((regionSize != Size || regionDpi != DeviceDpi) && Width > 0 && Height > 0)
+        {
+            regionSize = Size;
+            regionDpi = DeviceDpi;
+            using var shape = Theme.Rounded(new RectangleF(0, 0, Width, Height), Theme.S(16));
+            var old = Region;
+            Region = new Region(shape);
+            old?.Dispose();
+        }
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)

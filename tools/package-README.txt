@@ -1,16 +1,16 @@
 FRIGHTWORKS: NIGHT OF 100 FRIGHTS - a PC port of Scooby-Doo! Night of 100 Frights by Loneranger419,
 based on Scooby-Doo: Refrightened by JosiahG.
 
-Version 1.1.0. Version numbers continue from Refrightened: its last release, 1.0.2, is where FrightWorks split off.
+Version 1.1.1. Version numbers continue from Refrightened: its last release, 1.0.2, is where FrightWorks split off.
 
 Needs your own GameCube disc image: USA v1.01 (GIHE78, revision 1), .iso/.gcm/.ciso. No game data is included.
 
 1. Open "FrightWorks.exe".
 2. Press Play. The first time, it asks for your disc image (Extras).
 
-Settings: resolution, widescreen, 60 fps, anti-aliasing, HD textures, skip intro. Extras: disc, holidays,
-developer tools (F8 dev menu, F3 video recording: the launcher offers to download ffmpeg for it, a DEV mark
-with the build in the corner), folders (and where the saves go), updates.
+Settings: resolution, widescreen, 60 fps, anti-aliasing, HD textures, skip intro, frame interpolation
+(experimental). Extras: disc, holidays, developer tools (F8 dev menu, F3 video recording: the launcher offers to
+download ffmpeg for it, a DEV mark with the build in the corner), folders (and where the saves go), updates.
 In game: F10 = settings, F11 = fullscreen / window, F2 = screenshot (saved in the Screenshots folder beside the launcher),
 F1 = project page in your browser (the title screen lists these keys). Gamepads work right away.
 Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, IJKL D-pad.

@@ -1088,6 +1088,13 @@ static void load_pipeline_cache_entries(ShaderType type, uint32_t configVersion,
     if (config.version != configVersion) {
       continue;
     }
+    // A pipeline is built for one sample count, and this run draws with 1 (copies) or the configured MSAA. Pipelines
+    // cached under another MSAA setting are left in the database for when it comes back: creating them now fails
+    // on backends that don't support that count (Vulkan rejects 8x), which ended the game at start after switching
+    // anti-aliasing down.
+    if (config.msaaSamples != 1 && config.msaaSamples != webgpu::g_graphicsConfig.msaaSamples) {
+      continue;
+    }
     if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
       if (!gx::valid_pipeline_config(config)) {
         Log.warn("Skipping invalid cached GX pipeline configuration");

@@ -43,6 +43,7 @@ struct RuntimeUserConfig {
     std::optional<float> resolutionMultiplier;
     std::optional<std::string> graphicsApi;
     std::optional<std::string> displayMode;
+    std::optional<std::string> fullscreenDisplay;  // "auto" or an AuroraMonitor id
     std::optional<uint32_t> frameInterpolationFps;
     std::optional<bool> metalFxSpatialUpscaling;
     std::optional<bool> skipUnreadyPipelines;
@@ -555,6 +556,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
         value && IsSupportedDisplayMode(*value)) {
         config.displayMode = *value;
     }
+    config.fullscreenDisplay = FindConfigValue<std::string>(document, "video", "fullscreen_display");
     if (auto value = FindConfigUint(document, "video", "frame_interpolation_fps")) {
         const uint32_t migrated = *value == 240u ? 180u : *value;
         if (IsSupportedFrameInterpolationFps(migrated)) {
@@ -809,6 +811,11 @@ inline bool SetDisplayMode(std::string value) {
     }
     Mutable().displayMode = value;
     return WriteSetting("video", "display_mode", FormatString(value));
+}
+
+inline bool SetFullscreenDisplay(std::string value) {
+    Mutable().fullscreenDisplay = value;
+    return WriteSetting("video", "fullscreen_display", FormatString(value));
 }
 
 inline bool SetSkipUnreadyPipelines(bool value) {
@@ -1237,6 +1244,10 @@ inline std::string GraphicsApi(std::string fallback = "auto") {
 
 inline std::string DisplayMode(std::string fallback = "borderless") {
     return Get().displayMode.value_or(std::move(fallback));
+}
+
+inline std::string FullscreenDisplay(std::string fallback = "auto") {
+    return Get().fullscreenDisplay.value_or(std::move(fallback));
 }
 
 inline bool NetworkEnabled(bool fallback = true) {

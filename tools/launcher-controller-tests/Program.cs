@@ -26,7 +26,7 @@ static class Tests
             Directory.CreateDirectory(Path.Combine(fixture, "data", "UserData", "mods", "zz-mod-" + i.ToString("D2")));
         File.WriteAllText(Path.Combine(fixture, "data", "portable.txt"), "");
         var paths = new DataPaths(fixture, Path.Combine(fixture, "data"));
-        File.WriteAllText(paths.ConfigPath, "[video]\nhdr_peak_nits = 1234.5\n[controller]\nlayout = \"gamecube\"\n[future]\nvalue = \"keep\"\n");
+        File.WriteAllText(paths.ConfigPath, "[video]\nhdr_peak_nits = 1234.5\nresolution_multiplier = 8.0\nfullscreen_display = \"NOPE0000/gone\"\n[controller]\nlayout = \"gamecube\"\n[future]\nvalue = \"keep\"\n");
         try
         {
             Input();
@@ -126,6 +126,13 @@ static class Tests
 
     static T Find<T>(Control root, string text) where T : Control => All(root).OfType<T>().Single(c => c.Text == text && c.Visible);
 
+    static ComboBox Field(Control root, string label)
+    {
+        var name = Find<Label>(root, label);
+        var table = (TableLayoutPanel)name.Parent!;
+        return (ComboBox)table.GetControlFromPosition(1, table.GetPositionFromControl(name).Row)!;
+    }
+
     static void Press(Form form, B action) { ControllerNavigation.Dispatch(form, action); Application.DoEvents(); }
     static void Click(Form form, Control control) { ControllerNavigation.Focus(control); Press(form, B.Confirm); }
 
@@ -175,6 +182,28 @@ static class Tests
             Press(dialog, B.Confirm);
         });
         Check(combo.SelectedIndex == Math.Min(original + 1, combo.Items.Count - 1), "Confirm applies dropdown choice");
+        var resolution = Field(form, "Resolution");
+        var interpolation = Field(form, "Frame interpolation");
+        var monitor = Field(form, "Fullscreen monitor");
+        Check(resolution.SelectedItem?.ToString() == "8x (3840p)", "Numeric resolution matching from current main is preserved");
+        Check(monitor.SelectedItem?.ToString() == "Saved monitor (not connected)", "Disconnected monitor remains selected");
+        ControllerNavigation.Focus(interpolation);
+        WithModal(() => Press(form, B.Confirm), dialog =>
+        {
+            Press(dialog, B.Down);
+            Press(dialog, B.Back);
+        });
+        Check(new GameConfig(paths.ConfigPath).Get("video", "frame_interpolation_fps") == null, "Cancelling interpolation makes no config change");
+        WithModal(() => Press(form, B.Confirm), dialog =>
+        {
+            Press(dialog, B.Down);
+            Press(dialog, B.Confirm);
+        });
+        Check(new GameConfig(paths.ConfigPath).Get("video", "frame_interpolation_fps") == "120", "Controller applies interpolation through existing setting handler");
+        Check(new GameConfig(paths.ConfigPath).Get("video", "resolution_multiplier") == "4", "Current-main interpolation resolution cap is preserved");
+        Check(resolution.SelectedItem?.ToString() == "4x (1920p)" &&
+            !resolution.Items.Cast<object>().Any(o => o.ToString() == "8x (3840p)"), "Resolution choices refresh after interpolation change");
+        Check(new GameConfig(paths.ConfigPath).Get("video", "fullscreen_display") == "NOPE0000/gone", "Changing another field retains saved monitor id");
         Click(form, Find<PlankButton>(form, "Controls"));
         Check(ControllerNavigation.Targets(form).OfType<ComboBox>().Any(), "Controls mapping fields reachable");
         var targets = ControllerNavigation.Targets(form).ToArray();
@@ -210,6 +239,12 @@ static class Tests
         Check(config.Get("future", "value") == "keep", "Unknown setting preserved");
         Check(config.Get("video", "hdr_peak_nits") == "1234.5", "Custom HDR value preserved");
         Check(config.Get("controller", "layout") == "gamecube", "Game mapping unchanged by launcher navigation");
+        var savedScroll = board.Body.AutoScrollPosition;
+        Press(form, B.Back);
+        Press(form, B.Confirm);
+        Check(board.Body.AutoScrollPosition == savedScroll, "Reopening Extras preserves scroll position");
+        Check(ControllerNavigation.Focused(form) is Control focus && ControllerNavigation.InViewport(focus, fully: true),
+            "Reopened board focuses a fully visible control without jumping to top");
         Press(form, B.Back);
     }
 

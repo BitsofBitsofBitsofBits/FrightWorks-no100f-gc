@@ -44,7 +44,7 @@ are left unchanged.
 Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** as `.iso`,
 `.gcm` or `.ciso`.
 
-1. From the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest), run
+1. From the [latest release](https://github.com/FrightWorks/FrightWorks-no100f/releases/latest), run
    `FrightWorks-win-Setup.exe` (installs for your Windows user, no admin rights; Start menu and desktop shortcuts), or
    unzip `FrightWorks-<version>.zip` anywhere if you'd rather keep everything in one folder.
 2. Open **FrightWorks** and press **Play**. The first time, it asks for your disc image (**Extras**).
@@ -70,7 +70,8 @@ program only; your saves and settings stay.
 Settings are in the launcher (**Settings**) and in game (**F10**, or the controller's **Back** / **Select** button, as
 long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
 screenshot and **F1** opens this page in your browser. The title screen and main menu list
-these keys in the corner.
+these keys in the corner. With more than one monitor, **Settings** > **Display** > **Fullscreen monitor** (or **F10** >
+Video) picks the one fullscreen uses.
 
 The launcher itself also works with a controller, including Settings, Mods, Extras, prompts and file/folder
 browsing. D-pad / left stick moves focus, South (A / Cross / Nintendo B) confirms, East backs out, bumpers
@@ -116,7 +117,7 @@ notes. If you're interested, email [therider@unmarkedrider.com](mailto:therider@
 
 ## Building
 
-Windows 10/11 x64 with Python 3 and Git. The build downloads its own toolchain into the repo.
+Windows 10/11 x64 with Python 3.8 or newer and Git. The build downloads its own toolchain into the repo.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1

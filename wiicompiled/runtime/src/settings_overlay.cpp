@@ -28,6 +28,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include "wii_remote_input.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_keyboard.h>
@@ -100,7 +101,7 @@ bool g_topBarVisible = false;
 bool g_exitPromptOpen = false;
 bool g_rumbleEnabled = RuntimeConfigFile::RumbleEnabled(true);
 int g_controllerPort = 0;
-float g_resolutionScale = RuntimeConfigFile::ResolutionMultiplier(1.0f);
+float g_resolutionScale = RuntimeConfigFile::ResolutionMultiplier(2.25f);  // main.cpp's default (1080p)
 int g_audioVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::AudioVolume(1.0f) * 100.0f));
 int g_musicVolumePercent = static_cast<int>(std::lround(RuntimeConfigFile::MusicVolume(1.0f) * 100.0f));
 int g_soundEffectsVolumePercent =
@@ -131,6 +132,7 @@ int g_displayMode = [] {
     }
     return static_cast<int>(AURORA_DISPLAY_MODE_WINDOWED);
 }();
+std::string g_fullscreenMonitor = RuntimeConfigFile::FullscreenDisplay();
 bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(false);  // off unless turned on
@@ -289,6 +291,14 @@ std::string NativeBindingConfig(uint32_t binding) {
 // The settings board fades in and takes keyboard/gamepad focus when it opens.
 Clock::time_point g_panelOpenedAt{};
 bool g_panelFocusPending = false;
+bool g_panelOpenedByPad = false;
+// With a controller the board has two levels: the page tabs and the page itself (the ##page child window). A goes in,
+// B comes back (ImGui's own way out of a child window), LB / RB change the page on either level.
+bool g_tabFocusPending = false;   // focus the current page's tab
+bool g_pageFocusPending = false;  // focus the page: its first control, or the last one used if the page hasn't changed
+bool g_pageKeepsFocus = false;
+// The controller button that closed the board is still down: the game mustn't take it for a press (A on Resume = jump).
+bool g_gameInputHeldBack = false;
 
 void SetTopBarVisible(bool visible) {
     if (g_topBarVisible == visible) {
@@ -298,7 +308,18 @@ void SetTopBarVisible(bool visible) {
     if (visible) {
         g_panelOpenedAt = Clock::now();
         g_panelFocusPending = true;
+    } else {
+        g_gameInputHeldBack = true;
     }
+}
+
+// The buttons only (a resting finger on a trigger or a drifting stick doesn't count).
+bool PadButtonDown() {
+    if ((ImGui::GetIO().BackendFlags & ImGuiBackendFlags_HasGamepad) == 0) return false;
+    for (int key = ImGuiKey_GamepadFaceLeft; key <= ImGuiKey_GamepadR1; ++key) {
+        if (ImGui::GetKeyData(static_cast<ImGuiKey>(key))->Down) return true;
+    }
+    return false;
 }
 
 void ApplyConfiguredMappings() {
@@ -543,6 +564,11 @@ void BeginRebind(RebindKind kind, uint16_t target, const char* label, bool secon
 void CompleteRebind(uint32_t value) {
     const auto& capture = g_rebind;
     if (capture.kind == RebindKind::Controller) {
+        // The captured press belongs to the binding: ImGui can see it a frame later, when the prompt has gone.
+        for (int key = ImGuiKey_Gamepad_BEGIN; key < ImGuiKey_Gamepad_END; ++key) {
+            ImGui::SetKeyOwner(static_cast<ImGuiKey>(key), ImGuiKeyOwner_Any, ImGuiInputFlags_LockUntilRelease);
+        }
+        ImGui::SetNavCursorVisible(true);  // the prompt took no navigation, which hid it
         const int index = PADGetIndexForPort(capture.port);
         auto* pad = index >= 0 ? PADGetSDLGamepadForIndex(index) : nullptr;
         if (pad == nullptr || SDL_GetGamepadID(pad) != capture.instance) {
@@ -582,7 +608,9 @@ void DrawRebindPrompt() {
         ImGui::OpenPopup("Rebind input");
         g_rebind.openPopup = false;
     }
-    if (!ImGui::BeginPopupModal("Rebind input", &g_rebind.active, ImGuiWindowFlags_AlwaysAutoResize)) {
+    // A controller's every button is a binding here, A and B too: no navigation (the buttons below are for the mouse).
+    const ImGuiWindowFlags navFlags = g_rebind.kind == RebindKind::Controller ? ImGuiWindowFlags_NoNav : 0;
+    if (!ImGui::BeginPopupModal("Rebind input", &g_rebind.active, ImGuiWindowFlags_AlwaysAutoResize | navFlags)) {
         g_rebind.active = false;
         return;
     }
@@ -600,6 +628,11 @@ void DrawRebindPrompt() {
         const bool clear = ImGui::Button("Clear mapping");
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) g_rebind.active = false;
+        ImGui::SetItemDefaultFocus();
+        const ImGuiContext& g = *ImGui::GetCurrentContext();
+        if (g_rebind.kind != RebindKind::Controller && ImGui::IsKeyPressed(ImGuiKey_NavGamepadCancel, false)) {
+            g_rebind.active = false;
+        }
         // UI clicks must not become mouse bindings (buttons activate on release).
         const bool overControl = ImGui::IsAnyItemHovered();
         if (g_rebind.active && (clear || remaining <= 0.0f)) {
@@ -641,7 +674,8 @@ void DrawRebindPrompt() {
 
 void DrawKeyBinding(const char* label, int scancode, RebindKind kind, uint16_t target,
                     float width = OverlayTheme::Px(220.0f)) {
-    const std::string caption = std::string(KeyBindingName(scancode)) + "##binding";
+    // ### : the same control after a rebind changes its caption, or a controller's focus would be lost.
+    const std::string caption = std::string(KeyBindingName(scancode)) + "###binding";
     if (ImGui::Button(caption.c_str(), ImVec2(width, 0.0f))) BeginRebind(kind, target, label);
     ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
     ImGui::TextUnformatted(label);
@@ -1035,7 +1069,7 @@ void DrawGamepadSettings(uint32_t selectedGamePort) {
         };
         ImGui::BeginGroup();
         ImGui::SetNextItemWidth(bindingWidth);
-        const std::string primaryCaption = std::string(current.label) + "##primary";
+        const std::string primaryCaption = std::string(current.label) + "###primary";
         if (ImGui::Button(primaryCaption.c_str(), ImVec2(bindingWidth, 0.0f))) {
             BeginRebind(RebindKind::Controller, kControllerButtons[i].padButton, kControllerButtons[i].label);
         }
@@ -1059,7 +1093,7 @@ void DrawGamepadSettings(uint32_t selectedGamePort) {
                 ImGui::BeginGroup();
                 const char* altLabel = altBound ? NativeButtonForValue(altIt->nativeButton).label : "None";
                 ImGui::SetNextItemWidth(bindingWidth);
-                const std::string altCaption = std::string(altLabel) + "##alt";
+                const std::string altCaption = std::string(altLabel) + "###alt";
                 if (ImGui::Button(altCaption.c_str(), ImVec2(bindingWidth, 0.0f))) {
                     BeginRebind(RebindKind::Controller, kControllerButtons[i].padButton, kControllerButtons[i].label, true);
                 }
@@ -1269,6 +1303,58 @@ void DrawVideoSettings() {
         Hint("Requests the closest native-resolution display mode to the output frame rate (60 Hz, or the frame "
              "interpolation target).");
     }
+#if defined(_WIN32)
+    // Same row as the launcher's Settings > Display. The list is read when F10 first draws it and each time it opens.
+    static std::vector<AuroraMonitor> monitors;
+    static bool monitorsRead = false;
+    const auto readMonitors = [] {
+        std::array<AuroraMonitor, 16> found{};
+        const uint32_t count = aurora_get_monitors(found.data(), static_cast<uint32_t>(found.size()));
+        monitors.assign(found.begin(), found.begin() + count);
+        monitorsRead = true;
+    };
+    if (!monitorsRead) {
+        readMonitors();
+    }
+    static constexpr const char* kAutomaticMonitor = "Automatic (where the game window is)";
+    const bool automaticMonitor = g_fullscreenMonitor.empty() || g_fullscreenMonitor == "auto";
+    const char* monitorPreview = automaticMonitor ? kAutomaticMonitor : "Saved monitor (not connected)";
+    for (const AuroraMonitor& monitor : monitors) {
+        if (monitor.selected) {
+            monitorPreview = monitor.label;
+        }
+    }
+    std::string pickedMonitor;
+    RowLabel("Fullscreen monitor", labelWidth, controlWidth);
+    if (ImGui::BeginCombo("##fullscreenmonitor", monitorPreview)) {
+        if (ImGui::IsWindowAppearing()) {
+            readMonitors();
+        }
+        if (ImGui::Selectable(kAutomaticMonitor, automaticMonitor)) {
+            pickedMonitor = "auto";
+        }
+        for (const AuroraMonitor& monitor : monitors) {
+            ImGui::PushID(monitor.id);
+            if (ImGui::Selectable(monitor.label, monitor.selected)) {
+                pickedMonitor = monitor.id;
+            }
+            if (monitor.selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if (!pickedMonitor.empty()) {
+        g_fullscreenMonitor = pickedMonitor;
+        aurora_set_fullscreen_monitor(g_fullscreenMonitor.c_str());
+        RuntimeConfigFile::SetFullscreenDisplay(g_fullscreenMonitor);
+        readMonitors();
+    }
+    if (g_displayMode == AURORA_DISPLAY_MODE_WINDOWED) {
+        Hint("Used when the game goes fullscreen (F11 or Display mode).");
+    }
+#endif
 
     SectionTitle("Smoothness");
     constexpr std::array<const char*, 3> kFrameInterpolationModes{
@@ -1746,13 +1832,16 @@ void DrawExitPrompt() {
     if (Plank("QUIT##confirm", true, ImVec2(Px(140), Px(42)))) aurora::window_owner::request_close();
     ImGui::SameLine(0.0f, Px(10));
     if (Plank("CANCEL##cancel", false, ImVec2(Px(140), Px(42)))) g_exitPromptOpen = false;
+    ImGui::SetItemDefaultFocus();
+    const ImGuiContext& g = *ImGui::GetCurrentContext();
+    if (ImGui::IsKeyPressed(ImGuiKey_NavGamepadCancel, false)) g_exitPromptOpen = false;
     if (!g_exitPromptOpen) ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
 }
 
 // F1 opens the project page. F2 saves the next game frame (without the overlay) as a PNG in
 // RuntimeConfigFile::CaptureDirectory: Pictures\FrightWorks when installed, else Screenshots\ beside the launcher.
-constexpr const char* kProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+constexpr const char* kProjectUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
 std::string g_noticeText;
 Clock::time_point g_noticeUntil{};
 std::filesystem::path g_lastScreenshot;
@@ -1829,8 +1918,8 @@ void CopyScreenshotToClipboard(std::filesystem::path file, void* owner) {
 #endif
 }
 
-// The settings board (F10): pages on the left as planks, the page's settings on the right, Resume / Quit at the top
-// and the keys + build ID at the bottom. LB / RB change the page with a controller.
+// The settings board (F10): on the left a column of Resume, the pages as planks and Quit Game, the page's settings on
+// the right, and the keys + build ID at the bottom. With a controller: A opens a page, B goes back, LB / RB change the page.
 enum class Page { Video, Audio, Controls, LanPlay, About };
 struct PageItem {
     Page page;
@@ -1865,7 +1954,7 @@ void DrawAboutPage() {
         ImGui::TextColored(Vec(Colour::Lime), "Developer tools are on: F8 opens the dev menu, F3 records a video.");
     }
     SectionTitle("Keys");
-    const std::array<std::pair<const char*, const char*>, 7> keys = {{
+    const std::array<std::pair<const char*, const char*>, 8> keys = {{
         {"F10 / Esc / Back", "Settings (this board) / back to the game (Back = the controller's Back / Select)"},
         {"F11", "Fullscreen or window"},
         {"F2", RuntimeConfigFile::PortableRootDirectory() ? "Screenshot (Screenshots folder beside the launcher)"
@@ -1873,6 +1962,7 @@ void DrawAboutPage() {
         {"F1", "Project page in your browser"},
         {"F8", "Dev menu (with developer tools on in the launcher)"},
         {"F3", "Start / stop a video (with developer tools on; Videos folder, needs ffmpeg)"},
+        {"A / B", "With a controller: A opens a page, B goes back to the page list, then back to the game"},
         {"LB / RB", "Change the page here with a controller"},
     }};
     if (ImGui::BeginTable("##keys", 2, ImGuiTableFlags_SizingFixedFit)) {
@@ -1930,6 +2020,7 @@ void DrawTopBar() {
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     if (g_panelFocusPending) {
         ImGui::SetNextWindowFocus();
+        ImGui::SetNavCursorVisible(g_panelOpenedByPad);
         g_panelFocusPending = false;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, fade);
@@ -1941,12 +2032,30 @@ void DrawTopBar() {
     const bool open = ImGui::Begin("FrightWorks settings", nullptr, kFlags);
     ImGui::PopStyleVar(2);
     if (open) {
+        ImGuiContext& g = *ImGui::GetCurrentContext();
+        const bool onTabs = ImGui::IsWindowFocused();
+        // Opened by key or mouse the cursor is hidden and A does nothing: this press brings it up.
+        if (ImGui::IsKeyPressed(ImGuiKey_NavGamepadActivate, false)) ImGui::SetNavCursorVisible(true);
+        // ImGui's left stick only scrolls, and there's nothing to scroll on this level.
+        if (onTabs && !ImGui::IsAnyItemActive()) {
+            constexpr ImGuiInputFlags kRepeat = ImGuiInputFlags_Repeat | ImGuiInputFlags_RepeatRateNavMove;
+            constexpr std::array<std::pair<ImGuiKey, ImGuiDir>, 4> kStick = {{
+                {ImGuiKey_GamepadLStickUp, ImGuiDir_Up}, {ImGuiKey_GamepadLStickDown, ImGuiDir_Down},
+                {ImGuiKey_GamepadLStickLeft, ImGuiDir_Left}, {ImGuiKey_GamepadLStickRight, ImGuiDir_Right},
+            }};
+            for (const auto& [key, dir] : kStick) {
+                if (ImGui::IsKeyPressed(key, kRepeat)) {
+                    ImGui::NavMoveRequestSubmit(dir, dir, ImGuiNavMoveFlags_None, ImGuiScrollFlags_None);
+                    break;
+                }
+            }
+        }
         ImDrawList* list = ImGui::GetWindowDrawList();
         const ImVec2 p0 = ImGui::GetWindowPos();
         const ImVec2 p1(p0.x + ImGui::GetWindowWidth(), p0.y + ImGui::GetWindowHeight());
         Board(list, p0, p1, Px(16));
 
-        // Header: the title sign on the left, Resume / Quit on the right.
+        // Header: the title sign.
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         ImFont* title = Title();
         OutlinedText(list, title, origin, Col(Colour::Lime), Col(Colour::Ink), Px(3), "FRIGHTWORKS");
@@ -1955,45 +2064,85 @@ void DrawTopBar() {
         OutlinedText(list, heading,
                      ImVec2(origin.x + titleWidth + Px(16), origin.y + title->FontSize - heading->FontSize - Px(2)),
                      Col(Colour::Cream), Col(Colour::Ink), Px(2), "SETTINGS");
-        const ImVec2 plank(Px(150), Px(42));
         const float right = ImGui::GetWindowContentRegionMax().x;
-        ImGui::SetCursorPos(ImVec2(right - plank.x * 2 - Px(10), ImGui::GetCursorPosY()));
-        if (Plank("RESUME##resume", true, plank)) {
-            SetTopBarVisible(false);
-        }
-        ImGui::SameLine(0.0f, Px(10));
-        if (Plank("QUIT GAME##quit", false, plank)) {
-            g_exitPromptOpen = true;
-        }
         ImGui::SetCursorScreenPos(ImVec2(origin.x, std::max(origin.y + title->FontSize, ImGui::GetCursorScreenPos().y) + Px(14)));
 
         // Pages + content.
         const float footer = ImGui::GetFontSize() + Px(18);
         const float bodyHeight = ImGui::GetContentRegionAvail().y - footer;
         const float tabsWidth = Px(176);
-        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+        // Not while editing a slider: there they are ImGui's slow / fast.
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+            !ImGui::IsAnyItemActive()) {
             const int count = static_cast<int>(kPages.size());
             int index = static_cast<int>(g_page);
-            if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) g_page = kPages[(index + count - 1) % count].page;
-            if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) g_page = kPages[(index + 1) % count].page;
+            const bool previous = ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false);
+            const bool next = ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false);
+            if (previous) g_page = kPages[(index + count - 1) % count].page;
+            if (next) g_page = kPages[(index + 1) % count].page;
+            if (previous || next) {
+                (onTabs ? g_tabFocusPending : g_pageFocusPending) = true;
+                ImGui::SetNavCursorVisible(true);
+            }
         }
+        // Focus on the page panel itself = B coming out of the page: it goes to the page's tab.
+        const bool leftPage = g.NavId == ImGui::GetID("##page");
+        if (leftPage) g_tabFocusPending = true;
+        if (onTabs && !leftPage && ImGui::IsKeyPressed(ImGuiKey_NavGamepadCancel, false)) SetTopBarVisible(false);
+        // The column shrinks with the board, so all of it fits the smallest window.
+        const ImVec2 spacing = ImGui::GetStyle().ItemSpacing;
+        const float actionGap = Px(8);  // on top of the spacing: sets Resume and Quit Game apart from the pages
+        const float rows = static_cast<float>(kPages.size());
+        const float fit = std::min(1.0f, bodyHeight / (rows * Px(46) + 2 * Px(36) + (rows + 1) * spacing.y + 2 * actionGap));
+        const ImVec2 actionSize(tabsWidth, Px(36) * fit);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing.x, spacing.y * fit));
         ImGui::BeginGroup();
+        if (ActionPlank("RESUME##resume", Colour::Good, actionSize)) SetTopBarVisible(false);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + actionGap * fit);
         for (const auto& item : kPages) {
             std::string label = item.label;
             std::transform(label.begin(), label.end(), label.begin(), [](unsigned char c) { return std::toupper(c); });
-            if (Plank(label.c_str(), g_page == item.page, ImVec2(tabsWidth, Px(46)))) g_page = item.page;
+            if (Plank(label.c_str(), g_page == item.page, ImVec2(tabsWidth, Px(46) * fit))) {
+                g_page = item.page;
+                if (g.NavActivatePressedId == ImGui::GetItemID()) g_pageFocusPending = true;
+            }
+            // Moving between tabs shows each page; only A gets to its settings.
+            if (g.NavJustMovedToId == ImGui::GetItemID() && !g.NavJustMovedToIsTabbing) g_page = item.page;
+            if (g_page == item.page) {
+                ImGui::SetItemDefaultFocus();
+                if (g_tabFocusPending) {
+                    ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+                    ImGui::SetNavCursorVisible(true);
+                    g_tabFocusPending = false;
+                }
+            }
         }
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + actionGap * fit);
+        if (ActionPlank("QUIT GAME##quit", Colour::Warn, actionSize)) g_exitPromptOpen = true;
         ImGui::EndGroup();
+        ImGui::PopStyleVar();
         ImGui::SameLine(0.0f, Px(18));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, Vec(Colour::Field, 0.72f));
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, Px(12));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(Px(18), Px(14)));
-        if (ImGui::BeginChild("##page", ImVec2(0.0f, bodyHeight),
-                              ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened)) {
+        if (ImGui::BeginChild("##page", ImVec2(0.0f, bodyHeight), ImGuiChildFlags_AlwaysUseWindowPadding)) {
+            static Page drawnPage = g_page;
+            if (drawnPage != g_page) {
+                drawnPage = g_page;
+                g_pageKeepsFocus = false;
+                if (g.NavCursorVisible) ImGui::SetScrollY(0.0f);  // a controller starts at the top, the mouse keeps its place
+            }
+            if (g_pageFocusPending) {
+                ImGui::FocusWindow(ImGui::GetCurrentWindow());
+                ImGui::NavInitWindow(ImGui::GetCurrentWindow(), !g_pageKeepsFocus);
+                g_pageKeepsFocus = true;
+                g_pageFocusPending = false;
+            }
             ImGui::PushID(static_cast<int>(g_page));
             DrawPage(g_page);
             ImGui::PopID();
         }
+        g.NextItemData.ItemFlags |= ImGuiItemFlags_NoNav;  // the panel itself is no stop for the D-pad: only A goes in
         ImGui::EndChild();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
@@ -2002,12 +2151,17 @@ void DrawTopBar() {
         ImGui::PushFont(Small());
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + Px(6));
         const float footerY = ImGui::GetCursorPosY();
-        const std::array<std::pair<const char*, const char*>, 5> footerKeys = {{
+        const size_t firstKey = (ImGui::GetIO().BackendFlags & ImGuiBackendFlags_HasGamepad) != 0 ? 0 : 1;
+        const std::array<std::pair<const char*, const char*>, 6> footerKeys = {{
+            {onTabs ? "A / B" : "B", onTabs ? "open / close" : "back to pages"},
             {"Esc / F10 / Back", "back to the game"}, {"LB / RB", "page"}, {"F2", "screenshot"}, {"F11", "fullscreen"},
             {"F1", "project page"},
         }};
-        for (size_t i = 0; i < footerKeys.size(); ++i) {
-            if (i > 0) ImGui::SameLine(0.0f, Px(16));
+        for (size_t i = firstKey; i < footerKeys.size(); ++i) {
+            // A small window leaves out the last ones: the About page lists them all.
+            const float keyWidth = ImGui::CalcTextSize(footerKeys[i].first).x + Px(5) + ImGui::CalcTextSize(footerKeys[i].second).x;
+            if (i > firstKey && ImGui::GetItemRectMax().x + Px(16) + keyWidth > p0.x + right) break;
+            if (i > firstKey) ImGui::SameLine(0.0f, Px(16));
             ImGui::TextColored(Vec(Colour::Lime), "%s", footerKeys[i].first);
             ImGui::SameLine(0.0f, Px(5));
             ImGui::TextDisabled("%s", footerKeys[i].second);
@@ -2185,7 +2339,8 @@ void PersistDisplayModeIfChanged() {
 }
 
 void ApplyInputBlockState() {
-    const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
+    g_gameInputHeldBack = g_gameInputHeldBack && PadButtonDown();
+    const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active || g_gameInputHeldBack ||
                          g_exitPromptOpen || g_topBarVisible || StartupScreenVisible() || no100f_devmenu::BlocksInput();
     PADBlockInput(blocked);
     InputBindings::SetInputBlocked(blocked);
@@ -2213,6 +2368,7 @@ void InitializeRuntimeSettings() noexcept {
     aurora_set_frame_interpolation_fps(targetFps);
     AuroraSetTexturePatches(RuntimeConfigFile::SpinningCoins(true));
     aurora_set_vsync(g_vsync.load());
+    aurora_set_fullscreen_monitor(g_fullscreenMonitor.c_str());
     aurora_set_display_mode(static_cast<AuroraDisplayMode>(g_displayMode));
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);
@@ -2287,6 +2443,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
                                 ev->sdl.gbutton.button == SDL_GAMEPAD_BUTTON_BACK && !controller_mapping_wizard::IsActive() &&
                                 !BackButtonBound();
         if (!g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_F10) || backButton)) {
+            g_panelOpenedByPad = backButton;
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();
         }

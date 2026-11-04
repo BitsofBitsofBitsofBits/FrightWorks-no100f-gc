@@ -77,13 +77,33 @@ launcher downloads it when dev tools get turned on). Handy for the human to reco
 (another scene loads first; one transfer at a time, queued until in play with no cutscene, Cancel travel, 60 s
 timeout; travel turns the free camera off), Skip button (presses the game's own A in a recorded cutscene, Start on the
 title intro / attract demo, for up to 10 s), god mode (no damage, green Scooby), Levels tab, Monsters tab (all off in every level, or one
-by one in this scene), Power-ups tab (unlock/lock all or one by one). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
+by one in this scene), Player tab (health/snacks and power-ups: unlock/lock all or one by one). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
 `Play/devmenu.txt` (every 30 frames, then deleted; results in `Play/devmenu.log`; the file is left alone until in play with
-no scene/spot transfer pending, unless all its lines are `skip` or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
+no scene/spot transfer pending, except diagnostic-only files below, `skip`, or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
 `save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `powerups [all|none|HEX]`, `powerup NAME on|off` (sd2.ini name without `eSPECIAL_`), `monsters [on|off]` (list / all),
-`monster N|NAME on|off`, `ents` (scene entity list), `textures`. Doesn't touch warp flags or the save file.
+`monster N|NAME on|off`, `ents` (scene entity list), `textures`. These commands don't edit warp flags or save files.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `cutscene` (`cutscene yes|no control yes|no`).
+
+**Player tab:** `player`, `health 1..5`, `snacks 0..99999` read/change live stats. Balance edits are separate from
+collection progression; 99999 is a conservative tool limit, not the game's cap. No kill/resurrection; pending
+snack-gate payments reject edits. Advanced `snackareas` lists named areas/counts/live targets; `snackarea INDEX COUNT`
+stages one area-counter edit, `snackconfirm` applies it once, `snackcancel` cancels. Scene/availability/count/target
+changes invalidate confirmation. This can affect natural picture-gallery access and later normal saves, but does
+not collect/remove/respawn snacks, alter spendable balance or reconcile scene-local pickup counts. No save/load
+invocation. The old Power-ups controls remain inside Player, with unchanged Map-first order/keys and commands.
+
+**Warps / Gallery / Diagnostics / Resources tabs:** `warps` lists the 26 discovery entries;
+`warp E004 on|off` changes one live discovery flag (approach can unlock it again; normal saves can retain it).
+Map, gadgets and room discovery remain separate. `gallery` reads natural state and overrides in H003;
+`gallery pictures|movies natural|locked|unlocked` tests a section without changing snacks, watched flags or story
+progress. Overrides clear on leaving/loading/title; reopen/browse the gallery to refresh visibility. Rule changes
+do not dispatch UI events. Normal playback may still update watched state. Missing/modified schemas fail closed.
+Edits require stable gameplay/control with no cinematic/movie/transfer; diagnostic-only files are consumed with
+explicit rejection, never queued into a later scene. `receipt` and `readiness` are read-only local log reports.
+Resources samples this process's CPU/RAM about once per second while visible (CPU normalized to machine and one core;
+working set and private committed bytes distinct). Process GPU utilization is unavailable with a stated reason, not
+replaced by FPS/system usage. Full usage and persistence caveats: `tools/debug/README.md`.
 
 Level intros (first visit only): a recorded cutscene sets the cutscene manager pointer `0x802459F0` (globals + 0x860) and
 is skipped with pad A once the game allows it (per-cutscene delay); `0x80245540` (globals + 0x3B0) is 1 only while the

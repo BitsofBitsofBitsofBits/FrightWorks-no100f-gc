@@ -10,7 +10,7 @@ namespace ScoobyReMasked;
 sealed class MainForm : Form
 {
     internal const string GameExe = DataPaths.GameExe, AppTitle = "FrightWorks: Night of 100 Frights";
-    const string ProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+    const string ProjectUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
 
     readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
@@ -40,6 +40,9 @@ sealed class MainForm : Form
     {
         this.shotDir = shotDir;
         K = DeviceDpi / 96f;
+        AutoScaleDimensions = new SizeF(DeviceDpi, DeviceDpi);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        SuspendLayout();
         paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
@@ -65,6 +68,7 @@ sealed class MainForm : Form
         Controls.Add(scene);
 
         BuildBoards();
+        ResumeLayout(true);
 
         KeyDown += (_, e) =>
         {
@@ -86,6 +90,21 @@ sealed class MainForm : Form
             RefreshDisc();
             if (updater.CanCheck && updater.CheckAtStart) _ = CheckForUpdates(manual: false);
         };
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        K = e.DeviceDpiNew / 96f;
+        base.OnDpiChanged(e);
+        PlaceBoards();
+        Invalidate(true);
+    }
+
+    protected override void OnLayout(LayoutEventArgs levent)
+    {
+        base.OnLayout(levent);
+        // A DPI transition scales children after their Resize events; place the boards at the final size.
+        if (scene != null) PlaceBoards();
     }
 
     // Headless visual check (--shots <dir>): the main screen, a lightning flash and every board, then exit.
@@ -156,15 +175,19 @@ sealed class MainForm : Form
     void AddBoard(string id, string title, Action<FlowLayoutPanel> build)
     {
         var board = new Board(title, CloseBoards);
+        board.SuspendLayout();
         var flow = new FlowLayoutPanel
         {
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown,
             WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty,
         };
+        flow.SuspendLayout();
         build(flow);
         board.Body.Controls.Add(flow);
         boards[id] = board;
         scene.Controls.Add(board);
+        flow.ResumeLayout(true);
+        board.ResumeLayout(true);
     }
 
     void PlaceBoards()
@@ -178,12 +201,21 @@ sealed class MainForm : Form
     void ShowBoard(string id)
     {
         controllerNavigation.Reset();
-        foreach (var (key, b) in boards) b.Visible = key == id;
-        boards[id].BringToFront();
-        scene.ActiveSign = id;
         RefreshDisc();
-        var first = ControllerNavigation.Targets(boards[id].Body).FirstOrDefault();
-        if (first != null) ControllerNavigation.Focus(first);
+        scene.SuspendLayout();
+        try
+        {
+            foreach (var (key, b) in boards) b.Visible = key == id;
+            boards[id].BringToFront();
+            boards[id].PerformLayout();
+            boards[id].Body.PerformLayout();
+            scene.ActiveSign = id;
+        }
+        finally { scene.ResumeLayout(true); }
+        // Reopening a scrolled board must not jump back to its first tab.
+        var first = ControllerNavigation.Targets(boards[id].Body).FirstOrDefault(c => ControllerNavigation.InViewport(c, fully: true))
+            ?? ControllerNavigation.Targets(boards[id]).FirstOrDefault(c => ControllerNavigation.InViewport(c, fully: true));
+        first?.Select();
     }
 
     void CloseBoards()
@@ -203,11 +235,16 @@ sealed class MainForm : Form
         return true;
     }
 
-    static FlowLayoutPanel Row() => new() { AutoSize = true, Margin = Padding.Empty, BackColor = Color.Transparent, WrapContents = true };
+    static FlowLayoutPanel Row() => new()
+    {
+        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Margin = Padding.Empty, BackColor = Color.Transparent, WrapContents = true,
+    };
 
     static TableLayoutPanel Table() => new()
     {
-        AutoSize = true, ColumnCount = 2, BackColor = Color.Transparent, Margin = S(0, 2, 0, 6),
+        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        ColumnCount = 2, BackColor = Color.Transparent, Margin = S(0, 2, 0, 6),
     };
 
     void OpenFolder(string path)
@@ -220,15 +257,20 @@ sealed class MainForm : Form
     void BuildSettings(FlowLayoutPanel body)
     {
         var tabs = Row();
-        var display = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty };
-        var controls = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty, Visible = false };
+        var display = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty };
+        var controls = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty, Visible = false };
         PlankButton displayTab = null!, controlsTab = null!;
         void Select(bool showControls)
         {
-            display.Visible = !showControls;
-            controls.Visible = showControls;
-            displayTab.Selected = !showControls;
-            controlsTab.Selected = showControls;
+            body.SuspendLayout();
+            try
+            {
+                display.Visible = !showControls;
+                controls.Visible = showControls;
+                displayTab.Selected = !showControls;
+                controlsTab.Selected = showControls;
+            }
+            finally { body.ResumeLayout(true); }
         }
         displayTab = new PlankButton("Display", (_, _) => Select(false)) { Selected = true };
         controlsTab = new PlankButton("Controls", (_, _) => Select(true));
@@ -242,29 +284,100 @@ sealed class MainForm : Form
         body.Controls.Add(controls);
     }
 
+    // Config values as the game reads them: numbers by value (F10 writes 8 or 0.75, a hand-edited file may say 8.0 or
+    // 2.250), the rest as text without the quotes.
+    static bool SameValue(string a, string b)
+    {
+        a = a.Trim('"');
+        b = b.Trim('"');
+        return a == b || double.TryParse(a, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) &&
+                         double.TryParse(b, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var y) && x == y;
+    }
+
+    // F10's resolutions (settings_overlay.cpp kResolutions), written the way F10 writes them; the game takes no others.
+    static readonly (string text, string raw)[] Resolutions =
+    {
+        ("Auto (screen size)", "0"), ("0.5x (240p)", "0.5"), ("0.75x (360p)", "0.75"), ("1x (480p)", "1"),
+        ("1.5x (720p)", "1.5"), ("2x (960p)", "2"), ("2.25x (1080p)", "2.25"), ("3x (1440p)", "3"),
+        ("4x (1920p)", "4"), ("4.5x (4K)", "4.5"), ("6x (2880p)", "6"), ("8x (3840p)", "8"),
+    };
+
+    // F10's rule (LimitResolutionForFrameRate): frame interpolation above 60 fps allows up to 4x; the game turns 6x and
+    // 8x into 4x at start.
+    static bool AboveCap(string resolution) => SameValue(resolution, "6") || SameValue(resolution, "8");
+
+    // [video] frame_interpolation_fps as the game reads it: 0, 120 or 180 (240 from older versions = 180), else off.
+    static int InterpolationFps(GameConfig c) => c.Get("video", "frame_interpolation_fps")?.Trim() switch
+    {
+        "120" => 120, "180" or "240" => 180, _ => 0,
+    };
+
     void BuildDisplay(FlowLayoutPanel body)
     {
         var cfg = new GameConfig(configPath);
         var table = Table();
-        void Row(string label, string key, (string text, string raw)[] options, string fallback)
+        void Row(string label, string key, (string text, string raw)[] options, string fallback, Action<GameConfig>? changed = null)
         {
             var box = new ThemedCombo();
             foreach (var o in options) box.Items.Add(o.text);
             var current = cfg.Get("video", key) ?? fallback;
-            int index = Array.FindIndex(options, o => o.raw.Trim('"') == current.Trim('"'));
-            box.SelectedIndex = index >= 0 ? index : Array.FindIndex(options, o => o.raw.Trim('"') == fallback);
+            int index = Array.FindIndex(options, o => SameValue(o.raw, current));
+            box.SelectedIndex = index >= 0 ? index : Array.FindIndex(options, o => SameValue(o.raw, fallback));
             box.SelectedIndexChanged += (_, _) =>
             {
                 var c = new GameConfig(configPath);
                 c.Set("video", key, options[box.SelectedIndex].raw);
+                changed?.Invoke(c);
                 c.Save();
             };
             table.Controls.Add(FieldLabel(label));
             table.Controls.Add(box);
         }
         Row("Window", "display_mode", new[] { ("Borderless fullscreen", "\"borderless\""), ("Window", "\"windowed\""), ("Exclusive fullscreen", "\"exclusive\"") }, "borderless");
-        Row("Resolution", "resolution_multiplier", new[] { ("720p", "1.5"), ("1080p", "2.25"), ("4K", "4.5"), ("Your screen's size", "0") }, "2.25");
-        Row("Picture shape", "aspect_mode", new[] { ("Original 4:3", "0"), ("Widescreen 16:9", "1"), ("Fill the screen", "2"), ("Cinematic 2.39:1", "3") }, "3");
+
+        // A saved monitor that isn't connected stays selected and saved, so it works again when plugged back in. One found
+        // by model on another port keeps its saved id: both mean the same monitor to the game.
+        var monitors = Monitors.List();
+        string savedMonitor = cfg.Get("video", "fullscreen_display") ?? "";
+        if (savedMonitor.Length == 0) savedMonitor = "auto";
+        var savedMatch = Monitors.Find(monitors, savedMonitor);
+        var monitorOptions = new List<(string text, string raw)> { ("Automatic (where the game window is)", "\"auto\"") };
+        foreach (var m in monitors) monitorOptions.Add((m.Label, "\"" + (m == savedMatch ? savedMonitor : m.Id) + "\""));
+        if (savedMonitor != "auto" && savedMatch == null) monitorOptions.Add(("Saved monitor (not connected)", "\"" + savedMonitor + "\""));
+        Row("Fullscreen monitor", "fullscreen_display", monitorOptions.ToArray(), "auto");
+
+        // Resolution: refilled when frame interpolation crosses 60 fps. A missing or unknown value is the game's 1080p.
+        var resolutionBox = new ThemedCombo();
+        var shownResolutions = Resolutions;
+        bool filling = false;
+        void FillResolutions(GameConfig c)
+        {
+            bool capped = InterpolationFps(c) > 60;
+            shownResolutions = capped ? Resolutions.Where(r => !AboveCap(r.raw)).ToArray() : Resolutions;
+            var current = c.Get("video", "resolution_multiplier") ?? "2.25";
+            if (!Resolutions.Any(r => SameValue(r.raw, current))) current = "2.25";
+            if (capped && AboveCap(current)) current = "4";
+            filling = true;
+            resolutionBox.Items.Clear();
+            foreach (var r in shownResolutions) resolutionBox.Items.Add(r.text);
+            resolutionBox.SelectedIndex = Array.FindIndex(shownResolutions, r => SameValue(r.raw, current));
+            filling = false;
+        }
+        FillResolutions(cfg);
+        resolutionBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (filling) return;
+            var c = new GameConfig(configPath);
+            c.Set("video", "resolution_multiplier", shownResolutions[resolutionBox.SelectedIndex].raw);
+            c.Save();
+        };
+        table.Controls.Add(FieldLabel("Resolution"));
+        table.Controls.Add(resolutionBox);
+
+        // Without aspect_mode the game goes by the older keys (main.cpp): force_16_9 = 16:9, widescreen = false = 4:3,
+        // else fill the screen.
+        string aspectFallback = cfg.Get("video", "force_16_9") == "true" ? "1" : cfg.Get("video", "widescreen") == "false" ? "0" : "2";
+        Row("Picture shape", "aspect_mode", new[] { ("Original 4:3", "0"), ("Widescreen 16:9", "1"), ("Fill the screen", "2"), ("Cinematic 2.39:1", "3") }, aspectFallback);
         Row("Frame rate", "fps60", new[] { ("30 fps (original)", "false"), ("60 fps", "true") }, "false");
         Row("HD textures", "texture_replacements", new[] { ("On", "true"), ("Off (original textures)", "false") }, "true");
         Row("Anti-aliasing", "msaa", new[] { ("Off", "1"), ("2x MSAA", "2"), ("4x MSAA", "4"), ("8x MSAA", "8") }, "1");
@@ -273,8 +386,24 @@ sealed class MainForm : Form
         Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Controls.Add(table);
-        body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 opens the same " +
-                               "settings, F11 switches between fullscreen and a window, and F2 saves a screenshot."));
+        body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
+                               "resolution, picture shape, window, fullscreen monitor and frame interpolation settings too, and more (sound, controls); " +
+                               "F11 switches between fullscreen and a window, and F2 saves a screenshot. " +
+                               "Fullscreen monitor also applies when F11 goes fullscreen from a window."));
+
+        // Experimental: F10's Smoothness > Frame interpolation. Going above 60 fps at 6x or 8x drops the resolution to
+        // 4x, as F10 does.
+        body.Controls.Add(Title("Experimental"));
+        table = Table();  // Row adds to this one now
+        Row("Frame interpolation", "frame_interpolation_fps", new[] { ("Off", "0"), ("120 FPS", "120"), ("180 FPS", "180") },
+            InterpolationFps(cfg).ToString(), c =>
+            {
+                if (InterpolationFps(c) > 60 && AboveCap(c.Get("video", "resolution_multiplier") ?? "")) c.Set("video", "resolution_multiplier", "4");
+                FillResolutions(c);
+            });
+        body.Controls.Add(table);
+        body.Controls.Add(Note("Draws extra frames between the game's own for smoother motion. Experimental: you might see visual " +
+                               "glitches. At 120 or 180 FPS the resolution goes up to 4x (1920p)."));
     }
 
     void BuildControls(FlowLayoutPanel body)
@@ -340,11 +469,9 @@ sealed class MainForm : Form
             {
                 var box = new CheckBox
                 {
-                    Text = Path.GetFileName(d), Checked = !File.Exists(Path.Combine(d, "disabled")), AutoSize = true,
-                    ForeColor = Cream, BackColor = Field, Font = Body, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand, Margin = S(0, 3, 0, 3),
+                    Text = Path.GetFileName(d), Checked = !File.Exists(Path.Combine(d, "disabled")), AutoSize = true, AutoEllipsis = true,
+                    ForeColor = Cream, BackColor = Field, Font = Body, FlatStyle = FlatStyle.Standard, Cursor = Cursors.Hand, Margin = S(0, 3, 0, 3),
                 };
-                box.FlatAppearance.BorderColor = Lime;
-                box.FlatAppearance.CheckedBackColor = Purple;
                 var dir = d;
                 box.CheckedChanged += (_, _) =>
                 {

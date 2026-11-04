@@ -62,6 +62,7 @@ void initialize() {
   ZoneScoped;
   SDL_Renderer* renderer = window::get_sdl_renderer();
   ImGui_ImplSDL3_InitForSDLRenderer(window::get_sdl_window(), renderer);
+  ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);  // every connected pad plays, so every pad navigates
   g_useSdlRenderer = renderer != nullptr;
   if (g_useSdlRenderer) {
     ImGui_ImplSDLRenderer3_Init(renderer);

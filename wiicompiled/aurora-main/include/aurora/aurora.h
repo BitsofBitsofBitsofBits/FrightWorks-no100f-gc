@@ -38,6 +38,13 @@ typedef enum {
   AURORA_DISPLAY_MODE_EXCLUSIVE,
 } AuroraDisplayMode;
 
+// A connected monitor for choosing where fullscreen goes. id survives reboots and display renumbering.
+typedef struct {
+  char id[128];
+  char label[256];  // name, size and place: "VS248 (1920x1080, above right)"
+  bool selected;    // what aurora_set_fullscreen_monitor's id currently resolves to
+} AuroraMonitor;
+
 typedef struct {
   int32_t x;
   int32_t y;
@@ -207,6 +214,11 @@ void aurora_set_pause_on_focus_lost(bool value);
 void aurora_set_background_input(bool value);
 void aurora_set_display_mode(AuroraDisplayMode mode);
 AuroraDisplayMode aurora_get_display_mode();
+// Windows only (elsewhere: no monitors, fullscreen stays on the window's monitor). Fills up to maxCount, returns how many.
+uint32_t aurora_get_monitors(AuroraMonitor* monitors, uint32_t maxCount);
+// The monitor fullscreen goes to: an AuroraMonitor id, or "auto" for the one the window is on. A monitor that is gone
+// falls back to the only connected one of the same model, else the main monitor. Applied at once when fullscreen.
+void aurora_set_fullscreen_monitor(const char* id);
 // Cut-out draws ("alpha > 0" + depth write: leaves, grass, webs): 0 = the game's own test, 1 = alpha > 127 for HD
 // replacements, 2 = two passes for HD replacements (solid part with depth write, faint part blended without),
 // 3 = two passes for every texture (originals too; the default). Takes effect at the next draw.

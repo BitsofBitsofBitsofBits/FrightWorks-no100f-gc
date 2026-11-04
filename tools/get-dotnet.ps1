@@ -1,16 +1,7 @@
-# Returns the path of a dotnet.exe with the .NET 8 SDK: the portable one in toolchain\dotnet, installed there on first
-# use with Microsoft's dotnet-install.ps1 (nothing is installed system-wide).
+# Returns the path of a dotnet.exe with the .NET 10 SDK: the portable one in toolchain\dotnet, installed there on first
+# use with Microsoft's dotnet-install script (nothing is installed system-wide). A toolchain\dotnet from before the move
+# to .NET 10 gets the new SDK beside its old one. The last line of the output is the path.
+# The work is done by get-dotnet.py (Python 3, standard library only; on Linux run that directly).
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
-$dir = Join-Path $root 'toolchain\dotnet'
-$dotnet = Join-Path $dir 'dotnet.exe'
-if (-not (Test-Path -LiteralPath $dotnet)) {
-    New-Item -ItemType Directory -Force $dir | Out-Null
-    $installer = Join-Path $dir 'dotnet-install.ps1'
-    Write-Host "Downloading the .NET 8 SDK into $dir ..."
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -UseBasicParsing 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installer
-    & $installer -Channel 8.0 -InstallDir $dir -NoPath | Out-Host
-    if (-not (Test-Path -LiteralPath $dotnet)) { throw ".NET SDK install failed ($dir)" }
-}
-$dotnet
+. (Join-Path $PSScriptRoot 'invoke-python.ps1')
+Invoke-PythonScript (Join-Path $PSScriptRoot 'get-dotnet.py') -LastLineIsResult

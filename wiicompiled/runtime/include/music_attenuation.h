@@ -17,14 +17,8 @@ bool IsExternalMediaPlaying() noexcept;
 bool IsMediaControlAvailable() noexcept;
 bool IsMediaControlInitializationComplete() noexcept;
 
-// Called from the guest scheduler/audio path. This applies state changes to
-// the live SoundPlayer buses, so changing a category or entering/leaving
-// attenuation never requires a scene or race restart.
-void TickGuest() noexcept;
-
-// Accurate native replacement for nw4r::snd::SoundPlayer::SetVolume. Only
-// the category multipliers are applied here; the game's requested bus volume
-// remains the base value.
-void SetSoundPlayerVolume(uint32_t soundPlayer, float requestedVolume);
+// Native MIXAdjustFader (0x800DD2A0) for the game's sound engine: applies the delta and the
+// voice's category volume (music, sound effects, menus, voices) as a fader offset.
+void AdjustMixFader(uint32_t voice, int32_t delta);
 
 } // namespace MusicAttenuation

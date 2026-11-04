@@ -11,7 +11,7 @@ the walkthrough.
 
 ## 1. One-time setup
 
-You need Python 3 and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
+You need Python 3.8 or newer and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
 build downloads its own compiler, CMake and Ninja into `toolchain\` the first time.
 
 ```powershell
@@ -28,6 +28,14 @@ tools). Video capture needs ffmpeg on PATH, or run `tools\debug\capture\get-ffmp
 
 ## 2. Build and play
 
+For widescreen edge-culling regressions, the focused `no100f_model_culling_tests` CMake/CTest target checks sphere
+classification and the linked-model visibility gate. The GIHE78 rev 1 repair applies only to the main camera's
+widescreen entity pre-cull: a character's root atomic can be a small hat rather than a bound for the whole character.
+The entity stays eligible while a visible linked model intersects the frustum; individual atomic culling, shadow
+cameras and Original 4:3 retain their existing behavior. For a visual check, use an isolated `f001` dock session and
+move the developer camera across both horizontal edges, checking that the groundskeeper's body does not disappear
+when his hat leaves view, then repeat in Original 4:3. Do not change or load an existing save for this check.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools                  # full build
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # faster: native code only
@@ -39,7 +47,10 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   `Play\button_icons`, beside the game like a release (`tools\stage-assets.ps1`; only what changed is copied or
   rebuilt; old copies in `Play\UserData` are removed). The game indexes `UserData\texture_replacements` and mods
   first, so those win over the built-in pack. The icons need Python and ImageMagick; without them the build warns and
-  goes on.
+  goes on. The staged copy of the pack is then fixed by `tools\hd-pack-fixes.py` (Python, standard library only): it edits
+  dogerki's file for the Smuggler's Cove sign (#107: no alpha channel, so the small ship's sails on its roof drew as opaque planks) by SHA-256,
+  taking the alpha from the disc's own texture in `Disc\DATA` (nothing from the pack or the game is in git; `texture_pack`
+  stays as downloaded). A skipped fix is a log line, or a failure when packaging (`-Required`).
 - `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).
 - `-SkipTranslate` reuses the translated game code. Only use it when you changed native code (`wiicompiled/runtime`,
   `wiicompiled/aurora-main`). **Do a full build** (no `-SkipTranslate`) when you add or remove a native override
@@ -53,7 +64,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   copy `Play\`'s exe, DLLs, `dsp_coef.bin`, `button_icons` and `texture_replacements` into a folder named `data`
   (no `portable.txt`), with `FrightWorks.exe` beside it.
 - Packaging a release zip: `tools\package-scooby.ps1 -Build -Zip` → `dist\`. It also needs ImageMagick (`magick`) on
-  PATH and the HD texture pack in `texture_pack\ScoobyHD` (not in git).
+  PATH, the HD texture pack in `texture_pack\ScoobyHD` (not in git) and the extracted disc in `Disc\DATA`: the pack fix
+  (`tools\hd-pack-fixes.py`, run with `--required`) stops the packaging if it can't be applied.
 - **Installer** (Velopack): `tools\package-scooby.ps1 -Installer` → `dist\installer\`: `FrightWorks-win-Setup.exe`,
   `FrightWorks-<ver>-full.nupkg`, a `-delta.nupkg` against the previous release, and `releases.win.json` /
   `assets.win.json`. It first runs `vpk download github` so the delta can be made against the latest GitHub release.
@@ -98,7 +110,7 @@ New pure logic (no SDL, no guest memory) belongs in a header with a test next to
 screenshots.
 
 Every test runs with the same settings (windowed 1600x900, 60 fps, MSAA 4, HD pack off unless `-HdTextures`, sound
-muted unless `-Sound`), not yours. `start` saves your own settings first (`Play\UserData\Config.toml` and the
+muted unless `-Sound`, rumble always off), not yours. `start` saves your own settings first (`Play\UserData\Config.toml` and the
 `*.controller` files where F10 controller remaps are kept) to `tools\debug\local\user-setup\`, and `stop` puts them back and deletes the
 `Play\UserData\mods\zz-manual` boot mod. If a test didn't finish, the saved copy stays (a new test keeps it rather than
 saving the test settings over it); `restore` puts it back.
@@ -113,6 +125,11 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
   on; `-Sound` turns the sound on at 5% (`[audio] volume = 0.05`; without it `muted = true`). Use it when you want to
   hear the game or are working on audio. Mute and volume only change what SDL plays: `AUDIO_RAW_DUMP` captures are the
   same either way.
+- Controller rumble is off in every test run (`[controller] rumble = false`), with no switch to turn it on. The game's
+  default is on, so a script that starts the game has to set it: `manual-session` writes it, `level-sweep.py` writes it
+  in its workers' configs, and `play-patched`, `iterate` and `capture-window` set it for the run and put your
+  `Config.toml` back afterwards. Sound is muted the same way in `iterate`, `capture-window` and `level-sweep.py`
+  (no switch), and all three wait for the game-run lock and give it back when the run ends. The helpers are in `tools\debug\kit-common.ps1`.
   Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
   or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
   `e001`.
@@ -128,7 +145,8 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
 The dev menu is part of the game, off unless **Extras > Developer tools** is on in the launcher (`[game] dev_tools =
 true` in `Config.toml`) or `NO100F_DEV_TOOLS=1` is set; the scripts in `tools/debug` set that variable for their
 sessions. With it on, the game shows **DEV** and its build in the bottom-right corner. `play-patched.ps1` builds,
-starts the game with the dev menu on and the sound at 5% (your volume and mute lines go back when it closes) and, for
+starts the game with the dev menu on, the sound at 5% and rumble off (your volume, mute and rumble lines go back when it
+closes) and, for
 branches from before the dev menu was built in, applies
 `tools/debug/patches/devmenu.patch` and takes it out again when you close the game:
 
@@ -211,7 +229,7 @@ useful:
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
 - **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>`
   draws every page to `<dir>\<Page>.png`.
-- **Isolated launcher controller regression** (Windows, .NET 8 SDK or newer):
+- **Isolated launcher controller regression** (Windows, .NET 10 SDK or newer):
   `dotnet run --project tools\launcher-controller-tests\LauncherControllerTests.csproj -c Release -- autotest\launcher-controller`.
   This uses disposable portable data and injected SDL-shaped input, without loading SDL, polling a real controller,
   starting the game, or reading/writing the player's settings. It checks neutral-to-arm, deadzone and repeat timing,
@@ -220,6 +238,18 @@ useful:
   selection, text entry and preservation of unrelated config. Screenshots remain in the output directory.
   Real hardware, SDL device drivers, actual foreground-window transitions and game-controller handover still
   require a separately allocated human-controller session; automated state assertions are not hardware verification.
+- **Isolated launcher layout regression** (Windows, .NET 10 SDK or newer):
+  `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
+  This builds the launcher and checks Settings/Display, Controls, Mods and Extras at normal, minimum and smaller
+  window sizes, reopening and growing/shrinking layouts, long mod names, nested scrolling, dropdown widths, keyboard
+  button activation, transparent button corners (normal, hover, pressed and disabled, including the gradient-backed
+  close button), and preservation of custom HDR and unknown config values. It creates a disposable portable
+  fixture and page screenshots only in the output directory; it never starts the game or uses the player's data.
+  It also moves its own test window across existing monitors and back, logging actual DPI transitions without
+  changing display settings. An optional trailing zero-based monitor index selects the starting monitor.
+  Additional font/size stress at 125%, 150%, 200% and back to 100% is **simulated**, separate from those native
+  transitions. Also check first-open painting interactively. The rounded board region should only change on resize, not on ordinary layout,
+  and page content should scroll vertically without hiding dropdown arrows or producing horizontal scrollbars.
 - **Screen recording**: `tools\debug\capture\record.ps1`.
 
 ### Launcher controller conventions
@@ -287,6 +317,14 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   (`-Continue` to resume the last conversation instead). `new`/`open` start the tab without the Claude Code
   variables of the shell that runs them, so a session started from the coordinator is its own session: listed by
   ListAgents, its conversation saved for `-Continue`.
+- `worktree.ps1` is a thin wrapper: the work is done by `tools\debug\worktree.py` (Python 3.8+, standard library only).
+  The wrapper finds a real Python (not the Microsoft Store stub) and passes every argument through, so the commands
+  above are unchanged. `remove` unlinks every junction/symlink first (at any depth), checks none is left, and only
+  then lets git remove the folder: it never deletes recursively through a link, so `Disc\`, `toolchain\` etc. of
+  the main checkout are safe. It refuses rather than guess when it cannot list the running programs.
+- `-Model <name|full ID>` and `-Effort <low|medium|high|xhigh|max>` (on `new` and `open`, also with `-Continue`) are
+  passed to `claude` as `--model` / `--effort`, only when given. They are not remembered: a later `open` without them
+  starts on the defaults. No semicolons in `-Model` (Windows Terminal splits its command line there).
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its

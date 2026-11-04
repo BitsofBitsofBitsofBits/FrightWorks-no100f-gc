@@ -107,12 +107,15 @@ sealed class ControllerNavigation : IDisposable
         control.Invalidate();
     }
 
-    static bool InViewport(Control control)
+    internal static bool InViewport(Control control, bool fully = false)
     {
         var bounds = control.RectangleToScreen(control.ClientRectangle);
         for (var parent = control.Parent; parent != null; parent = parent.Parent)
-            if (parent is ScrollableControl { AutoScroll: true } &&
-                !parent.RectangleToScreen(parent.ClientRectangle).IntersectsWith(bounds)) return false;
+            if (parent is ScrollableControl { AutoScroll: true })
+            {
+                var viewport = parent.RectangleToScreen(parent.ClientRectangle);
+                if (fully ? !viewport.Contains(bounds) : !viewport.IntersectsWith(bounds)) return false;
+            }
         return true;
     }
 
@@ -173,7 +176,7 @@ sealed class ControllerNavigation : IDisposable
             {
                 page.AutoScrollPosition = new Point(-page.AutoScrollPosition.X,
                     Math.Max(0, -page.AutoScrollPosition.Y + (action == LauncherButtons.ScrollUp ? -1 : 1) * Theme.S(70)));
-                var visible = Targets(page).FirstOrDefault(InViewport);
+                var visible = Targets(page).FirstOrDefault(c => InViewport(c));
                 if (visible != null) Focus(visible);
             }
             return;
