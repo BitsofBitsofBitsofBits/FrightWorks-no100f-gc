@@ -48,7 +48,7 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   rebuilt; old copies in `Play\UserData` are removed). The game indexes `UserData\texture_replacements` and mods
   first, so those win over the built-in pack. The icons need Python and ImageMagick; without them the build warns and
   goes on. The staged copy of the pack is then fixed by `tools\hd-pack-fixes.py` (Python, standard library only): it edits
-  dogerki's file for the Smuggler's Cove sign (#107: no alpha channel, so the signposts drew as opaque planks) by SHA-256,
+  dogerki's file for the Smuggler's Cove sign (#107: no alpha channel, so the small ship's sails on its roof drew as opaque planks) by SHA-256,
   taking the alpha from the disc's own texture in `Disc\DATA` (nothing from the pack or the game is in git; `texture_pack`
   stays as downloaded). A skipped fix is a log line, or a failure when packaging (`-Required`).
 - `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).

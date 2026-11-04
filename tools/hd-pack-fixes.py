@@ -15,7 +15,7 @@ The output is deterministic (fixed filters and compression level), so repeated r
 is logged and the exit code stays 0, unless --required is given (packaging): then a skip exits 1.
 
 Fix 1, Smuggler's Cove sign (issue #107): the pack's file for sign_smugglers is an RGB PNG without alpha, but the
-original texture cuts out the two little signposts on the sign's roof with alpha. Without it they draw as two opaque
+original texture cuts out the two small ship's sails on the sign's roof with alpha. Without it they draw as two opaque
 planks. The alpha is read from the disc's own texture at build time (nothing from the game is stored in git), scaled
 6x bilinear to the HD size, its edge sharpened a little, and written as the PNG's alpha channel; the colours are not touched.
 """
