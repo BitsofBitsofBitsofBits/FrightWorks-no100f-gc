@@ -157,18 +157,30 @@ elseif (_aurora_dawn_provider STREQUAL "package")
     set(AURORA_DAWN_PACKAGE_URL
       "https://github.com/theofficialgman/dawn-build/releases/download/${AURORA_DAWN_VERSION}/dawn-${_dawn_system}-${_dawn_arch}.tar.gz")
 
-    # FrightWorks: Linux x86_64 uses the same Dawn commit with tools/dawn/vulkan-msaa-2x-8x.patch, so 2x and 8x MSAA
-    # work on Vulkan (stock Dawn aborts on them). Built by tools/dawn/build-dawn-linux.sh; a new AURORA_DAWN_VERSION
-    # needs the patch checked and the package rebuilt.
+    # FrightWorks: on Linux (x86_64 and aarch64) we use the Dawn package we build and host ourselves, not
+    # theofficialgman's. It is the same Dawn commit as the stock package plus the Vulkan 2x/8x MSAA patch (author
+    # Junkaholic55, FrightWorks/dawn branch frightworks/v20260603.191052, commit dd7b19d), so 2x and 8x work on Vulkan
+    # (stock Dawn aborts on them). Built by the workflow on FrightWorks/dawn-build, branch frightworks/build, and
+    # published as release v20260603.191052-msaa. A new AURORA_DAWN_VERSION needs the patch rebased onto it and a new
+    # package on our release first: until then Linux falls back to the stock URL below, and 2x/8x abort again on Vulkan.
+    # Windows and every other platform stay on the stock package. An explicit AURORA_DAWN_PACKAGE_URL or
+    # AURORA_DAWN_PACKAGE_URL_HASH always wins.
     if (NOT AURORA_DAWN_PACKAGE_URL_HASH AND AURORA_DAWN_VERSION STREQUAL "v20260603.191052" AND
-        _dawn_system STREQUAL "linux" AND _dawn_arch STREQUAL "x86_64")
+        _dawn_system STREQUAL "linux" AND (_dawn_arch STREQUAL "x86_64" OR _dawn_arch STREQUAL "aarch64"))
       set(AURORA_DAWN_PACKAGE_URL
-        "https://github.com/Junkaholic55/FrightWorks-no100f/releases/download/dawn-v20260603.191052-msaa/dawn-linux-x86_64.tar.gz")
-      set(AURORA_DAWN_PACKAGE_URL_HASH "SHA256=0f6126535dcc26ee1645e307fa9ffd9e4dd860f853d3d96e92b20087ba50d831")
+        "https://github.com/FrightWorks/dawn-build/releases/download/v20260603.191052-msaa/dawn-${_dawn_system}-${_dawn_arch}.tar.gz")
+      if (_dawn_arch STREQUAL "x86_64")
+        set(AURORA_DAWN_PACKAGE_URL_HASH
+          "SHA256=832d25775a0f7b0a9c3a0ee78b56afc8d0fb58d93d603e3de2593b925ececb51")
+      else ()
+        set(AURORA_DAWN_PACKAGE_URL_HASH
+          "SHA256=4bf62951fe3c49c7cf497e077988e3b2c109125469b55c94a9ca361c2d062dba")
+      endif ()
     endif ()
 
     # A release asset is mutable: the same tag has already served two different windows-amd64 archives,
-    # and a cached extraction is never re-verified. Pin the digest for the combinations we ship.
+    # and a cached extraction is never re-verified. Pin the digest for the combinations we ship (stock packages
+    # here; Linux x86_64 and aarch64 are pinned above, to our own release).
     if (NOT AURORA_DAWN_PACKAGE_URL_HASH AND AURORA_DAWN_VERSION STREQUAL "v20260603.191052")
       if (_dawn_system STREQUAL "windows" AND _dawn_arch STREQUAL "amd64")
         set(AURORA_DAWN_PACKAGE_URL_HASH
@@ -176,12 +188,6 @@ elseif (_aurora_dawn_provider STREQUAL "package")
       elseif (_dawn_system STREQUAL "windows" AND _dawn_arch STREQUAL "arm64")
         set(AURORA_DAWN_PACKAGE_URL_HASH
           "SHA256=bf2d921110f14a1d6553f673c5597988e66c02af5587e4a1fee167937d247734")
-      elseif (_dawn_system STREQUAL "linux" AND _dawn_arch STREQUAL "x86_64")
-        set(AURORA_DAWN_PACKAGE_URL_HASH
-          "SHA256=7adcf241bb2a24ec0c576609f2d67203e0e65db9c5a286ca2bbb6281fa644b35")
-      elseif (_dawn_system STREQUAL "linux" AND _dawn_arch STREQUAL "aarch64")
-        set(AURORA_DAWN_PACKAGE_URL_HASH
-          "SHA256=2415e253d46f91b2d72fc73bf6055fb31b98b67c773dc546e1991b1cf019732f")
       elseif (_dawn_system STREQUAL "darwin" AND _dawn_arch STREQUAL "arm64")
         set(AURORA_DAWN_PACKAGE_URL_HASH
           "SHA256=0a8ea8eb0159fc0ba1083c52155d9376fb173cffe690b400464a6ad8881bb461")
