@@ -13,20 +13,8 @@
 # its command line there).
 $ErrorActionPreference = 'Stop'
 
-# A real Python 3.8+: not the Microsoft Store stub (a zero-byte python.exe in ...\Microsoft\WindowsApps that opens the
-# Store when run), so candidates there are skipped without running them.
-function Find-Python {
-    $check = 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'
-    foreach ($name in 'python', 'python3', 'py') {
-        foreach ($cmd in @(Get-Command $name -CommandType Application -All -ErrorAction SilentlyContinue)) {
-            if ($cmd.Source -match '\\Microsoft\\WindowsApps\\') { continue }
-            $pre = @(if ($name -eq 'py') { '-3' })
-            & $cmd.Source @pre -c $check 2>$null
-            if ($LASTEXITCODE -eq 0) { return @{ Path = $cmd.Source; Pre = $pre } }
-        }
-    }
-    return $null
-}
+# A real Python 3.8+, not the Microsoft Store stub: the finder shared with the other Python build scripts.
+. (Join-Path $PSScriptRoot '..\invoke-python.ps1')
 
 $py = Find-Python
 if (-not $py) {

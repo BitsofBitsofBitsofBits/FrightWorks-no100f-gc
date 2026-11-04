@@ -11,7 +11,7 @@ the walkthrough.
 
 ## 1. One-time setup
 
-You need Python 3 and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
+You need Python 3.8 or newer and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
 build downloads its own compiler, CMake and Ninja into `toolchain\` the first time.
 
 ```powershell
