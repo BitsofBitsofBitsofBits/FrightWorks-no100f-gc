@@ -215,6 +215,12 @@ static class Tests
                 next.RefreshControllerLayout(cube, next, false);
                 Check(layout.Text == "GameCube" && automatic.Checked, "Controller-accessible checkbox re-enables matching");
                 Shot(next, "Auto-layout");
+                layout.SelectedIndex = 1;
+                Check(!automatic.Checked && new GameConfig(paths.ConfigPath).Get("controller", "layout") == "xbox_original",
+                    "Accessibility/native selection-change path still persists manual choices");
+                Click(next, automatic);
+                next.RefreshControllerLayout(cube, next, false);
+                Check(automatic.Checked && layout.Text == "GameCube", "Programmatic auto refresh does not masquerade as accessibility/manual input");
                 layout.CommitSelection(0);
                 Check(!automatic.Checked, "Native/keyboard commit path also records same-value manual intent");
                 next.Close();

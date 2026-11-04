@@ -424,19 +424,24 @@ sealed class MainForm : Form
         layoutBox = new ThemedCombo();
         layoutBox.Items.Add("GameCube");
         layoutBox.Items.Add("Original Xbox");
-        layoutBox.SelectedIndexChanged += (_, _) => ShowXboxRows();
-        layoutBox.SelectionChangeCommitted += (_, _) =>
+        void SaveChoice()
         {
+            if (showingLayout) return;
             var c = new GameConfig(configPath);
             string? layout = layoutBox.SelectedIndex switch
             {
                 0 => "gamecube", 1 => "xbox_original", _ => c.Get("controller", "layout"),
             };
             if (layout == null) return;
-            ControllerLayout.SetManual(c, layout);
-            c.Save();
+            if (ControllerLayout.SetManual(c, layout)) c.Save();
             ShowControllerLayout(c);
+        }
+        layoutBox.SelectedIndexChanged += (_, _) =>
+        {
+            ShowXboxRows();
+            SaveChoice();
         };
+        layoutBox.SelectionChangeCommitted += (_, _) => SaveChoice();
         table.Controls.Add(FieldLabel("Layout"));
         table.Controls.Add(layoutBox);
         body.Controls.Add(table);

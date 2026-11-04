@@ -42,10 +42,13 @@ static class ControllerLayout
         config.Remove("launcher", LastKey);
     }
 
-    public static void SetManual(GameConfig config, string layout)
+    public static bool SetManual(GameConfig config, string layout)
     {
+        if (config.Get("launcher", AutoKey) == "false" && config.Get("launcher", LastKey) == null &&
+            config.Get("controller", "layout") == layout) return false;
         SetAutomatic(config, false);
         config.SetString("controller", "layout", layout);
+        return true;
     }
 
     // Returns whether the caller needs to save. No button bindings are rewritten.
