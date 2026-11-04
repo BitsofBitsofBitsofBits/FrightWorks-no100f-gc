@@ -157,6 +157,16 @@ elseif (_aurora_dawn_provider STREQUAL "package")
     set(AURORA_DAWN_PACKAGE_URL
       "https://github.com/theofficialgman/dawn-build/releases/download/${AURORA_DAWN_VERSION}/dawn-${_dawn_system}-${_dawn_arch}.tar.gz")
 
+    # FrightWorks: Linux x86_64 uses the same Dawn commit with tools/dawn/vulkan-msaa-2x-8x.patch, so 2x and 8x MSAA
+    # work on Vulkan (stock Dawn aborts on them). Built by tools/dawn/build-dawn-linux.sh; a new AURORA_DAWN_VERSION
+    # needs the patch checked and the package rebuilt.
+    if (NOT AURORA_DAWN_PACKAGE_URL_HASH AND AURORA_DAWN_VERSION STREQUAL "v20260603.191052" AND
+        _dawn_system STREQUAL "linux" AND _dawn_arch STREQUAL "x86_64")
+      set(AURORA_DAWN_PACKAGE_URL
+        "https://github.com/Junkaholic55/FrightWorks-no100f/releases/download/dawn-v20260603.191052-msaa/dawn-linux-x86_64.tar.gz")
+      set(AURORA_DAWN_PACKAGE_URL_HASH "SHA256=0f6126535dcc26ee1645e307fa9ffd9e4dd860f853d3d96e92b20087ba50d831")
+    endif ()
+
     # A release asset is mutable: the same tag has already served two different windows-amd64 archives,
     # and a cached extraction is never re-verified. Pin the digest for the combinations we ship.
     if (NOT AURORA_DAWN_PACKAGE_URL_HASH AND AURORA_DAWN_VERSION STREQUAL "v20260603.191052")
