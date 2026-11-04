@@ -2,18 +2,20 @@
 # also run on Linux: `python3 tools/get-dotnet.py`). Dot-source it:  . (Join-Path $PSScriptRoot 'invoke-python.ps1')
 # Must parse in Windows PowerShell 5.1.
 
-# The path of a working Python 3.8+: python, py, python3 on PATH, in that order. A command that doesn't run is skipped,
-# which is what rules out the Microsoft Store stub (WindowsApps\python.exe: it only prints a hint or opens the Store) and
-# a Python 2 or a broken launcher. $null when there is none.
+# A working Python 3.8+ as @{ Path = <exe>; Pre = <arguments to put before the script> }: python, python3, py (as
+# "py -3") on PATH, in that order; $null when there is none. A command that doesn't run is skipped, which is what rules
+# out the Microsoft Store stub (WindowsApps\python.exe: it only prints a hint or opens the Store) and a Python 2 or a
+# broken launcher, wherever they sit on PATH.
 function Find-Python {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        foreach ($name in 'python', 'py', 'python3') {
+        foreach ($name in 'python', 'python3', 'py') {
+            $pre = @(if ($name -eq 'py') { '-3' })
             foreach ($command in @(Get-Command $name -CommandType Application -All -ErrorAction SilentlyContinue)) {
                 try {
-                    & $command.Source -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' 2>&1 | Out-Null
-                    if ($LASTEXITCODE -eq 0) { return $command.Source }
+                    & $command.Source @pre -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) { return @{ Path = $command.Source; Pre = $pre } }
                 } catch { }
             }
         }
@@ -42,7 +44,8 @@ function Invoke-PythonScript([string]$Script, [string[]]$Arguments = @(), [switc
     $held = $null
     try {
         # -I: neither the current folder nor PYTHON* variables decide what gets imported; -X utf8: output is UTF-8.
-        & $python -I -X utf8 $Script @Arguments | ForEach-Object {
+        $pre = $python.Pre
+        & $python.Path @pre -I -X utf8 $Script @Arguments | ForEach-Object {
             $line = "$_"
             if ($line.StartsWith('WARNING: ')) { Write-Warning $line.Substring(9) }
             elseif ($line.StartsWith('ERROR: ')) { $errors.Add($line.Substring(7)) }
