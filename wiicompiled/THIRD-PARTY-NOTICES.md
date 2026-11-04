@@ -154,6 +154,169 @@ trees themselves (fetched by `Launcher/Prepare-Dependencies.ps1`) so end-user bu
 - **Zstandard** is offered under BSD-3-Clause or GPL-2.0. **This project elects BSD-3-Clause.**
   Copyright (c) Meta Platforms, Inc. and affiliates.
 
+## Launcher (`launcher/`) - NuGet packages built into `FrightWorks.exe`
+
+The launcher is an Avalonia application. Its packages are restored from nuget.org at build time (versions as
+restored for the current build: `launcher/ScoobyReMasked.Launcher.csproj` and `obj/project.assets.json`) and
+end up inside the single-file `FrightWorks.exe`, with their native libraries unpacked next to it when it
+starts. Where a row says Windows or Linux, it is only used there.
+
+| Component | Version | License | Upstream |
+| --- | --- | --- | --- |
+| Avalonia (`Avalonia`, `.Desktop`, `.Themes.Fluent`, `.Skia`, `.HarfBuzz`, `.Win32`, `.X11`, `.FreeDesktop` and the other `Avalonia.*` packages they pull in) | 12.1.5 | MIT, Copyright 2013-2026 The AvaloniaUI Project | <https://github.com/AvaloniaUI/Avalonia> |
+| SkiaSharp (`SkiaSharp`, `SkiaSharp.NativeAssets.Win32` / `.Linux`) | 3.119.4 | MIT, Copyright (c) 2015-2016 Xamarin, Inc. and (c) 2017-2018 Microsoft Corporation | <https://github.com/mono/SkiaSharp> |
+| Skia (the native library inside SkiaSharp's `libSkiaSharp`) | with SkiaSharp 3.119.4 | BSD-3-Clause, Copyright (c) 2011 Google Inc. | <https://skia.org/> |
+| HarfBuzzSharp (`HarfBuzzSharp`, `HarfBuzzSharp.NativeAssets.Win32` / `.Linux`) | 8.3.1.3 | MIT, Copyright (c) 2015-2016 Xamarin, Inc. and (c) 2017-2018 Microsoft Corporation | <https://github.com/mono/SkiaSharp> |
+| HarfBuzz (the native library inside `libHarfBuzzSharp`) | with HarfBuzzSharp 8.3.1.3 | "Old MIT", Copyright (c) Google, Mozilla, Red Hat, Behdad Esfahbod and others | <https://github.com/harfbuzz/harfbuzz> |
+| ANGLE (`Avalonia.Angle.Windows.Natives`, `av_libglesv2.dll`, Windows) | 2.1.27548.20260419 | BSD-3-Clause, Copyright 2018 The ANGLE Project Authors | <https://github.com/AvaloniaUI/angle> (Avalonia's build of Google's ANGLE) |
+| MicroCom.Runtime | 0.11.6 | MIT, Copyright 2021 Nikita Tsukanov | <https://github.com/kekekeks/MicroCom> |
+| Tmds.DBus.Protocol (used on Linux; the DLL is in both builds) | 0.94.1 | MIT, Copyright Tom Deseyn | <https://github.com/tmds/Tmds.DBus> |
+| Inter (the launcher's text font on Linux; bundled in `Avalonia.Fonts.Inter`, so also inside the Windows `FrightWorks.exe`) | 3.019 | SIL Open Font License 1.1, Copyright 2020 The Inter Project Authors ("Inter" is a trademark of Rasmus Andersson); the package `Avalonia.Fonts.Inter` 12.1.5 itself is MIT | <https://github.com/rsms/inter> |
+
+`Avalonia.BuildServices` (a build-time package from Avalonia that reports usage) is not used: the
+launcher and layout-test projects pin it with every asset excluded and the repository's
+`Directory.Build.targets` empties its task, so nothing of it is built in or runs.
+
+The native SkiaSharp and HarfBuzzSharp libraries are built from Skia, HarfBuzz and their own
+dependencies (libpng, zlib, FreeType, ICU, expat, libjpeg-turbo, libwebp, and others); their copyright
+notices and licenses are listed in full in the `THIRD-PARTY-NOTICES.txt` that comes with the
+`SkiaSharp.NativeAssets.*` and `HarfBuzzSharp.NativeAssets.*` packages (version above).
+
+**MIT** (all the MIT components above, each with its own copyright line from the table):
+
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+> associated documentation files (the "Software"), to deal in the Software without restriction,
+> including without limitation the rights to use, copy, modify, merge, publish, distribute,
+> sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or
+> substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+> NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+> NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+> DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+> OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**BSD-3-Clause** (Skia, Copyright (c) 2011 Google Inc.; ANGLE, Copyright 2018 The ANGLE Project
+Authors):
+
+> Redistribution and use in source and binary forms, with or without modification, are permitted
+> provided that the following conditions are met:
+>
+> - Redistributions of source code must retain the above copyright notice, this list of conditions
+>   and the following disclaimer.
+> - Redistributions in binary form must reproduce the above copyright notice, this list of
+>   conditions and the following disclaimer in the documentation and/or other materials provided
+>   with the distribution.
+> - Neither the name of Google Inc. (Skia), nor of TransGaming Inc., Google Inc., 3DLabs Inc. Ltd.
+>   (ANGLE), nor the names of their contributors may be used to endorse or promote products derived
+>   from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR
+> IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+> FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+> CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+> DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+> DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
+> IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+> OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+**Inter** - Copyright 2020 The Inter Project Authors (<https://github.com/rsms/inter>). "Inter" is a
+trademark of Rasmus Andersson. This Font Software is licensed under the SIL Open Font License,
+Version 1.1; the license, also available with a FAQ at <https://openfontlicense.org>, follows. The
+launcher uses Inter unmodified.
+
+```text
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION AND CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+```
+
 ## Bundled in the setup executable's toolkit payload
 
 The distributed `WiiCompiled-Setup.exe` carries a build toolkit so that translation and

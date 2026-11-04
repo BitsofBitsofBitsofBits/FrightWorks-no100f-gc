@@ -1,31 +1,37 @@
-using System.ComponentModel;
 using System.Diagnostics;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 
 namespace ScoobyReMasked;
 
-// The launcher's main screen: a stormy night sky with lightning, the mansion (launcher\art, made by
-// tools\launcher-art\make_launcher_art.py) whose windows light up, draw their curtains and show the odd silhouette,
+// The launcher's main screen: a stormy night sky with lightning, the mansion (launcher/art, made by
+// tools/launcher-art/make_launcher_art.py) whose windows light up, draw their curtains and show the odd silhouette,
 // and the five signs that are the menu. The windows are holes in mansion.png: their insides are drawn first, then the
 // house on top. The signs are drawn over the ones painted in the picture (mansion.json holds both outlines).
 sealed class MansionScene : Control
 {
     public event Action<string>? SignClicked;
     string? active;
-    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] public string? ActiveSign { get => active; set { active = value; Invalidate(); } }
+    public string? ActiveSign { get => active; set { active = value; InvalidateVisual(); } }
     string status = "";
     bool statusOk;
-    public void SetStatus(string text, bool ok) { status = text; statusOk = ok; Invalidate(); }
+    public void SetStatus(string text, bool ok) { status = text; statusOk = ok; InvalidateVisual(); }
+    public string Status => status;
 
-    static readonly Bitmap? HouseArt = Theme.LoadBitmap("mansion.png"), DogArt = Theme.LoadBitmap("dog.png"),
-        GhostArt = Theme.LoadBitmap("ghost.png");
+    static readonly Bitmap? HouseArt = Skin.LoadBitmap("mansion.png"), DogArt = Skin.LoadBitmap("dog.png"),
+        GhostArt = Skin.LoadBitmap("ghost.png");
 
     readonly bool animate;
     readonly Random rnd;
     readonly Stopwatch clock = Stopwatch.StartNew();
-    readonly System.Windows.Forms.Timer timer = new() { Interval = 33 };
+    readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(33) };
     double shift, last;
     double Now => clock.Elapsed.TotalSeconds + shift;
 
@@ -36,38 +42,42 @@ sealed class MansionScene : Control
         public double Seed;
         public bool Curtains, Lit = true;
     }
-    sealed record Win(string Id, Group Group, RectangleF Box);
+    sealed record Win(string Id, Group Group, Rect Box);
     sealed class Sign
     {
         public string Id = "";
-        public PointF[] Points = Array.Empty<PointF>();
-        public Bitmap? Normal, Hover;
+        public Point[] Points = Array.Empty<Point>();
+        public RenderTargetBitmap? Normal, Hover;
         public Point NormalAt, HoverAt;
-        public GraphicsPath? Hit;
+        public Geometry? Hit;
     }
-    sealed class Cloud { public Bitmap Art = null!; public float X, Y, Speed; }
+    sealed class Cloud { public RenderTargetBitmap Art = null!; public double X, Y, Speed; }
 
-    readonly int artW = 1447, artH = 1087;
+    const int ArtW = 1447, ArtH = 1087;
     readonly List<Win> windows = new();
     readonly Dictionary<string, Group> groups = new();
     readonly List<Sign> signs = new();
     readonly List<Cloud> clouds = new();
     static readonly HashSet<string> CurtainGroups = new() { "parlor", "parlor_side", "dormer", "right_arch", "right_tower", "tower" };
 
-    float s = 1;
-    PointF o;
+    double s = 1;
+    Point o;
     Size cachedFor;
-    Bitmap? house, sky, title;
+    double cachedScale;
+    RenderTargetBitmap? house, sky, title;
     double nextStrike, strikeAt = -100, nextEvent;
-    List<PointF[]>? bolt;
+    List<Point[]>? bolt;
     string? hover;
+
+    double W => Bounds.Width;
+    double H => Bounds.Height;
 
     public MansionScene(bool animate, int seed)
     {
-        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
-                 ControlStyles.ResizeRedraw | ControlStyles.Opaque, true);
         this.animate = animate;
         rnd = new Random(seed);
+        ClipToBounds = true;
+        Focusable = true;
         LoadLayout();
         foreach (var (id, g) in groups)
         {
@@ -81,7 +91,29 @@ sealed class MansionScene : Control
         nextStrike = 3 + rnd.NextDouble() * 5;
         nextEvent = 1.5;
         timer.Tick += (_, _) => Step();
+    }
+
+    // Windows' "Animate controls and elements inside windows" (off = a still scene); always on elsewhere.
+    public static bool AnimationsEnabled()
+    {
+        if (!OperatingSystem.IsWindows()) return true;
+        const uint SPI_GETUIEFFECTS = 0x103E;
+        return !SystemParametersInfo(SPI_GETUIEFFECTS, 0, out int on, 0) || on != 0;
+    }
+
+    [DllImport("user32.dll")]
+    static extern bool SystemParametersInfo(uint action, uint param, out int value, uint winIni);
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
         if (animate) timer.Start();
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        timer.Stop();
+        base.OnDetachedFromVisualTree(e);
     }
 
     void Set(string id, double? light = null, double? curtain = null, double? figure = null)
@@ -94,7 +126,7 @@ sealed class MansionScene : Control
 
     void LoadLayout()
     {
-        using var stream = Theme.Resource("mansion.json");
+        using var stream = Skin.Resource("mansion.json");
         if (stream == null) return;
         using var doc = JsonDocument.Parse(stream);
         var root = doc.RootElement;
@@ -103,13 +135,13 @@ sealed class MansionScene : Control
             var gid = w.GetProperty("group").GetString()!;
             if (!groups.TryGetValue(gid, out var g)) groups[gid] = g = new Group();
             windows.Add(new Win(w.GetProperty("id").GetString()!, g,
-                new RectangleF(w.GetProperty("x").GetSingle(), w.GetProperty("y").GetSingle(), w.GetProperty("w").GetSingle(), w.GetProperty("h").GetSingle())));
+                new Rect(w.GetProperty("x").GetDouble(), w.GetProperty("y").GetDouble(), w.GetProperty("w").GetDouble(), w.GetProperty("h").GetDouble())));
         }
         foreach (var sg in root.GetProperty("signs").EnumerateArray())
             signs.Add(new Sign
             {
                 Id = sg.GetProperty("id").GetString()!,
-                Points = sg.GetProperty("points").EnumerateArray().Select(p => new PointF(p[0].GetSingle(), p[1].GetSingle())).ToArray(),
+                Points = sg.GetProperty("points").EnumerateArray().Select(p => new Point(p[0].GetDouble(), p[1].GetDouble())).ToArray(),
             });
     }
 
@@ -130,14 +162,13 @@ sealed class MansionScene : Control
             bolt = MakeBolt(new Random(3));
         }
         else strikeAt = -100;
-        Invalidate();
+        InvalidateVisual();
     }
 
     // ----- Animation -----
     void Step()
     {
-        var form = FindForm();
-        if (form == null || form.WindowState == FormWindowState.Minimized || !Visible) return;
+        if (TopLevel.GetTopLevel(this) is Window { WindowState: WindowState.Minimized } || !IsEffectivelyVisible) return;
         double t = Now, dt = Math.Clamp(t - last, 0, 0.1);
         last = t;
         foreach (var g in groups.Values)
@@ -156,10 +187,10 @@ sealed class MansionScene : Control
         }
         foreach (var c in clouds)
         {
-            c.X += c.Speed * (float)dt;
-            if (c.X > Width) c.X = -c.Art.Width;
+            c.X += c.Speed * dt;
+            if (c.X > W) c.X = -c.Art.Size.Width;
         }
-        Invalidate();
+        InvalidateVisual();
     }
 
     static double Approach(double v, double to, double step) => v < to ? Math.Min(to, v + step) : Math.Max(to, v - step);
@@ -199,29 +230,29 @@ sealed class MansionScene : Control
         return Math.Min(1, Pulse(e, 0.05, 0.04) + 0.7 * Pulse(e, 0.22, 0.05) + 0.35 * Pulse(e, 0.42, 0.09));
     }
 
-    List<PointF[]> MakeBolt(Random r)
+    List<Point[]> MakeBolt(Random r)
     {
-        var paths = new List<PointF[]>();
-        float W = Math.Max(1, Width), H = Math.Max(1, Height), step = Math.Max(6, 18 * s);
-        float x = W * (0.08f + (float)r.NextDouble() * 0.84f), y = 0;
-        var main = new List<PointF> { new(x, y) };
-        while (y < H * 0.6f)
+        var paths = new List<Point[]>();
+        double w = Math.Max(1, W), h = Math.Max(1, H), step = Math.Max(6, 18 * s);
+        double x = w * (0.08 + r.NextDouble() * 0.84), y = 0;
+        var main = new List<Point> { new(x, y) };
+        while (y < h * 0.6)
         {
-            y += step * (0.6f + (float)r.NextDouble());
-            x += (float)(r.NextDouble() * 2 - 1) * step * 1.1f;
-            main.Add(new PointF(x, y));
+            y += step * (0.6 + r.NextDouble());
+            x += (r.NextDouble() * 2 - 1) * step * 1.1;
+            main.Add(new Point(x, y));
         }
         paths.Add(main.ToArray());
         for (int b = 0; b < 2; b++)
         {
             var from = main[2 + r.Next(Math.Max(1, main.Count - 4))];
-            float bx = from.X, by = from.Y, dir = r.NextDouble() < 0.5 ? -1 : 1;
-            var branch = new List<PointF> { from };
+            double bx = from.X, by = from.Y, dir = r.NextDouble() < 0.5 ? -1 : 1;
+            var branch = new List<Point> { from };
             for (int i = 0; i < 5 + r.Next(4); i++)
             {
-                by += step * (0.5f + (float)r.NextDouble() * 0.7f);
-                bx += dir * step * (0.4f + (float)r.NextDouble());
-                branch.Add(new PointF(bx, by));
+                by += step * (0.5 + r.NextDouble() * 0.7);
+                bx += dir * step * (0.4 + r.NextDouble());
+                branch.Add(new Point(bx, by));
             }
             paths.Add(branch.ToArray());
         }
@@ -229,40 +260,44 @@ sealed class MansionScene : Control
     }
 
     // ----- Layout and cached layers -----
-    PointF Map(float x, float y) => new(o.X + x * s, o.Y + y * s);
-    RectangleF Map(RectangleF r) => new(o.X + r.X * s, o.Y + r.Y * s, r.Width * s, r.Height * s);
+    Point Map(double x, double y) => new(o.X + x * s, o.Y + y * s);
+    Rect Map(Rect r) => new(o.X + r.X * s, o.Y + r.Y * s, r.Width * s, r.Height * s);
 
     // The house fills the height, sits at the bottom and leans right, leaving the sky on the left for the title.
-    public RectangleF HouseRect => new(o.X, o.Y, artW * s, artH * s);
-    public float SignsLeft => signs.Count == 0 ? Width * 0.5f : signs.Min(sg => sg.Points.Min(p => p.X)) * s + o.X;
+    public Rect HouseRect => new(o.X, o.Y, ArtW * s, ArtH * s);
+    public double SignsLeft => signs.Count == 0 ? W * 0.5 : signs.Min(sg => sg.Points.Min(p => p.X)) * s + o.X;
 
-    // Picture-to-client scale and offset, on every resize (the boards are placed from it before the first paint).
-    void Place()
+    // Picture-to-client scale and offset, for a size (the boards are placed from it before the first paint).
+    public void Place(Size size)
     {
-        float W = Math.Max(1, Width), H = Math.Max(1, Height);
-        s = Math.Min(W * 0.99f / artW, (H - Theme.S(6)) / artH);
-        o = new PointF((float)Math.Round((W - artW * s) * 0.82f), (float)Math.Round(H - artH * s));
+        double w = Math.Max(1, size.Width), h = Math.Max(1, size.Height);
+        s = Math.Min(w * 0.99 / ArtW, (h - 6) / ArtH);
+        o = new Point(Math.Round((w - ArtW * s) * 0.82), Math.Round(h - ArtH * s));
     }
 
-    protected override void OnResize(EventArgs e)
+    double Scaling => TopLevel.GetTopLevel(this)?.RenderScaling ?? 1;
+
+    // A cached layer drawn at the screen's pixel density, so it stays sharp with display scaling.
+    RenderTargetBitmap Layer(double w, double h, Action<DrawingContext> draw)
     {
-        Place();
-        base.OnResize(e);
+        double scale = cachedScale;
+        var size = new PixelSize(Math.Max(1, (int)Math.Ceiling(w * scale)), Math.Max(1, (int)Math.Ceiling(h * scale)));
+        var bitmap = new RenderTargetBitmap(size, new Vector(96 * scale, 96 * scale));
+        using (var g = bitmap.CreateDrawingContext())
+        using (g.PushRenderOptions(new RenderOptions { BitmapInterpolationMode = BitmapInterpolationMode.HighQuality, EdgeMode = EdgeMode.Antialias }))
+            draw(g);
+        return bitmap;
     }
 
     void Rebuild()
     {
-        cachedFor = Size;
-        Place();
+        cachedFor = Bounds.Size;
+        cachedScale = Scaling;
+        Place(Bounds.Size);
 
         house?.Dispose();
-        house = new Bitmap(Math.Max(1, (int)Math.Round(artW * s)), Math.Max(1, (int)Math.Round(artH * s)), PixelFormat.Format32bppPArgb);
-        if (HouseArt != null)
-            using (var g = Graphics.FromImage(house))
-            {
-                Theme.HighQuality(g);
-                g.DrawImage(HouseArt, new Rectangle(0, 0, house.Width, house.Height));
-            }
+        double hw = Math.Max(1, Math.Round(ArtW * s)), hh = Math.Max(1, Math.Round(ArtH * s));
+        house = Layer(hw, hh, g => { if (HouseArt != null) g.DrawImage(HouseArt, new Rect(0, 0, hw, hh)); });
 
         BuildSky();
         BuildClouds();
@@ -273,54 +308,46 @@ sealed class MansionScene : Control
     void BuildSky()
     {
         sky?.Dispose();
-        sky = new Bitmap(Math.Max(1, Width), Math.Max(1, Height), PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(sky);
-        Theme.HighQuality(g);
-        var all = new Rectangle(0, 0, Width, Height);
-        using (var grad = new LinearGradientBrush(all, Color.Black, Color.Black, LinearGradientMode.Vertical))
+        double w = Math.Max(1, W), h = Math.Max(1, H);
+        sky = Layer(w, h, g =>
         {
-            grad.InterpolationColors = new ColorBlend
+            var all = new Rect(0, 0, w, h);
+            g.FillRectangle(new LinearGradientBrush
             {
-                Colors = new[] { ColorTranslator.FromHtml("#05030B"), ColorTranslator.FromHtml("#140C28"), ColorTranslator.FromHtml("#2A1A45"), ColorTranslator.FromHtml("#331F4E") },
-                Positions = new[] { 0f, 0.45f, 0.8f, 1f },
-            };
-            g.FillRectangle(grad, all);
-        }
-        var stars = new Random(7);
-        for (int i = 0; i < 160; i++)
-        {
-            float x = (float)stars.NextDouble() * Width, y = (float)Math.Pow(stars.NextDouble(), 1.6) * Height * 0.75f;
-            float d = stars.NextDouble() < 0.15 ? 2.2f : 1.3f;
-            using var b = new SolidBrush(Color.FromArgb(60 + stars.Next(150), 235, 230, 255));
-            g.FillEllipse(b, x, y, d, d);
-        }
-        // The moon, above the right tower.
-        var m = Map(1300, 105);
-        float mr = Math.Max(18, 52 * s);
-        using (var glowPath = new GraphicsPath())
-        {
-            glowPath.AddEllipse(m.X - mr * 3.2f, m.Y - mr * 3.2f, mr * 6.4f, mr * 6.4f);
-            using var glow = new PathGradientBrush(glowPath) { CenterColor = Color.FromArgb(70, 230, 225, 255), SurroundColors = new[] { Color.FromArgb(0, 230, 225, 255) } };
-            g.FillPath(glow, glowPath);
-        }
-        using (var moon = new SolidBrush(ColorTranslator.FromHtml("#EEEAD3"))) g.FillEllipse(moon, m.X - mr, m.Y - mr, mr * 2, mr * 2);
-        using (var crater = new SolidBrush(ColorTranslator.FromHtml("#D7D2B7")))
-        {
-            g.FillEllipse(crater, m.X - mr * 0.45f, m.Y - mr * 0.35f, mr * 0.42f, mr * 0.42f);
-            g.FillEllipse(crater, m.X + mr * 0.2f, m.Y + mr * 0.15f, mr * 0.3f, mr * 0.3f);
-            g.FillEllipse(crater, m.X - mr * 0.1f, m.Y + mr * 0.45f, mr * 0.22f, mr * 0.22f);
-        }
-        // Rolling hills along the bottom, behind the house.
-        using var hills = new GraphicsPath();
-        var pts = new List<PointF> { new(0, Height) };
-        for (int i = 0; i <= 12; i++)
-        {
-            float x = Width * i / 12f;
-            pts.Add(new PointF(x, Height * (0.86f + 0.04f * (float)Math.Sin(i * 1.7 + 0.5))));
-        }
-        pts.Add(new PointF(Width, Height));
-        hills.AddCurve(pts.ToArray(), 0.4f);
-        using (var ground = new SolidBrush(ColorTranslator.FromHtml("#0C0816"))) g.FillPath(ground, hills);
+                StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative),
+                EndPoint = new RelativePoint(0, 1, RelativeUnit.Relative),
+                GradientStops =
+                {
+                    new GradientStop(Color.Parse("#05030B"), 0), new GradientStop(Color.Parse("#140C28"), 0.45),
+                    new GradientStop(Color.Parse("#2A1A45"), 0.8), new GradientStop(Color.Parse("#331F4E"), 1),
+                },
+            }, all);
+            var stars = new Random(7);
+            for (int i = 0; i < 160; i++)
+            {
+                double x = stars.NextDouble() * w, y = Math.Pow(stars.NextDouble(), 1.6) * h * 0.75;
+                double d = stars.NextDouble() < 0.15 ? 2.2 : 1.3;
+                g.DrawEllipse(Skin.Brush(Skin.Argb(60 + stars.Next(150), 235, 230, 255)), null, new Rect(x, y, d, d));
+            }
+            // The moon, above the right tower.
+            var m = Map(1300, 105);
+            double mr = Math.Max(18, 52 * s);
+            g.DrawEllipse(new RadialGradientBrush
+            {
+                GradientStops = { new GradientStop(Skin.Argb(70, 230, 225, 255), 0), new GradientStop(Skin.Argb(0, 230, 225, 255), 1) },
+            }, null, new Rect(m.X - mr * 3.2, m.Y - mr * 3.2, mr * 6.4, mr * 6.4));
+            g.DrawEllipse(Skin.Brush(Color.Parse("#EEEAD3")), null, new Rect(m.X - mr, m.Y - mr, mr * 2, mr * 2));
+            var crater = Skin.Brush(Color.Parse("#D7D2B7"));
+            g.DrawEllipse(crater, null, new Rect(m.X - mr * 0.45, m.Y - mr * 0.35, mr * 0.42, mr * 0.42));
+            g.DrawEllipse(crater, null, new Rect(m.X + mr * 0.2, m.Y + mr * 0.15, mr * 0.3, mr * 0.3));
+            g.DrawEllipse(crater, null, new Rect(m.X - mr * 0.1, m.Y + mr * 0.45, mr * 0.22, mr * 0.22));
+            // Rolling hills along the bottom, behind the house.
+            var pts = new List<Point> { new(0, h) };
+            for (int i = 0; i <= 12; i++)
+                pts.Add(new Point(w * i / 12, h * (0.86 + 0.04 * Math.Sin(i * 1.7 + 0.5))));
+            pts.Add(new Point(w, h));
+            g.DrawGeometry(Skin.Brush(Color.Parse("#0C0816")), null, Skin.Curve(pts, 0.4, filled: true));
+        });
     }
 
     void BuildClouds()
@@ -330,23 +357,21 @@ sealed class MansionScene : Control
         var r = new Random(11);
         for (int i = 0; i < 6; i++)
         {
-            int w = (int)((240 + r.Next(220)) * s), h = (int)((60 + r.Next(50)) * s);
+            double w = (int)((240 + r.Next(220)) * s), h = (int)((60 + r.Next(50)) * s);
             if (w < 8 || h < 8) continue;
-            var art = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
-            using (var g = Graphics.FromImage(art))
+            var art = Layer(w, h, g =>
             {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
                 for (int k = 0; k < 9; k++)
                 {
-                    float pw = w * (0.3f + (float)r.NextDouble() * 0.35f), ph = h * (0.5f + (float)r.NextDouble() * 0.5f);
-                    float px = (float)r.NextDouble() * (w - pw), py = h - ph - (float)r.NextDouble() * (h - ph) * 0.6f;
-                    using var path = new GraphicsPath();
-                    path.AddEllipse(px, py, pw, ph);
-                    using var brush = new PathGradientBrush(path) { CenterColor = Color.FromArgb(120, 58, 46, 88), SurroundColors = new[] { Color.FromArgb(0, 58, 46, 88) } };
-                    g.FillPath(brush, path);
+                    double pw = w * (0.3 + r.NextDouble() * 0.35), ph = h * (0.5 + r.NextDouble() * 0.5);
+                    double px = r.NextDouble() * (w - pw), py = h - ph - r.NextDouble() * (h - ph) * 0.6;
+                    g.DrawEllipse(new RadialGradientBrush
+                    {
+                        GradientStops = { new GradientStop(Skin.Argb(120, 58, 46, 88), 0), new GradientStop(Skin.Argb(0, 58, 46, 88), 1) },
+                    }, null, new Rect(px, py, pw, ph));
                 }
-            }
-            clouds.Add(new Cloud { Art = art, X = (float)r.NextDouble() * Width, Y = Height * (0.02f + (float)r.NextDouble() * 0.38f), Speed = (float)(4 + r.NextDouble() * 9) * Math.Max(0.5f, s) });
+            });
+            clouds.Add(new Cloud { Art = art, X = r.NextDouble() * W, Y = H * (0.02 + r.NextDouble() * 0.38), Speed = (4 + r.NextDouble() * 9) * Math.Max(0.5, s) });
         }
     }
 
@@ -354,20 +379,17 @@ sealed class MansionScene : Control
     void BuildTitle()
     {
         title?.Dispose();
-        float room = Math.Max(Theme.S(160), o.X + 318 * s - Theme.S(22));
-        float em = Theme.S(46);
-        using (var probe = Theme.TextPath("FRIGHTWORKS", em, new RectangleF(0, 0, 4000, 400), StringAlignment.Near))
+        double room = Math.Max(160, o.X + 318 * s - 22);
+        double em = 46;
+        double w = Skin.TextGeometry("FRIGHTWORKS", em, new Rect(0, 0, 4000, 400), Skin.Align.Near).Bounds.Width;
+        if (w > room) em *= room / w;
+        double width = (int)room + 30, height = (int)(em * 2.3) + 10;
+        title = Layer(width, height, g =>
         {
-            float w = probe.GetBounds().Width;
-            if (w > room) em *= room / w;
-        }
-        int width = (int)room + Theme.S(30), height = (int)(em * 2.3f) + Theme.S(10);
-        title = new Bitmap(Math.Max(1, width), Math.Max(1, height), PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(title);
-        Theme.HighQuality(g);
-        // Layout boxes far wider than the text: a box too narrow for a word cuts its last letters off.
-        Theme.Text(g, "FRIGHTWORKS", em, new RectangleF(Theme.S(6), 0, 4000, em * 1.25f), Theme.Lime, Theme.Ink, Math.Max(3, em * 0.16f), StringAlignment.Near);
-        Theme.Text(g, "Night of 100 Frights", em * 0.52f, new RectangleF(Theme.S(8), em * 1.12f, 4000, em * 0.8f), Theme.Cream, Theme.Ink, Math.Max(2, em * 0.11f), StringAlignment.Near);
+            // Layout boxes far wider than the text, as the old GDI+ drawing used.
+            Skin.Text(g, "FRIGHTWORKS", em, new Rect(6, 0, 4000, em * 1.25), Skin.Lime, Skin.Ink, Math.Max(3, em * 0.16), Skin.Align.Near);
+            Skin.Text(g, "Night of 100 Frights", em * 0.52, new Rect(8, em * 1.12, 4000, em * 0.8), Skin.Cream, Skin.Ink, Math.Max(2, em * 0.11), Skin.Align.Near);
+        });
     }
 
     // ----- Signs -----
@@ -376,9 +398,9 @@ sealed class MansionScene : Control
         ["play"] = "Play", ["settings"] = "Settings", ["mods"] = "Mods", ["extras"] = "Extras", ["exit"] = "Exit",
     };
 
-    PointF[] SignPoints(Sign sg, float grow)
+    Point[] SignPoints(Sign sg, double grow)
     {
-        float cx = sg.Points.Average(p => p.X), cy = sg.Points.Average(p => p.Y);
+        double cx = sg.Points.Average(p => p.X), cy = sg.Points.Average(p => p.Y);
         return sg.Points.Select(p => Map(cx + (p.X - cx) * grow, cy + (p.Y - cy) * grow)).ToArray();
     }
 
@@ -388,333 +410,354 @@ sealed class MansionScene : Control
         sg.Hover?.Dispose();
         (sg.Normal, sg.NormalAt) = RenderSign(sg, false);
         (sg.Hover, sg.HoverAt) = RenderSign(sg, true);
-        sg.Hit?.Dispose();
-        sg.Hit = new GraphicsPath();
-        sg.Hit.AddPolygon(SignPoints(sg, 1f));
+        sg.Hit = Skin.Polygon(SignPoints(sg, 1));
     }
 
-    (Bitmap, Point) RenderSign(Sign sg, bool lit)
+    (RenderTargetBitmap, Point) RenderSign(Sign sg, bool lit)
     {
-        var pts = SignPoints(sg, lit ? 1.045f : 1f);
-        float minX = pts.Min(p => p.X), minY = pts.Min(p => p.Y), maxX = pts.Max(p => p.X), maxY = pts.Max(p => p.Y);
+        var pts = SignPoints(sg, lit ? 1.045 : 1);
+        double minX = pts.Min(p => p.X), minY = pts.Min(p => p.Y), maxX = pts.Max(p => p.X), maxY = pts.Max(p => p.Y);
         int pad = (int)Math.Ceiling(6 * s) + 2;
-        var at = new Point((int)Math.Floor(minX) - pad, (int)Math.Floor(minY) - pad);
-        var bmp = new Bitmap(Math.Max(1, (int)Math.Ceiling(maxX - minX) + pad * 2), Math.Max(1, (int)Math.Ceiling(maxY - minY) + pad * 2), PixelFormat.Format32bppPArgb);
-        using var g = Graphics.FromImage(bmp);
-        Theme.HighQuality(g);
-        g.TranslateTransform(-at.X, -at.Y);
-        var box = new RectangleF(minX, minY, maxX - minX, maxY - minY);
-        bool play = sg.Id == "play";
-        float u = s * (lit ? 1.045f : 1f);  // picture pixels to client pixels
-
-        using var shape = new GraphicsPath();
-        shape.AddPolygon(pts);
-        Color top = play ? ColorTranslator.FromHtml("#DDF063") : ColorTranslator.FromHtml("#7B4CBA");
-        Color bottom = play ? ColorTranslator.FromHtml("#A3BE33") : ColorTranslator.FromHtml("#4B2884");
-        if (lit) { top = ControlPaint.Light(top, play ? 0.35f : 0.3f); bottom = ControlPaint.Light(bottom, 0.3f); }
-        using (var fill = new LinearGradientBrush(box, top, bottom, LinearGradientMode.Vertical)) g.FillPath(fill, shape);
-
-        // Wood grain and a couple of knots, the same every time for a sign.
-        var r = new Random(sg.Id.Length * 31 + sg.Id[0]);
-        var clip = g.Clip;
-        g.SetClip(shape);
-        using (var grain = new Pen(Color.FromArgb(play ? 55 : 70, 20, 8, 30), Math.Max(1f, 2.2f * u)))
+        var at = new Point(Math.Floor(minX) - pad, Math.Floor(minY) - pad);
+        double bw = Math.Max(1, Math.Ceiling(maxX - minX) + pad * 2), bh = Math.Max(1, Math.Ceiling(maxY - minY) + pad * 2);
+        var bitmap = Layer(bw, bh, g =>
         {
-            for (int i = 0; i < 6; i++)
+            using var moved = g.PushTransform(Matrix.CreateTranslation(-at.X, -at.Y));
+            var box = new Rect(minX, minY, maxX - minX, maxY - minY);
+            bool play = sg.Id == "play";
+            double u = s * (lit ? 1.045 : 1);  // picture pixels to client pixels
+
+            var shape = Skin.Polygon(pts);
+            Color top = play ? Color.Parse("#DDF063") : Color.Parse("#7B4CBA");
+            Color bottom = play ? Color.Parse("#A3BE33") : Color.Parse("#4B2884");
+            if (lit) { top = Skin.Light(top, play ? 0.35f : 0.3f); bottom = Skin.Light(bottom, 0.3f); }
+            g.DrawGeometry(Skin.Vertical(top, bottom), null, shape);
+
+            // Wood grain and a couple of knots, the same every time for a sign.
+            var r = new Random(sg.Id.Length * 31 + sg.Id[0]);
+            using (g.PushGeometryClip(shape))
             {
-                float y = box.Top + box.Height * (i + 0.5f) / 6 + (float)(r.NextDouble() * 6 - 3) * u;
-                var line = new PointF[8];
-                for (int k = 0; k < line.Length; k++)
-                    line[k] = new PointF(box.Left + box.Width * k / (line.Length - 1), y + (float)(r.NextDouble() * 5 - 2.5) * u);
-                g.DrawCurve(grain, line, 0.5f);
+                var grain = new Pen(Skin.Brush(Skin.Argb(play ? 55 : 70, 20, 8, 30)), Math.Max(1, 2.2 * u));
+                for (int i = 0; i < 6; i++)
+                {
+                    double y = box.Top + box.Height * (i + 0.5) / 6 + (r.NextDouble() * 6 - 3) * u;
+                    var line = new Point[8];
+                    for (int k = 0; k < line.Length; k++)
+                        line[k] = new Point(box.Left + box.Width * k / (line.Length - 1), y + (r.NextDouble() * 5 - 2.5) * u);
+                    g.DrawGeometry(null, grain, Skin.Curve(line, 0.5, filled: false));
+                }
+                for (int k = 0; k < 2; k++)
+                {
+                    double kx = box.Left + box.Width * (0.25 + r.NextDouble() * 0.5), ky = box.Top + box.Height * (0.25 + r.NextDouble() * 0.5);
+                    g.DrawEllipse(null, grain, new Rect(kx, ky, 18 * u, 7 * u));
+                }
+                g.DrawLine(new Pen(Skin.Brush(Skin.Argb(80, 255, 255, 255)), 3 * u),
+                           new Point(box.Left + 14 * u, box.Top + 7 * u), new Point(box.Right - 14 * u, box.Top + 6 * u));
             }
-            for (int k = 0; k < 2; k++)
+            g.DrawGeometry(null, new Pen(Skin.Brush(Skin.Ink), 6.5 * u, lineJoin: PenLineJoin.Round), shape);
+            double n = 4.5 * u;
+            foreach (var (nx, ny) in new[] { (box.Left + 17 * u, box.Top + 18 * u), (box.Left + 17 * u, box.Bottom - 18 * u), (box.Right - 17 * u, box.Top + 18 * u), (box.Right - 17 * u, box.Bottom - 18 * u) })
+                Skin.Nail(g, nx, ny, n);
+
+            double cy = box.Top + box.Height / 2;
+            if (play)
             {
-                float kx = box.Left + box.Width * (0.25f + (float)r.NextDouble() * 0.5f), ky = box.Top + box.Height * (0.25f + (float)r.NextDouble() * 0.5f);
-                g.DrawEllipse(grain, kx, ky, 18 * u, 7 * u);
+                DrawPaw(g, box.Left + box.Width * 0.13, cy, 30 * u, Skin.Ink);
+                DrawPaw(g, box.Right - box.Width * 0.13, cy, 30 * u, Skin.Ink);
+                FitText(g, SignText[sg.Id], 92 * u, new Rect(box.Left + box.Width * 0.24, box.Top, box.Width * 0.52, box.Height), Skin.Ink, default, 0);
             }
-        }
-        using (var shine = new Pen(Color.FromArgb(80, 255, 255, 255), 3 * u))
-            g.DrawLine(shine, box.Left + 14 * u, box.Top + 7 * u, box.Right - 14 * u, box.Top + 6 * u);
-        g.Clip = clip;
-        using (var edge = new Pen(Theme.Ink, 6.5f * u) { LineJoin = LineJoin.Round }) g.DrawPath(edge, shape);
-        float n = 4.5f * u;
-        foreach (var (nx, ny) in new[] { (box.Left + 17 * u, box.Top + 18 * u), (box.Left + 17 * u, box.Bottom - 18 * u), (box.Right - 17 * u, box.Top + 18 * u), (box.Right - 17 * u, box.Bottom - 18 * u) })
-            Theme.Nail(g, nx, ny, n);
-
-        float cy = box.Top + box.Height / 2;
-        if (play)
-        {
-            DrawPaw(g, box.Left + box.Width * 0.13f, cy, 30 * u, Theme.Ink);
-            DrawPaw(g, box.Right - box.Width * 0.13f, cy, 30 * u, Theme.Ink);
-            FitText(g, SignText[sg.Id], 92 * u, new RectangleF(box.Left + box.Width * 0.24f, box.Top, box.Width * 0.52f, box.Height), Theme.Ink, Color.Empty, 0);
-        }
-        else
-        {
-            float ix = box.Left + box.Width * 0.2f;
-            DrawIcon(g, sg.Id, ix, cy, u);
-            FitText(g, SignText.GetValueOrDefault(sg.Id, sg.Id), 54 * u, new RectangleF(box.Left + box.Width * 0.3f, box.Top, box.Width * 0.62f, box.Height),
-                    Theme.Cream, Theme.Ink, 6 * u);
-        }
-        return (bmp, at);
+            else
+            {
+                DrawIcon(g, sg.Id, box.Left + box.Width * 0.2, cy, u);
+                FitText(g, SignText.GetValueOrDefault(sg.Id, sg.Id), 54 * u, new Rect(box.Left + box.Width * 0.3, box.Top, box.Width * 0.62, box.Height),
+                        Skin.Cream, Skin.Ink, 6 * u);
+            }
+        });
+        return (bitmap, at);
     }
 
-    static void FitText(Graphics g, string text, float em, RectangleF box, Color fill, Color outline, float outlineWidth)
+    static void FitText(DrawingContext g, string text, double em, Rect box, Color fill, Color outline, double outlineWidth)
     {
-        using (var probe = Theme.TextPath(text, em, new RectangleF(0, 0, 4000, 1000)))
-        {
-            float w = probe.GetBounds().Width;
-            if (w > box.Width * 0.92f) em *= box.Width * 0.92f / w;
-        }
-        Theme.Text(g, text, em, box, fill, outline, outlineWidth);
+        double w = Skin.TextGeometry(text, em, new Rect(0, 0, 4000, 1000)).Bounds.Width;
+        if (w > box.Width * 0.92) em *= box.Width * 0.92 / w;
+        Skin.Text(g, text, em, box, fill, outline, outlineWidth);
     }
 
-    static void DrawPaw(Graphics g, float cx, float cy, float size, Color color)
+    static void DrawPaw(DrawingContext g, double cx, double cy, double size, Color color)
     {
-        using var b = new SolidBrush(color);
-        float u = size / 30f;
-        g.FillEllipse(b, cx - 15 * u, cy - 2 * u, 30 * u, 24 * u);
-        foreach (var (dx, dy, w, h) in new[] { (-21f, -14f, 11f, 14f), (-9f, -26f, 12f, 15f), (5f, -26f, 12f, 15f), (17f, -14f, 11f, 14f) })
-            g.FillEllipse(b, cx + dx * u - 1, cy + dy * u, w * u, h * u);
+        var b = Skin.Brush(color);
+        double u = size / 30;
+        g.DrawEllipse(b, null, new Rect(cx - 15 * u, cy - 2 * u, 30 * u, 24 * u));
+        foreach (var (dx, dy, w, h) in new[] { (-21.0, -14.0, 11.0, 14.0), (-9.0, -26.0, 12.0, 15.0), (5.0, -26.0, 12.0, 15.0), (17.0, -14.0, 11.0, 14.0) })
+            g.DrawEllipse(b, null, new Rect(cx + dx * u - 1, cy + dy * u, w * u, h * u));
     }
 
-    static void DrawIcon(Graphics g, string id, float cx, float cy, float u)
+    // The outline goes first and the cream over it, so half of the outline shows, as on the painted signs.
+    static void Outlined(DrawingContext g, Geometry shape, Pen ink, IBrush cream)
     {
-        using var cream = new SolidBrush(Theme.Cream);
-        using var ink = new Pen(Theme.Ink, 4f * u) { LineJoin = LineJoin.Round };
-        using var path = new GraphicsPath { FillMode = FillMode.Alternate };
+        g.DrawGeometry(null, ink, shape);
+        g.DrawGeometry(cream, null, shape);
+    }
+
+    static void DrawIcon(DrawingContext g, string id, double cx, double cy, double u)
+    {
+        var cream = Skin.Brush(Skin.Cream);
+        var ink = new Pen(Skin.Brush(Skin.Ink), 4 * u, lineJoin: PenLineJoin.Round);
         switch (id)
         {
             case "settings":
             {
                 const int teeth = 8;
-                var pts = new List<PointF>();
+                var pts = new List<Point>();
                 for (int i = 0; i < teeth * 2; i++)
                 {
                     double a0 = Math.PI * 2 * i / (teeth * 2) - 0.12, a1 = a0 + 0.24;
-                    float rad = (i % 2 == 0 ? 25 : 18) * u;
-                    pts.Add(new PointF(cx + (float)Math.Cos(a0) * rad, cy + (float)Math.Sin(a0) * rad));
-                    pts.Add(new PointF(cx + (float)Math.Cos(a1) * rad, cy + (float)Math.Sin(a1) * rad));
+                    double rad = (i % 2 == 0 ? 25 : 18) * u;
+                    pts.Add(new Point(cx + Math.Cos(a0) * rad, cy + Math.Sin(a0) * rad));
+                    pts.Add(new Point(cx + Math.Cos(a1) * rad, cy + Math.Sin(a1) * rad));
                 }
-                path.AddPolygon(pts.ToArray());
-                path.AddEllipse(cx - 8 * u, cy - 8 * u, 16 * u, 16 * u);
+                Outlined(g, new GeometryGroup
+                {
+                    FillRule = FillRule.EvenOdd,
+                    Children = { Skin.Polygon(pts), new EllipseGeometry(new Rect(cx - 8 * u, cy - 8 * u, 16 * u, 16 * u)) },
+                }, ink, cream);
                 break;
             }
             case "mods":
             {
                 // A jigsaw piece: a square with a knob on top and on the right.
-                path.FillMode = FillMode.Winding;
-                path.AddRectangle(new RectangleF(cx - 20 * u, cy - 12 * u, 34 * u, 34 * u));
-                path.AddEllipse(cx - 11 * u, cy - 27 * u, 17 * u, 18 * u);
-                path.AddEllipse(cx + 9 * u, cy - 4 * u, 18 * u, 17 * u);
+                Outlined(g, new GeometryGroup
+                {
+                    FillRule = FillRule.NonZero,
+                    Children =
+                    {
+                        new RectangleGeometry(new Rect(cx - 20 * u, cy - 12 * u, 34 * u, 34 * u)),
+                        new EllipseGeometry(new Rect(cx - 11 * u, cy - 27 * u, 17 * u, 18 * u)),
+                        new EllipseGeometry(new Rect(cx + 9 * u, cy - 4 * u, 18 * u, 17 * u)),
+                    },
+                }, ink, cream);
                 break;
             }
             case "extras":
             {
-                using var thick = new Pen(Theme.Ink, 13f * u) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-                using var handle = new Pen(Theme.Cream, 7f * u) { StartCap = LineCap.Round, EndCap = LineCap.Round };
-                g.DrawLine(thick, cx + 9 * u, cy + 9 * u, cx + 22 * u, cy + 22 * u);
-                g.DrawLine(handle, cx + 9 * u, cy + 9 * u, cx + 22 * u, cy + 22 * u);
-                path.AddEllipse(cx - 21 * u, cy - 21 * u, 34 * u, 34 * u);
-                path.AddEllipse(cx - 13 * u, cy - 13 * u, 18 * u, 18 * u);
+                var thick = new Pen(Skin.Brush(Skin.Ink), 13 * u, lineCap: PenLineCap.Round);
+                var handle = new Pen(cream, 7 * u, lineCap: PenLineCap.Round);
+                g.DrawLine(thick, new Point(cx + 9 * u, cy + 9 * u), new Point(cx + 22 * u, cy + 22 * u));
+                g.DrawLine(handle, new Point(cx + 9 * u, cy + 9 * u), new Point(cx + 22 * u, cy + 22 * u));
+                Outlined(g, new GeometryGroup
+                {
+                    FillRule = FillRule.EvenOdd,
+                    Children =
+                    {
+                        new EllipseGeometry(new Rect(cx - 21 * u, cy - 21 * u, 34 * u, 34 * u)),
+                        new EllipseGeometry(new Rect(cx - 13 * u, cy - 13 * u, 18 * u, 18 * u)),
+                    },
+                }, ink, cream);
                 break;
             }
             case "exit":
             {
                 // A door frame with the door swung open.
-                using var frame = new GraphicsPath { FillMode = FillMode.Alternate };
-                frame.AddRectangle(new RectangleF(cx - 15 * u, cy - 24 * u, 30 * u, 48 * u));
-                frame.AddRectangle(new RectangleF(cx - 10 * u, cy - 19 * u, 20 * u, 43 * u));
-                g.DrawPath(ink, frame);
-                g.FillPath(cream, frame);
-                path.AddPolygon(new[] { new PointF(cx - 10 * u, cy - 19 * u), new PointF(cx + 4 * u, cy - 14 * u), new PointF(cx + 4 * u, cy + 27 * u), new PointF(cx - 10 * u, cy + 24 * u) });
-                g.DrawPath(ink, path);
-                g.FillPath(cream, path);
-                using var knob = new SolidBrush(Theme.Ink);
-                g.FillEllipse(knob, cx - 1 * u, cy + 1 * u, 4 * u, 4 * u);
-                return;
+                Outlined(g, new GeometryGroup
+                {
+                    FillRule = FillRule.EvenOdd,
+                    Children =
+                    {
+                        new RectangleGeometry(new Rect(cx - 15 * u, cy - 24 * u, 30 * u, 48 * u)),
+                        new RectangleGeometry(new Rect(cx - 10 * u, cy - 19 * u, 20 * u, 43 * u)),
+                    },
+                }, ink, cream);
+                Outlined(g, Skin.Polygon(new[] { new Point(cx - 10 * u, cy - 19 * u), new Point(cx + 4 * u, cy - 14 * u), new Point(cx + 4 * u, cy + 27 * u), new Point(cx - 10 * u, cy + 24 * u) }),
+                         ink, cream);
+                g.DrawEllipse(Skin.Brush(Skin.Ink), null, new Rect(cx - 1 * u, cy + 1 * u, 4 * u, 4 * u));
+                break;
             }
         }
-        g.DrawPath(ink, path);
-        g.FillPath(cream, path);
     }
 
     // ----- Painting -----
-    protected override void OnPaint(PaintEventArgs e)
+    public override void Render(DrawingContext g)
     {
-        if (Width <= 0 || Height <= 0) return;
-        if (cachedFor != Size || house == null) Rebuild();
-        var g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.CompositingQuality = CompositingQuality.HighSpeed;
-        g.InterpolationMode = InterpolationMode.Bilinear;
+        if (W <= 0 || H <= 0) return;
+        if (cachedFor != Bounds.Size || cachedScale != Scaling || house == null) Rebuild();
         double t = Now;
-        float flash = (float)Flash();
+        double flash = Flash();
+        var all = new Rect(Bounds.Size);
 
-        g.DrawImageUnscaled(sky!, 0, 0);
-        foreach (var c in clouds) g.DrawImageUnscaled(c.Art, (int)c.X, (int)c.Y);
+        g.DrawImage(sky!, new Rect(sky!.Size));
+        foreach (var c in clouds) g.DrawImage(c.Art, new Rect(new Point((int)c.X, (int)c.Y), c.Art.Size));
         if (flash > 0)
         {
-            using var lit = new SolidBrush(Color.FromArgb((int)(120 * flash), 196, 186, 255));
-            g.FillRectangle(lit, ClientRectangle);
+            g.FillRectangle(Skin.Brush(Skin.Argb((int)(120 * flash), 196, 186, 255)), all);
             if (bolt != null && t - strikeAt < 0.35)
                 foreach (var line in bolt)
                 {
-                    using var glow = new Pen(Color.FromArgb((int)(90 * flash), 210, 200, 255), Math.Max(4, 11 * s)) { LineJoin = LineJoin.Round };
-                    using var core = new Pen(Color.FromArgb((int)(255 * Math.Min(1, flash * 1.4)), 255, 255, 255), Math.Max(1.5f, 3 * s)) { LineJoin = LineJoin.Round };
-                    g.DrawLines(glow, line);
-                    g.DrawLines(core, line);
+                    var glow = new Pen(Skin.Brush(Skin.Argb((int)(90 * flash), 210, 200, 255)), Math.Max(4, 11 * s), lineJoin: PenLineJoin.Round);
+                    var core = new Pen(Skin.Brush(Skin.Argb((int)(255 * Math.Min(1, flash * 1.4)), 255, 255, 255)), Math.Max(1.5, 3 * s), lineJoin: PenLineJoin.Round);
+                    var geometry = Skin.Polyline(line);
+                    g.DrawGeometry(null, glow, geometry);
+                    g.DrawGeometry(null, core, geometry);
                 }
         }
 
         foreach (var w in windows) DrawWindow(g, w, t);
 
+        var houseRect = new Rect(new Point((int)o.X, (int)o.Y), house!.Size);
+        g.DrawImage(house, houseRect);
         if (flash > 0.02)
         {
-            g.DrawImageUnscaled(house!, (int)o.X, (int)o.Y);
-            var m = new ColorMatrix(new[]
-            {
-                new float[] { 0, 0, 0, 0, 0 }, new float[] { 0, 0, 0, 0, 0 }, new float[] { 0, 0, 0, 0, 0 },
-                new float[] { 0, 0, 0, 0.3f * flash, 0 }, new float[] { 0.85f, 0.85f, 1f, 0, 1 },
-            });
-            using var attrs = new ImageAttributes();
-            attrs.SetColorMatrix(m);
-            g.DrawImage(house!, new Rectangle((int)o.X, (int)o.Y, house!.Width, house.Height), 0, 0, house.Width, house.Height, GraphicsUnit.Pixel, attrs);
+            // The lightning lights the house: a pale silhouette of it over it.
+            using (g.PushOpacityMask(new ImageBrush(house) { Stretch = Stretch.Fill }, houseRect))
+                g.FillRectangle(Skin.Brush(Skin.Argb((int)(255 * 0.3 * flash), 217, 217, 255)), houseRect);
         }
-        else g.DrawImageUnscaled(house!, (int)o.X, (int)o.Y);
 
         foreach (var sg in signs)
         {
             bool lit = sg.Id == hover || sg.Id == active;
-            float breathe = (float)(Math.Sin(t * 2.6) + 1) / 2;
+            double breathe = (Math.Sin(t * 2.6) + 1) / 2;
             if (sg.Id == "play" || lit)
             {
                 int a = lit ? 150 : (int)(40 + 70 * breathe);
-                using var halo = new GraphicsPath();
-                halo.AddPolygon(SignPoints(sg, lit ? 1.045f : 1f));
-                Color glowColor = sg.Id == "play" ? Theme.Lime : Theme.Gold;
-                using var pen = new Pen(Color.FromArgb(a, glowColor), Math.Max(6, 16 * s)) { LineJoin = LineJoin.Round };
-                g.DrawPath(pen, halo);
+                Color glowColor = sg.Id == "play" ? Skin.Lime : Skin.Gold;
+                g.DrawGeometry(null, new Pen(Skin.Brush(Skin.WithAlpha(glowColor, a)), Math.Max(6, 16 * s), lineJoin: PenLineJoin.Round),
+                               Skin.Polygon(SignPoints(sg, lit ? 1.045 : 1)));
             }
-            if (lit) g.DrawImageUnscaled(sg.Hover!, sg.HoverAt);
-            else g.DrawImageUnscaled(sg.Normal!, sg.NormalAt);
+            if (lit) g.DrawImage(sg.Hover!, new Rect(sg.HoverAt, sg.Hover!.Size));
+            else g.DrawImage(sg.Normal!, new Rect(sg.NormalAt, sg.Normal!.Size));
         }
 
-        g.DrawImageUnscaled(title!, Theme.S(18), Theme.S(12));
+        g.DrawImage(title!, new Rect(new Point(18, 12), title!.Size));
         DrawFooter(g);
     }
 
-    static readonly Color Dark = ColorTranslator.FromHtml("#0D0E1E"), WarmTop = ColorTranslator.FromHtml("#FFE27C"), WarmBottom = ColorTranslator.FromHtml("#F39A2B");
+    static readonly Color Dark = Color.Parse("#0D0E1E"), WarmTop = Color.Parse("#FFE27C"), WarmBottom = Color.Parse("#F39A2B");
 
-    void DrawWindow(Graphics g, Win w, double t)
+    void DrawWindow(DrawingContext g, Win w, double t)
     {
-        var b = Map(w.Box);
-        b.Inflate(1, 1);
+        var b = Map(w.Box).Inflate(1);
         var gr = w.Group;
-        float light = (float)(gr.Light * (0.95 + 0.05 * Math.Sin(t * 11 + gr.Seed) * Math.Sin(t * 6.7 + gr.Seed * 2)));
+        double light = gr.Light * (0.95 + 0.05 * Math.Sin(t * 11 + gr.Seed) * Math.Sin(t * 6.7 + gr.Seed * 2));
         light = Math.Clamp(light, 0, 1);
-        using (var dark = new SolidBrush(Dark)) g.FillRectangle(dark, b);
+        g.FillRectangle(Skin.Brush(Dark), b);
         if (light > 0.01)
-            using (var warm = new LinearGradientBrush(b, Color.FromArgb((int)(255 * light), WarmTop), Color.FromArgb((int)(255 * light), WarmBottom), LinearGradientMode.Vertical))
-                g.FillRectangle(warm, b);
+            g.FillRectangle(Skin.Vertical(Skin.WithAlpha(WarmTop, (int)(255 * light)), Skin.WithAlpha(WarmBottom, (int)(255 * light))), b);
         var figure = w.Id == "parlor" ? DogArt : w.Id == "tower" ? GhostArt : null;
-        float fig = (float)gr.Figure;
+        double fig = gr.Figure;
         if (figure != null && fig > 0.01) DrawFaded(g, figure, Map(w.Box), fig);
-        float curtain = (float)gr.Curtain;
+        double curtain = gr.Curtain;
         if (gr.Curtains && curtain > 0.01)
         {
             DrawCurtains(g, b, curtain, light);
-            if (figure != null && fig > 0.01) DrawFaded(g, figure, Map(w.Box), fig * curtain * 0.5f * light);  // its shadow on the curtain
+            if (figure != null && fig > 0.01) DrawFaded(g, figure, Map(w.Box), fig * curtain * 0.5 * light);  // its shadow on the curtain
         }
     }
 
-    static void DrawFaded(Graphics g, Bitmap art, RectangleF dest, float alpha)
+    static void DrawFaded(DrawingContext g, Bitmap art, Rect dest, double alpha)
     {
-        var m = new ColorMatrix { Matrix33 = Math.Clamp(alpha, 0, 1) };
-        using var attrs = new ImageAttributes();
-        attrs.SetColorMatrix(m);
-        g.DrawImage(art, Rectangle.Round(dest), 0, 0, art.Width, art.Height, GraphicsUnit.Pixel, attrs);
+        using (g.PushOpacity(Math.Clamp(alpha, 0, 1)))
+            g.DrawImage(art, new Rect(Math.Round(dest.X), Math.Round(dest.Y), Math.Round(dest.Width), Math.Round(dest.Height)));
     }
 
-    static void DrawCurtains(Graphics g, RectangleF b, float amount, float light)
+    static void DrawCurtains(DrawingContext g, Rect b, double amount, double light)
     {
-        Color shade = Lerp(ColorTranslator.FromHtml("#2E0B22"), ColorTranslator.FromHtml("#B4453E"), light);
-        Color fold = Lerp(ColorTranslator.FromHtml("#1C0616"), ColorTranslator.FromHtml("#7E2830"), light);
-        float half = b.Width / 2 + 1, cw = half * amount;
+        Color shade = Lerp(Color.Parse("#2E0B22"), Color.Parse("#B4453E"), light);
+        Color fold = Lerp(Color.Parse("#1C0616"), Color.Parse("#7E2830"), light);
+        double half = b.Width / 2 + 1, cw = half * amount;
         foreach (var left in new[] { true, false })
         {
-            var r = left ? new RectangleF(b.Left, b.Top, cw, b.Height) : new RectangleF(b.Right - cw, b.Top, cw, b.Height);
-            if (r.Width < 0.5f) continue;
-            using (var brush = new SolidBrush(shade)) g.FillRectangle(brush, r);
-            using var pen = new Pen(fold, Math.Max(1, r.Width / 9));
+            var r = left ? new Rect(b.Left, b.Top, cw, b.Height) : new Rect(b.Right - cw, b.Top, cw, b.Height);
+            if (r.Width < 0.5) continue;
+            g.FillRectangle(Skin.Brush(shade), r);
+            var pen = new Pen(Skin.Brush(fold), Math.Max(1, r.Width / 9));
             for (int i = 1; i < 4; i++)
             {
-                float x = r.Left + r.Width * i / 4;
-                g.DrawLine(pen, x, r.Top, x, r.Bottom);
+                double x = r.Left + r.Width * i / 4;
+                g.DrawLine(pen, new Point(x, r.Top), new Point(x, r.Bottom));
             }
         }
-        using var valance = new SolidBrush(fold);
-        g.FillRectangle(valance, b.Left, b.Top, b.Width, Math.Max(2, b.Height * 0.06f * Math.Min(1, amount * 3)));
+        g.FillRectangle(Skin.Brush(fold), new Rect(b.Left, b.Top, b.Width, Math.Max(2, b.Height * 0.06 * Math.Min(1, amount * 3))));
     }
 
-    static Color Lerp(Color a, Color b, float f) => Color.FromArgb(
-        (int)(a.R + (b.R - a.R) * f), (int)(a.G + (b.G - a.G) * f), (int)(a.B + (b.B - a.B) * f));
+    static Color Lerp(Color a, Color b, double f) => Color.FromRgb(
+        (byte)(a.R + (b.R - a.R) * f), (byte)(a.G + (b.G - a.G) * f), (byte)(a.B + (b.B - a.B) * f));
 
-    void DrawFooter(Graphics g)
+    void DrawFooter(DrawingContext g)
     {
-        using var font = new Font("Segoe UI", 9.5f, FontStyle.Bold);
-        int pad = Theme.S(8), y = Height - Theme.S(30);
-        void Pill(string text, Color color, bool right)
+        var face = new Typeface(Skin.BodyFamily, FontStyle.Normal, FontWeight.Bold);
+        const double pad = 8, side = 14, gap = 10, extra = 6;  // extra: TextRenderer's own side padding
+        double y = H - 30;
+        FormattedText Text(string text, Color color) =>
+            new(text, CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, face, Skin.SmallSize, Skin.Brush(color));
+        void Pill(FormattedText text, double x)
         {
-            if (text.Length == 0) return;
-            var size = TextRenderer.MeasureText(g, text, font);
-            int x = right ? Width - size.Width - pad * 2 - Theme.S(14) : Theme.S(14);
-            var r = new Rectangle(x, y, size.Width + pad * 2, Theme.S(24));
-            using (var bg = Theme.Rounded(r, Theme.S(11)))
-            using (var fill = new SolidBrush(Color.FromArgb(185, 10, 6, 18)))
-                g.FillPath(fill, bg);
-            TextRenderer.DrawText(g, text, font, r, color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            var r = new Rect(x, y, Math.Ceiling(text.Width) + extra + pad * 2, 24);
+            g.DrawGeometry(Skin.Brush(Skin.Argb(185, 10, 6, 18)), null, Skin.Rounded(r, 11));
+            g.DrawText(text, new Point(r.X + (r.Width - text.Width) / 2, r.Y + (r.Height - text.Height) / 2));
         }
-        Pill(BuildId, Theme.CreamDim, false);   // bottom left: the build ID
-        Pill(status, statusOk ? Theme.Good : Theme.Warn, true);   // bottom right: the status
+        // Bottom right: the status. Bottom left: the build ID, shortened with an ellipsis when the window is too narrow
+        // for both.
+        double statusLeft = W - side;
+        if (status.Length > 0)
+        {
+            var text = Text(status, statusOk ? Skin.Good : Skin.Warn);
+            statusLeft = W - side - (Math.Ceiling(text.Width) + extra + pad * 2);
+            Pill(text, statusLeft);
+        }
+        if (BuildId.Length > 0)
+        {
+            var text = Text(BuildId, Skin.CreamDim);
+            double room = statusLeft - gap - side - extra - pad * 2;
+            if (room < 40) return;
+            if (text.Width > room)
+            {
+                text.MaxTextWidth = room;
+                text.MaxLineCount = 1;
+                text.Trimming = TextTrimming.CharacterEllipsis;
+            }
+            Pill(text, side);
+        }
     }
 
     // The build ID, the same as the game's for one build: just the version for a release, else
     // "<version> branch@commit[+diff hash]" (set at build time: InformationalVersion in the csproj).
-    static readonly string BuildId = typeof(MansionScene).Assembly
+    public static readonly string BuildId = typeof(MansionScene).Assembly
         .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
         .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "";
 
     // ----- Input -----
-    string? SignAt(Point p) => signs.LastOrDefault(sg => sg.Hit != null && sg.Hit.IsVisible(p))?.Id;
+    // The middle of a sign (tests click it).
+    internal Point? SignCenter(string id) =>
+        signs.FirstOrDefault(sg => sg.Id == id) is { } sg ? Map(sg.Points.Average(p => p.X), sg.Points.Average(p => p.Y)) : null;
 
-    protected override void OnMouseMove(MouseEventArgs e)
+    string? SignAt(Point p) => signs.LastOrDefault(sg => sg.Hit != null && sg.Hit.FillContains(p))?.Id;
+
+    protected override void OnPointerMoved(PointerEventArgs e)
     {
-        base.OnMouseMove(e);
-        var now = SignAt(e.Location);
+        base.OnPointerMoved(e);
+        var now = SignAt(e.GetPosition(this));
         if (now == hover) return;
         hover = now;
-        Cursor = hover != null ? Cursors.Hand : Cursors.Default;
-        Invalidate();
+        Cursor = hover != null ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+        InvalidateVisual();
     }
 
-    protected override void OnMouseLeave(EventArgs e)
+    protected override void OnPointerExited(PointerEventArgs e)
     {
-        base.OnMouseLeave(e);
+        base.OnPointerExited(e);
         if (hover == null) return;
         hover = null;
-        Invalidate();
+        InvalidateVisual();
     }
 
-    protected override void OnMouseClick(MouseEventArgs e)
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        base.OnMouseClick(e);
-        if (e.Button == MouseButtons.Left && SignAt(e.Location) is string id) SignClicked?.Invoke(id);
+        base.OnPointerPressed(e);
+        Focus();
     }
 
-    protected override void Dispose(bool disposing)
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        if (disposing) timer.Dispose();
-        base.Dispose(disposing);
+        base.OnPointerReleased(e);
+        if (e.InitialPressMouseButton == MouseButton.Left && SignAt(e.GetPosition(this)) is string id) SignClicked?.Invoke(id);
     }
 }

@@ -1,19 +1,37 @@
 using System.Runtime.InteropServices;
+using Rectangle = System.Drawing.Rectangle;
 
 namespace ScoobyReMasked;
 
 // The connected monitors for Settings > Display > Fullscreen monitor, with the same ids, labels, order and matching as
 // the game (aurora-main/lib/window.cpp query_monitors, find_monitor; monitor_labels.hpp): both read Windows' display config.
+// Windows only: the game doesn't pick a fullscreen monitor elsewhere yet (MainWindow.MonitorChoice).
 static class Monitors
 {
     public sealed record Monitor(string Id, string Label);
 
     public static List<Monitor> List()
     {
+        if (!OperatingSystem.IsWindows()) return new List<Monitor>();
         var targets = Targets();
-        var screens = Screen.AllScreens.OrderByDescending(s => s.Primary).Where(s => targets.ContainsKey(s.DeviceName)).ToList();
+        var screens = Screens().OrderByDescending(s => s.Primary).Where(s => targets.ContainsKey(s.DeviceName)).ToList();
         var labels = Labels(screens.Select(s => (targets[s.DeviceName].name, s.Bounds, s.Primary)).ToList());
         return screens.Select((s, i) => new Monitor(targets[s.DeviceName].id, labels[i])).ToList();
+    }
+
+    // The desktop's monitors in Windows' order (what WinForms' Screen.AllScreens gave): device name, bounds, main.
+    static List<(string DeviceName, Rectangle Bounds, bool Primary)> Screens()
+    {
+        var list = new List<(string, Rectangle, bool)>();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (monitor, _, _, _) =>
+        {
+            var info = new MonitorInfoEx { Size = Marshal.SizeOf<MonitorInfoEx>() };
+            if (GetMonitorInfo(monitor, ref info))
+                list.Add((info.Device, Rectangle.FromLTRB(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom),
+                          (info.Flags & 1) != 0 /* MONITORINFOF_PRIMARY */));
+            return true;
+        }, IntPtr.Zero);
+        return list;
     }
 
     // "VS248 (1920x1080, above right)": name, size and place relative to the main monitor. Monitors whose labels would
@@ -128,6 +146,19 @@ static class Monitors
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DevicePath;
     }
 
+    [StructLayout(LayoutKind.Sequential)] struct Rect32 { public int Left, Top, Right, Bottom; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct MonitorInfoEx
+    {
+        public int Size;
+        public Rect32 Monitor, Work;
+        public uint Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string Device;
+    }
+    delegate bool MonitorEnumProc(IntPtr monitor, IntPtr dc, IntPtr rect, IntPtr data);
+
+    [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetMonitorInfoW")] static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfoEx info);
     [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint pathCount, out uint modeCount);
     [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint pathCount, [Out] DisplayPath[] paths, ref uint modeCount, [Out] DisplayMode[] modes, IntPtr topology);
     [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")] static extern int GetSourceName(ref SourceName info);
