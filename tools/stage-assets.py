@@ -248,9 +248,11 @@ def stage(game_dir, required):
         fixes = subprocess.run([sys.executable, "-I", os.path.join(TOOLS, "hd-pack-fixes.py"), pack,
                                 os.path.join(ROOT, "Disc", "DATA")] + (["--required"] if required else []),
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        say(fixes.stdout.decode("utf-8", "replace").rstrip())
+        output = fixes.stdout.decode("utf-8", "replace").rstrip()
+        if output:
+            say(output)
         if fixes.returncode != 0:
-            raise Failure("HD pack fixes failed (exit code %d)" % fixes.returncode)
+            fail("HD pack fixes failed (exit code %d)" % fixes.returncode, required)
     else:
         fail("%s is missing (the built-in HD texture pack): %s not updated"
              % (os.path.join("texture_pack", "ScoobyHD"), pack), required)
