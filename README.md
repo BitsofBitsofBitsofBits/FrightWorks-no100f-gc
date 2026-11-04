@@ -112,7 +112,7 @@ notes. If you're interested, email [therider@unmarkedrider.com](mailto:therider@
 
 ## Building
 
-Windows 10/11 x64 with Python 3 and Git. The build downloads its own toolchain into the repo.
+Windows 10/11 x64 with Python 3.8 or newer and Git. The build downloads its own toolchain into the repo.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1
