@@ -47,7 +47,10 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   `Play\button_icons`, beside the game like a release (`tools\stage-assets.ps1`; only what changed is copied or
   rebuilt; old copies in `Play\UserData` are removed). The game indexes `UserData\texture_replacements` and mods
   first, so those win over the built-in pack. The icons need Python and ImageMagick; without them the build warns and
-  goes on.
+  goes on. The staged copy of the pack is then fixed by `tools\hd-pack-fixes.py` (Python, standard library only): it edits
+  dogerki's file for the Smuggler's Cove sign (#107: no alpha channel, so the signposts drew as opaque planks) by SHA-256,
+  taking the alpha from the disc's own texture in `Disc\DATA` (nothing from the pack or the game is in git; `texture_pack`
+  stays as downloaded). A skipped fix is a log line, or a failure when packaging (`-Required`).
 - `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).
 - `-SkipTranslate` reuses the translated game code. Only use it when you changed native code (`wiicompiled/runtime`,
   `wiicompiled/aurora-main`). **Do a full build** (no `-SkipTranslate`) when you add or remove a native override
@@ -61,7 +64,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   copy `Play\`'s exe, DLLs, `dsp_coef.bin`, `button_icons` and `texture_replacements` into a folder named `data`
   (no `portable.txt`), with `FrightWorks.exe` beside it.
 - Packaging a release zip: `tools\package-scooby.ps1 -Build -Zip` → `dist\`. It also needs ImageMagick (`magick`) on
-  PATH and the HD texture pack in `texture_pack\ScoobyHD` (not in git).
+  PATH, the HD texture pack in `texture_pack\ScoobyHD` (not in git) and the extracted disc in `Disc\DATA`: the pack fix
+  (`tools\hd-pack-fixes.py`, run with `--required`) stops the packaging if it can't be applied.
 - **Installer** (Velopack): `tools\package-scooby.ps1 -Installer` → `dist\installer\`: `FrightWorks-win-Setup.exe`,
   `FrightWorks-<ver>-full.nupkg`, a `-delta.nupkg` against the previous release, and `releases.win.json` /
   `assets.win.json`. It first runs `vpk download github` so the delta can be made against the latest GitHub release.

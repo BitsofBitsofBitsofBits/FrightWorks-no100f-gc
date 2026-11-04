@@ -86,6 +86,19 @@ if (Test-Path -LiteralPath $packSource) {
     Fail "texture_pack\ScoobyHD is missing (the built-in HD texture pack): $pack not updated"
 }
 
+# Fixes to dogerki's files in the game folder's copy (the mirror above put the originals back; texture_pack stays as
+# downloaded). A skipped fix is a log line, or a failure when packaging (-Required).
+if (Test-Path -LiteralPath $pack) {
+    $py = Get-Command python, python3, py -CommandType Application -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notmatch '\\Microsoft\\WindowsApps\\' } | Select-Object -First 1
+    if (-not $py) { Fail "HD pack fixes need Python on PATH: $pack keeps the pack's own files" }
+    else {
+        & $py.Source -I (Join-Path $PSScriptRoot 'hd-pack-fixes.py') $pack (Join-Path $root 'Disc\DATA') @(if ($Required) { '--required' })
+        if ($LASTEXITCODE -ne 0) { Fail "HD pack fixes failed (exit code $LASTEXITCODE)" }
+        $global:LASTEXITCODE = 0
+    }
+}
+
 # 2. Button prompt icons, drawn from tools\button-art over the HD pack's layout. Rebuilt when the tool or the art is
 # newer than the icons (or the folder has the old layout).
 $icons = Join-Path $GameDir 'button_icons'
