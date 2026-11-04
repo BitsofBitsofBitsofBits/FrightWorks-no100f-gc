@@ -2478,6 +2478,10 @@ void aurora_set_background_input(bool value) {
 }
 void aurora_set_display_mode(AuroraDisplayMode mode) { aurora::window::set_display_mode(mode); }
 AuroraDisplayMode aurora_get_display_mode() { return aurora::window::get_display_mode(); }
+uint32_t aurora_get_monitors(AuroraMonitor* monitors, uint32_t maxCount) {
+  return aurora::window::get_monitors(monitors, maxCount);
+}
+void aurora_set_fullscreen_monitor(const char* id) { aurora::window::set_fullscreen_monitor(id); }
 void aurora_set_cutout_mode(int mode) {
 #ifdef AURORA_ENABLE_GX
   if (mode >= 0 && mode <= static_cast<int>(aurora::gx::CutoutMode::TwoPassAll))

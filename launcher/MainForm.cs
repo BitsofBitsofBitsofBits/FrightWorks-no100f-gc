@@ -303,6 +303,17 @@ sealed class MainForm : Form
         }
         Row("Window", "display_mode", new[] { ("Borderless fullscreen", "\"borderless\""), ("Window", "\"windowed\""), ("Exclusive fullscreen", "\"exclusive\"") }, "borderless");
 
+        // A saved monitor that isn't connected stays selected and saved, so it works again when plugged back in. One found
+        // by model on another port keeps its saved id: both mean the same monitor to the game.
+        var monitors = Monitors.List();
+        string savedMonitor = cfg.Get("video", "fullscreen_display") ?? "";
+        if (savedMonitor.Length == 0) savedMonitor = "auto";
+        var savedMatch = Monitors.Find(monitors, savedMonitor);
+        var monitorOptions = new List<(string text, string raw)> { ("Automatic (where the game window is)", "\"auto\"") };
+        foreach (var m in monitors) monitorOptions.Add((m.Label, "\"" + (m == savedMatch ? savedMonitor : m.Id) + "\""));
+        if (savedMonitor != "auto" && savedMatch == null) monitorOptions.Add(("Saved monitor (not connected)", "\"" + savedMonitor + "\""));
+        Row("Fullscreen monitor", "fullscreen_display", monitorOptions.ToArray(), "auto");
+
         // Resolution: refilled when frame interpolation crosses 60 fps. A missing or unknown value is the game's 1080p.
         var resolutionBox = new ThemedCombo();
         var shownResolutions = Resolutions;
@@ -344,8 +355,9 @@ sealed class MainForm : Form
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Controls.Add(table);
         body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
-                               "resolution, picture shape, window and frame interpolation settings too, and more (sound, controls); " +
-                               "F11 switches between fullscreen and a window, and F2 saves a screenshot."));
+                               "resolution, picture shape, window, fullscreen monitor and frame interpolation settings too, and more (sound, controls); " +
+                               "F11 switches between fullscreen and a window, and F2 saves a screenshot. " +
+                               "Fullscreen monitor also applies when F11 goes fullscreen from a window."));
 
         // Experimental: F10's Smoothness > Frame interpolation. Going above 60 fps at 6x or 8x drops the resolution to
         // 4x, as F10 does.

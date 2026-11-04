@@ -132,6 +132,7 @@ int g_displayMode = [] {
     }
     return static_cast<int>(AURORA_DISPLAY_MODE_WINDOWED);
 }();
+std::string g_fullscreenMonitor = RuntimeConfigFile::FullscreenDisplay();
 bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(false);  // off unless turned on
@@ -1302,6 +1303,58 @@ void DrawVideoSettings() {
         Hint("Requests the closest native-resolution display mode to the output frame rate (60 Hz, or the frame "
              "interpolation target).");
     }
+#if defined(_WIN32)
+    // Same row as the launcher's Settings > Display. The list is read when F10 first draws it and each time it opens.
+    static std::vector<AuroraMonitor> monitors;
+    static bool monitorsRead = false;
+    const auto readMonitors = [] {
+        std::array<AuroraMonitor, 16> found{};
+        const uint32_t count = aurora_get_monitors(found.data(), static_cast<uint32_t>(found.size()));
+        monitors.assign(found.begin(), found.begin() + count);
+        monitorsRead = true;
+    };
+    if (!monitorsRead) {
+        readMonitors();
+    }
+    static constexpr const char* kAutomaticMonitor = "Automatic (where the game window is)";
+    const bool automaticMonitor = g_fullscreenMonitor.empty() || g_fullscreenMonitor == "auto";
+    const char* monitorPreview = automaticMonitor ? kAutomaticMonitor : "Saved monitor (not connected)";
+    for (const AuroraMonitor& monitor : monitors) {
+        if (monitor.selected) {
+            monitorPreview = monitor.label;
+        }
+    }
+    std::string pickedMonitor;
+    RowLabel("Fullscreen monitor", labelWidth, controlWidth);
+    if (ImGui::BeginCombo("##fullscreenmonitor", monitorPreview)) {
+        if (ImGui::IsWindowAppearing()) {
+            readMonitors();
+        }
+        if (ImGui::Selectable(kAutomaticMonitor, automaticMonitor)) {
+            pickedMonitor = "auto";
+        }
+        for (const AuroraMonitor& monitor : monitors) {
+            ImGui::PushID(monitor.id);
+            if (ImGui::Selectable(monitor.label, monitor.selected)) {
+                pickedMonitor = monitor.id;
+            }
+            if (monitor.selected) {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    if (!pickedMonitor.empty()) {
+        g_fullscreenMonitor = pickedMonitor;
+        aurora_set_fullscreen_monitor(g_fullscreenMonitor.c_str());
+        RuntimeConfigFile::SetFullscreenDisplay(g_fullscreenMonitor);
+        readMonitors();
+    }
+    if (g_displayMode == AURORA_DISPLAY_MODE_WINDOWED) {
+        Hint("Used when the game goes fullscreen (F11 or Display mode).");
+    }
+#endif
 
     SectionTitle("Smoothness");
     constexpr std::array<const char*, 3> kFrameInterpolationModes{
@@ -2315,6 +2368,7 @@ void InitializeRuntimeSettings() noexcept {
     aurora_set_frame_interpolation_fps(targetFps);
     AuroraSetTexturePatches(RuntimeConfigFile::SpinningCoins(true));
     aurora_set_vsync(g_vsync.load());
+    aurora_set_fullscreen_monitor(g_fullscreenMonitor.c_str());
     aurora_set_display_mode(static_cast<AuroraDisplayMode>(g_displayMode));
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);

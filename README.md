@@ -70,7 +70,8 @@ program only; your saves and settings stay.
 Settings are in the launcher (**Settings**) and in game (**F10**, or the controller's **Back** / **Select** button, as
 long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
 screenshot and **F1** opens this page in your browser. The title screen and main menu list
-these keys in the corner.
+these keys in the corner. With more than one monitor, **Settings** > **Display** > **Fullscreen monitor** (or **F10** >
+Video) picks the one fullscreen uses.
 
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
 free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
