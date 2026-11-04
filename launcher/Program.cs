@@ -33,6 +33,19 @@ static class Program
                 return 1;
             }
         }
+        // Errors on other threads (a timer, the thread pool, a native callback) would end the process with no message. The
+        // runtime stops the process when this handler returns, so show the dialog (Quit only) and wait for the answer; on the
+        // UI thread's own death the dialog can't be shown, so the error goes to stderr. UI thread errors that handlers and
+        // posted jobs leave uncaught are App's (Dispatcher.UnhandledException), unawaited tasks Fault.Watch's.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is not Exception ex) { Console.Error.WriteLine(e.ExceptionObject); return; }
+            Console.Error.WriteLine(ex);
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess() || Avalonia.Application.Current == null) return;
+            try { Fault.Report(ex, canContinue: false).Wait(TimeSpan.FromMinutes(10)); } catch (Exception) { }
+        };
+        // A faulted task nobody awaited: only noted (it doesn't end the process), the ones we start go through Fault.Watch.
+        TaskScheduler.UnobservedTaskException += (_, e) => { Console.Error.WriteLine(e.Exception); e.SetObserved(); };
         return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 

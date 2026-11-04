@@ -81,11 +81,17 @@ sealed class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // Anything a handler or posted job throws on the UI thread and nothing caught: ask instead of closing the launcher.
+        Dispatcher.UIThread.UnhandledException += (_, e) =>
+        {
+            e.Handled = true;
+            Fault.Report(e.Exception).Watch();
+        };
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
             var args = desktop.Args ?? Array.Empty<string>();
-            Dispatcher.UIThread.Post(() => _ = Start(desktop, args));
+            Dispatcher.UIThread.Post(() => Start(desktop, args).Watch());
         }
         base.OnFrameworkInitializationCompleted();
     }
@@ -111,8 +117,77 @@ sealed class App : Application
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine(e);
+            // Nothing to carry on with before the window is up: say what went wrong, then close.
+            await Fault.Report(e, canContinue: false);
             desktop.Shutdown(1);
         }
+    }
+}
+
+// Errors nobody caught. Like the old launcher (Windows Forms' own handler), the player gets a dialog naming the problem with
+// Continue or Quit instead of a launcher that vanishes. Hooked up in App (UI thread jobs and handlers), Program (other
+// threads) and Watch (tasks started and not awaited: `_ = Task()` hides their exceptions).
+static class Fault
+{
+    static bool showing;
+
+    // Tests set this to look at the error instead of opening a dialog.
+    internal static Func<Exception, Task>? Override;
+
+    // The window the dialog sits over: the launcher's, or (headless tests have no desktop lifetime) the one a test names.
+    internal static Window? Owner;
+
+    // Runs the task for its side effects; if it fails, reports it. Use instead of `_ = Task()`.
+    public static async void Watch(this Task task)
+    {
+        try { await task; }
+        catch (OperationCanceledException) { }
+        catch (Exception e) { await Report(e); }
+    }
+
+    // Shows the error on the UI thread. Returns when the player has answered; Quit closes the launcher (exit code 1).
+    // canContinue = false (the program is going down anyway, or nothing is up yet): the only button is Quit.
+    public static async Task Report(Exception e, bool canContinue = true)
+    {
+        try
+        {
+            Console.Error.WriteLine(e);
+            if (!Dispatcher.UIThread.CheckAccess())
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => Report(e, canContinue));
+                return;
+            }
+            if (Override != null) { await Override(e); return; }
+            if (showing) return;  // one question at a time: a repeating fault would stack dialogs
+            showing = true;
+            try
+            {
+                var desktop = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+                var owner = (Owner ?? desktop?.MainWindow) is { IsVisible: true } w ? w : null;
+                var stack = string.Join("\n", (e.StackTrace ?? "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).Take(4));
+                var text = new List<string>
+                {
+                    "The launcher hit an unexpected error:\n" + e.Message,
+                    e.GetType().FullName + (canContinue ? "\n\nContinue tries to carry on with the launcher; Quit closes it." : ""),
+                };
+                if (stack.Length > 0) text.Add(stack);
+                var buttons = canContinue ? new[] { ("Continue", true), ("Quit", false) } : new[] { ("Quit", true) };
+                int pick = await Dialogs.Choose(owner, MainWindow.AppTitle, "Something went wrong", text, buttons);
+                if (!canContinue || pick == 1) Quit();  // the dialog's X or Escape (-1) carries on, like Continue
+            }
+            finally { showing = false; }
+        }
+        catch (Exception again)
+        {
+            // The dialog itself failed: nothing left to show it with.
+            Console.Error.WriteLine(again);
+            Quit();
+        }
+    }
+
+    static void Quit()
+    {
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(1);
+        else Environment.Exit(1);
     }
 }

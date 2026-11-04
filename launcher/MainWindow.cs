@@ -65,7 +65,7 @@ sealed class MainWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
         scene = new MansionScene(shotDir == null && MansionScene.AnimationsEnabled(), shotDir == null ? Environment.TickCount : 1);
-        scene.SignClicked += id => _ = OnSign(id);
+        scene.SignClicked += id => OnSign(id).Watch();
         stage = new Stage(scene);
         Content = stage;
 
@@ -80,14 +80,14 @@ sealed class MainWindow : Window
             if (e.Key == Key.Escape && boards.Values.Any(b => b.IsVisible)) { CloseBoards(); e.Handled = true; }
         };
         // Connected controllers: shown on Settings > Controls; an Xbox pad asks for the layout once.
-        padTimer.Tick += (_, _) => _ = RefreshGamepads();
+        padTimer.Tick += (_, _) => RefreshGamepads().Watch();
         Closed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
         Opened += (_, _) =>
         {
             if (shotDir != null) { Dispatcher.UIThread.Post(() => TakeShots(shotDir), DispatcherPriority.Background); return; }
             gamepads.Start();
             padTimer.Start();
-            if (updater.CanCheck && updater.CheckAtStart) _ = CheckForUpdates(manual: false);
+            if (updater.CanCheck && updater.CheckAtStart) CheckForUpdates(manual: false).Watch();
         };
     }
 
@@ -450,7 +450,7 @@ sealed class MainWindow : Window
         }
         body.Children.Add(new LeftCap(480, frame));
         var row = Row();
-        row.Children.Add(new PlankButton("Open the mods folder", (_, _) => _ = OpenFolder(modsDir)));
+        row.Children.Add(new PlankButton("Open the mods folder", (_, _) => OpenFolder(modsDir).Watch()));
         row.Children.Add(new PlankButton("Refresh", (_, _) => Fill()));
         body.Children.Add(row);
         Fill();
@@ -463,7 +463,7 @@ sealed class MainWindow : Window
         discStatus = FieldLabel("");
         discStatus.MaxWidth = 520;
         body.Children.Add(discStatus);
-        chooseDisc = new PlankButton("Choose disc image", (_, _) => _ = ChooseDisc(), primary: true);
+        chooseDisc = new PlankButton("Choose disc image", (_, _) => ChooseDisc().Watch(), primary: true);
         body.Children.Add(chooseDisc);
         progress = new ThemedBar { IsVisible = false };
         body.Children.Add(new LeftCap(480, progress));
@@ -485,7 +485,7 @@ sealed class MainWindow : Window
                                "corner. Applies the next time the game starts."));
         ffmpegStatus = Note("");
         body.Children.Add(ffmpegStatus);
-        ffmpegButton = new PlankButton("Download ffmpeg", (_, _) => _ = DownloadFfmpeg());
+        ffmpegButton = new PlankButton("Download ffmpeg", (_, _) => DownloadFfmpeg().Watch());
         body.Children.Add(ffmpegButton);
         ffmpegBar = new ThemedBar { IsVisible = false };
         body.Children.Add(new LeftCap(480, ffmpegBar));
@@ -495,19 +495,19 @@ sealed class MainWindow : Window
         var folders = Row();
         folders.MaxWidth = 520;  // wrap instead of widening the page
         folders.HorizontalAlignment = HorizontalAlignment.Left;
-        folders.Children.Add(new PlankButton("Saves", (_, _) => _ = OpenFolder(paths.Saves)));
-        folders.Children.Add(new PlankButton("Settings and mods", (_, _) => _ = OpenFolder(userData)));
-        folders.Children.Add(new PlankButton("Screenshots", (_, _) => _ = OpenFolder(paths.Screenshots)));
-        folders.Children.Add(new PlankButton("Videos", (_, _) => _ = OpenFolder(paths.Videos)));
-        folders.Children.Add(new PlankButton("Game", (_, _) => _ = OpenFolder(play)));
+        folders.Children.Add(new PlankButton("Saves", (_, _) => OpenFolder(paths.Saves).Watch()));
+        folders.Children.Add(new PlankButton("Settings and mods", (_, _) => OpenFolder(userData).Watch()));
+        folders.Children.Add(new PlankButton("Screenshots", (_, _) => OpenFolder(paths.Screenshots).Watch()));
+        folders.Children.Add(new PlankButton("Videos", (_, _) => OpenFolder(paths.Videos).Watch()));
+        folders.Children.Add(new PlankButton("Game", (_, _) => OpenFolder(play).Watch()));
         body.Children.Add(folders);
         savesNote = Note("");
         body.Children.Add(savesNote);
         var saveRow = Row();
         saveRow.MaxWidth = 520;
         saveRow.HorizontalAlignment = HorizontalAlignment.Left;
-        saveRow.Children.Add(new PlankButton("Change the saves folder", (_, _) => _ = ChooseSavesFolder()));
-        savesDefault = new PlankButton("Back to the usual folder", (_, _) => _ = MoveSaves(null));
+        saveRow.Children.Add(new PlankButton("Change the saves folder", (_, _) => ChooseSavesFolder().Watch()));
+        savesDefault = new PlankButton("Back to the usual folder", (_, _) => MoveSaves(null).Watch());
         saveRow.Children.Add(savesDefault);
         saveRow.Children.Add(new PlankButton("Copy from an earlier version", async (_, _) =>
         {
@@ -524,7 +524,7 @@ sealed class MainWindow : Window
         {
             body.Children.Add(UpdateBox());
             body.Children.Add(updateStatus);
-            checkNow = new PlankButton("Check now", (_, _) => _ = CheckForUpdates(manual: true));
+            checkNow = new PlankButton("Check now", (_, _) => CheckForUpdates(manual: true).Watch());
             body.Children.Add(checkNow);
             ShowUpdateState(null);
         }
@@ -810,7 +810,7 @@ sealed class MainWindow : Window
             : "F3 videos need ffmpeg, which isn't installed. The launcher can download it (about 200 MB, the free " +
               "win64 build from github.com/BtbN/FFmpeg-Builds) into " + FfmpegSetup.InstallDir(paths) + ".";
         ffmpegStatus.Foreground = Brush(found != null ? Good : Warn);
-        if (found == null && offerDownload) _ = OfferFfmpeg();
+        if (found == null && offerDownload) OfferFfmpeg().Watch();
     }
 
     async Task OfferFfmpeg()
@@ -938,7 +938,7 @@ sealed class MainWindow : Window
         scene.SetStatus("The game is running", true);
         var started = game;
         started.EnableRaisingEvents = true;
-        started.Exited += (_, _) => Dispatcher.UIThread.Post(() => _ = GameExited(started));
+        started.Exited += (_, _) => Dispatcher.UIThread.Post(() => GameExited(started).Watch());
         WindowState = WindowState.Minimized;
     }
 

@@ -270,6 +270,53 @@ static class LauncherLayoutTests
             Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
         }
 
+        // ----- A Config.toml that can't be written: the launcher asks Continue or Quit, it doesn't close -----
+        string beforeReadOnly = File.ReadAllText(config);
+        File.SetAttributes(config, FileAttributes.ReadOnly);
+        Fault.Owner = window;
+        try
+        {
+            Dispatcher.UIThread.Post(() => boxes[0].SelectedIndex = 0);  // a changed setting, run as a posted job
+            Window? shown = null;
+            for (var waited = System.Diagnostics.Stopwatch.StartNew(); shown == null && waited.Elapsed.TotalSeconds < 5;)
+            {
+                Thread.Sleep(10);
+                Pump();
+                shown = window.OwnedWindows.FirstOrDefault();
+            }
+            Check(shown != null, "A setting that can't be saved showed no dialog");
+            Window fault = shown!;
+            var faultText = string.Join(" | ", Descendants(fault).OfType<TextBlock>().Select(t => t.Text));
+            Check(faultText.Contains("Config.toml") && faultText.Contains("UnauthorizedAccessException"), "The dialog doesn't name the problem: " + faultText);
+            var faultButtons = Descendants(fault).OfType<PlankButton>().Select(b => b.Text).ToList();
+            Check(faultButtons.SequenceEqual(new[] { "Continue", "Quit" }), "The dialog's buttons are " + string.Join(",", faultButtons));
+            var @continue = Descendants(fault).OfType<PlankButton>().Single(b => b.Text == "Continue");
+            var press = @continue.TranslatePoint(new Point(@continue.Bounds.Width / 2, @continue.Bounds.Height / 2), fault)!.Value;
+            fault.MouseMove(press);
+            fault.MouseDown(press, MouseButton.Left);
+            fault.MouseUp(press, MouseButton.Left);
+            Pump();
+            Check(!fault.IsVisible && window.IsVisible, "Continue did not close the dialog and leave the launcher open");
+            Check(File.ReadAllText(config) == beforeReadOnly, "A failed save changed the configuration");
+
+            // An unawaited task that fails reports too (the `_ = Task()` handlers), and a second fault doesn't stack dialogs.
+            var faults = new List<Exception>();
+            Fault.Override = e => { faults.Add(e); return Task.CompletedTask; };
+            Task.Run(() => throw new IOException("background task")).Watch();
+            for (var waited = System.Diagnostics.Stopwatch.StartNew(); faults.Count == 0 && waited.Elapsed.TotalSeconds < 5;) { Thread.Sleep(10); Pump(); }
+            Check(faults.Count == 1 && faults[0].Message == "background task", "A failed unawaited task was not reported");
+            Dispatcher.UIThread.Post(() => throw new InvalidOperationException("posted job"));
+            Pump();
+            Check(faults.Count == 2 && faults[1].Message == "posted job", "An exception in a posted job was not reported");
+            Check(window.IsVisible && !window.OwnedWindows.Any(), "A reported fault left the launcher closed or a dialog behind");
+        }
+        finally
+        {
+            Fault.Override = null;
+            Fault.Owner = null;
+            File.SetAttributes(config, FileAttributes.Normal);
+        }
+
         // ----- The Xbox-only button rows follow the layout -----
         window.layoutBox.SelectedIndex = 0;
         window.showControlsTab!(true);
