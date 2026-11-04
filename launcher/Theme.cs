@@ -228,6 +228,12 @@ sealed class PlankButton : Button
 // Dark drop-down list in the board's colours.
 sealed class ThemedCombo : ComboBox
 {
+    internal void CommitSelection(int index)
+    {
+        SelectedIndex = index;
+        OnSelectionChangeCommitted(EventArgs.Empty);
+    }
+
     public ThemedCombo()
     {
         DropDownStyle = ComboBoxStyle.DropDownList;

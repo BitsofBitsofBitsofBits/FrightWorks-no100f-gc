@@ -28,7 +28,10 @@ may follow.
   button prompts match your Xbox, PlayStation or Nintendo controller and follow remapped face buttons
 - Optional original Xbox controls: X head smash, B dig / talk and back in menus, LB soap bubble, RB sneak (together with
   the triggers, as on the Xbox); the button prompts and tutorial hints follow. Black and White can also go on other
-  buttons. The launcher detects an Xbox controller and asks once which layout to use
+  buttons. The launcher can auto-select **Original Xbox** for SDL-detected Xbox controllers and **GameCube** for
+  GameCube controllers. Other types or conflicting connected controllers keep the current layout. A manual layout
+  choice turns auto-select off; **Settings > Controls > Auto-select controller layout** enables it again. Existing
+  saved layouts are kept until you answer a one-time opt-in question
 - GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures
 - The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page

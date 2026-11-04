@@ -24,7 +24,7 @@ sealed class MainForm : Form
     PlankButton savesDefault = null!, checkNow = null!;
     readonly Updater updater;
     bool updating;  // checking, or downloading / applying an update: Play waits
-    bool asking;    // a question (Xbox layout, update) is open: the other waits, so one never disables the other
+    bool asking;    // a question (controller layout, update) is open: the other waits, so one never disables the other
     PlankButton ffmpegButton = null!;
     CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
     Action<bool>? showControlsTab;
@@ -32,6 +32,8 @@ sealed class MainForm : Form
     readonly ControllerNavigation controllerNavigation;
     Label padStatus = null!;
     ThemedCombo layoutBox = null!;
+    CheckBox autoLayout = null!;
+    bool showingLayout;
     readonly List<(PadMapping.Row Row, Label Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
     bool gameOwnsControllers;
@@ -74,7 +76,7 @@ sealed class MainForm : Form
         {
             if (e.KeyCode == Keys.Escape && boards.Values.Any(b => b.Visible)) { CloseBoards(); e.Handled = true; }
         };
-        // Connected controllers: shown on Settings > Controls; an Xbox pad asks for the layout once.
+        // Connected controllers and automatic layout selection.
         var padTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         padTimer.Tick += (_, _) => RefreshGamepads();
         FormClosed += (_, _) => { padTimer.Dispose(); controllerNavigation.Dispose(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
@@ -408,7 +410,7 @@ sealed class MainForm : Form
 
     void BuildControls(FlowLayoutPanel body)
     {
-        body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
+        body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away. " +
                                "Change the buttons below, or in the game with F10 > Controls."));
         body.Controls.Add(Note("Launcher: D-pad / left stick moves focus; South (A / Cross / Nintendo B) confirms; East backs out. " +
                                "Bumpers move to the previous / next control; right stick scrolls. Select a dropdown to browse its choices, " +
@@ -422,11 +424,39 @@ sealed class MainForm : Form
         layoutBox = new ThemedCombo();
         layoutBox.Items.Add("GameCube");
         layoutBox.Items.Add("Original Xbox");
-        layoutBox.SelectedIndex = new GameConfig(configPath).Get("controller", "layout") == "xbox_original" ? 1 : 0;
-        layoutBox.SelectedIndexChanged += (_, _) => { SaveLayout(layoutBox.SelectedIndex == 1); ShowXboxRows(); };
+        layoutBox.SelectedIndexChanged += (_, _) => ShowXboxRows();
+        layoutBox.SelectionChangeCommitted += (_, _) =>
+        {
+            var c = new GameConfig(configPath);
+            string? layout = layoutBox.SelectedIndex switch
+            {
+                0 => "gamecube", 1 => "xbox_original", _ => c.Get("controller", "layout"),
+            };
+            if (layout == null) return;
+            ControllerLayout.SetManual(c, layout);
+            c.Save();
+            ShowControllerLayout(c);
+        };
         table.Controls.Add(FieldLabel("Layout"));
         table.Controls.Add(layoutBox);
         body.Controls.Add(table);
+        autoLayout = new CheckBox
+        {
+            Text = "Auto-select controller layout", AutoSize = true, ForeColor = Cream, BackColor = BoardBottom,
+            Font = Body, Cursor = Cursors.Hand, Margin = S(0, 4, 0, 6),
+        };
+        autoLayout.CheckedChanged += (_, _) =>
+        {
+            if (showingLayout) return;
+            var c = new GameConfig(configPath);
+            ControllerLayout.SetAutomatic(c, autoLayout.Checked);
+            c.Save();
+        };
+        body.Controls.Add(autoLayout);
+        body.Controls.Add(Note("Auto-select: Xbox controllers use Original Xbox; GameCube controllers use GameCube. " +
+                              "Other types, or controllers needing different layouts, keep the current layout. " +
+                              "Choosing a layout yourself turns auto-select off; turn it on again here."));
+        ShowControllerLayout(new GameConfig(configPath));
         body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
                                "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black); the bumpers work together with the " +
                                "triggers, and the hints in the game name these buttons. Black and White can go on other buttons below. " +
@@ -1020,11 +1050,23 @@ sealed class MainForm : Form
         foreach (var (row, _, box) in padRows) ShowPadValue(row, box, c.Get("controller", row.Key));
     }
 
-    void SaveLayout(bool original)
+    void ShowControllerLayout(GameConfig config)
     {
-        var c = new GameConfig(configPath);
-        c.SetString("controller", "layout", original ? "xbox_original" : "gamecube");
-        c.Save();
+        showingLayout = true;
+        try
+        {
+            autoLayout.Checked = ControllerLayout.Automatic(config);
+            string? layout = config.Get("controller", "layout");
+            string label = ControllerLayout.Describe(layout);
+            if (layoutBox.Text != label)
+            {
+                while (layoutBox.Items.Count > 2) layoutBox.Items.RemoveAt(2);
+                int index = layoutBox.Items.IndexOf(label);
+                layoutBox.SelectedIndex = index < 0 ? layoutBox.Items.Add(label) : index;
+            }
+            ShowXboxRows();
+        }
+        finally { showingLayout = false; }
     }
 
     void RefreshGamepads()
@@ -1042,47 +1084,67 @@ sealed class MainForm : Form
             : gamepads.Error != null ? "Controller warning: " + gamepads.Error
             : pads.Count == 0 ? "No controller connected."
             : "Connected: " + string.Join(", ", pads.Select(p => $"{p.Name} ({Gamepads.Describe(p.Kind)})"));
-        // An Xbox pad and no layout chosen yet (key absent): ask once per launcher start.
-        var xbox = pads.FirstOrDefault(p => p.Kind == Gamepads.Kind.Xbox);
-        if (xbox == null || askedLayout || asking || Form.ActiveForm != this ||
-            WindowState == FormWindowState.Minimized || new GameConfig(configPath).Get("controller", "layout") != null) return;
-        askedLayout = true;
-        bool? original;
-        asking = true;
-        try { original = AskXboxLayout(xbox.Name); }
-        finally { asking = false; }
-        if (original == null) return;
-        SaveLayout(original.Value);
-        layoutBox.SelectedIndex = original.Value ? 1 : 0;
+        RefreshControllerLayout(pads, ControllerNavigation.ForegroundForm, running);
     }
 
-    // true = original Xbox layout, false = GameCube layout, null = closed without choosing (asked again next start).
-    internal bool? AskXboxLayout(string padName)
+    internal void RefreshControllerLayout(IReadOnlyList<Gamepads.Pad> pads, Form? foreground, bool running)
     {
-        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        if (running || foreground != this || !Enabled || !Visible || asking || WindowState == FormWindowState.Minimized) return;
+        try
+        {
+            var config = new GameConfig(configPath);
+            if (ControllerLayout.NeedsConsent(config) && !askedLayout && ControllerLayout.Match(pads) is string match)
+            {
+                askedLayout = true;
+                bool? automatic;
+                asking = true;
+                try { automatic = AskAutoLayout(string.Join(", ", pads.Select(p => p.Name)), config.Get("controller", "layout"), match); }
+                finally { asking = false; }
+                if (automatic == null) return;
+                config = new GameConfig(configPath);
+                ControllerLayout.SetAutomatic(config, automatic.Value);
+                config.Save();
+                ShowControllerLayout(config);
+                return; // Recheck game/foreground ownership on the next tick before applying the layout.
+            }
+            if (ControllerLayout.ApplyDetected(config, pads)) config.Save();
+            ShowControllerLayout(config);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            padStatus.Text += Environment.NewLine + "Couldn't update the controller layout: " + e.Message;
+            Trace.TraceError("Controller layout: {0}", e);
+        }
+    }
+
+    // Closing/back defers the migration question until another launcher start.
+    internal bool? AskAutoLayout(string padName, string? current, string suggested)
+    {
         using var dialog = new Form
         {
-            Text = "Xbox controller detected", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            Text = "Controller layout", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
             StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, BackColor = BoardBottom, Font = Body,
             AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = S(20, 14, 20, 14), Icon = Icon,
         };
         var body = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = BoardBottom };
-        var title = Title("Play with the original Xbox controls?");
+        var title = Title("Auto-select a controller layout?");
         title.Margin = S(0, 0, 0, 6);
         body.Controls.Add(title);
-        body.Controls.Add(Note($"{padName} is connected. Night of 100 Frights came out on the Xbox too, with its own button layout."));
-        body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk, LT gum, RT run, LB soap bubble, RB sneak. " +
-                               "The bumpers work together with the triggers, like on the Xbox."));
-        body.Controls.Add(Note("GameCube: B head smash, X dig / enter / talk, RB (Z) + a trigger for soap bubble and sneak."));
-        body.Controls.Add(Note("You can change this any time in Settings > Controls or in the game (F10 > Controls)."));
+        body.Controls.Add(Note($"Your saved layout is {ControllerLayout.Describe(current)}. {padName} is connected; " +
+                               $"auto-select would use {ControllerLayout.Describe(suggested)}."));
+        body.Controls.Add(Note("Auto-select matches Xbox to Original Xbox and GameCube to GameCube. Other controller types " +
+                               "keep the current layout. Existing button bindings stay unchanged."));
+        body.Controls.Add(Note("Choosing a layout yourself in Settings > Controls or F10 turns auto-select off. " +
+                               "You can enable it again in Settings > Controls."));
         var row = Row();
         row.Margin = S(0, 8, 0, 0);
         bool? answer = null;
-        row.Controls.Add(new PlankButton("Original Xbox layout", (_, _) => { answer = true; dialog.Close(); }, primary: true));
-        row.Controls.Add(new PlankButton("GameCube layout", (_, _) => { answer = false; dialog.Close(); }));
+        row.Controls.Add(new PlankButton("Use auto-select", (_, _) => { answer = true; dialog.Close(); }));
+        var keep = new PlankButton("Keep my layout", (_, _) => { answer = false; dialog.Close(); });
+        row.Controls.Add(keep);
         body.Controls.Add(row);
         dialog.Controls.Add(body);
-        LauncherDialogs.Show(dialog, this);
+        LauncherDialogs.Show(dialog, this, keep);
         return answer;
     }
 }

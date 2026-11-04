@@ -235,7 +235,9 @@ useful:
   starting the game, or reading/writing the player's settings. It checks neutral-to-arm, deadzone and repeat timing,
   simulated foreground/modal ownership and hotplug transitions, mansion signs, settings tabs and dropdown
   apply/cancel, Mods checkboxes, Extras scrolling, numeric/slider adjustments, confirmation defaults, file/folder
-  selection, text entry and preservation of unrelated config. Screenshots remain in the output directory.
+  selection, text entry and preservation of unrelated config. It also checks reliable controller-type matching,
+  unsupported/conflicting devices, automatic hotplug, one-time migration consent, same-value manual choices,
+  persisted intent and game/foreground gates without real polling. Screenshots remain in the output directory.
   Real hardware, SDL device drivers, actual foreground-window transitions and game-controller handover still
   require a separately allocated human-controller session; automated state assertions are not hardware verification.
 - **Isolated launcher layout regression** (Windows, .NET 10 SDK or newer):
@@ -272,6 +274,26 @@ external applications is outside the launcher, and launcher input stops while th
 Controller input is accepted only by the foreground launcher or one of its owned managed dialogs.
 SDL handles are closed before launching the game and remain paused while this game's processes run (including
 when the launcher starts beside an already-running game). No game button mapping is changed by navigation.
+
+Game layout selection is separate from those navigation buttons. Only `gamecube` (**GameCube**) and `xbox_original`
+(**Original Xbox**) are supported game schemes. Auto-select uses SDL's reported type, not a name substring:
+Xbox 360/One types select Original Xbox; GameCube types select GameCube. PlayStation, Switch, unknown types,
+no controllers, or connected controllers that do not all agree on a supported scheme leave the current layout
+unchanged. No PlayStation/Switch game scheme is invented.
+
+An unchosen layout starts in automatic mode. A pre-existing saved layout with no intent marker prompts once to
+enable auto-select or keep the saved layout, with **Keep my layout** focused by default. Back/close writes nothing
+and defers that question until the next launcher start. Explicit layout selection (even the current value) in the
+launcher or F10 ends automatic mode; the Settings checkbox can re-enable it. `[launcher] auto_controller_layout`
+stores that decision; `auto_controller_layout_value` records the last automatic value so a changed preference
+from an older game is also preserved. Automatic selection never resets custom button bindings or thresholds.
+F10's same-value intent marker requires the matching updated game build; an older game can only be recognized
+when it actually changes the stored layout.
+
+`mkw_runtime_config_tests` additionally accepts an absolute expected fixture `UserData\Config.toml` path to test
+F10's same-value/changed-layout persistence. Run that mode only from a private copy of the test executable with
+`portable.txt` beside it: it rejects a mismatched path before accessing installed user data. The ordinary no-argument
+mode remains parse-only.
 
 ## 8. Looking at the game's code and data
 

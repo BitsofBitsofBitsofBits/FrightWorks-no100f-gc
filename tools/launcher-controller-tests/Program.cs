@@ -31,6 +31,8 @@ static class Tests
         {
             Input();
             Console.WriteLine("PASS input reducer");
+            LayoutMatching(paths);
+            Console.WriteLine("PASS controller type matching, automatic/manual intent and hotplug");
             using var form = new MainForm(dataPaths: paths, enableServices: false);
             form.Show();
             Application.DoEvents();
@@ -41,6 +43,8 @@ static class Tests
             Dialogs(form, fixture);
             Console.WriteLine("PASS confirmations, choices, file/folder browsing and text entry");
             Controls(form);
+            LayoutControls(form, paths);
+            Console.WriteLine("PASS scheme migration, explicit same-value choices and foreground/game gates");
             form.Close();
             Console.WriteLine($"PASS: {assertions} assertions. No SDL polling, game process, player-data writes, or OS changes.");
             return 0;
@@ -71,6 +75,173 @@ static class Tests
         Check(ControllerInput.FromSdl((1u << 0) | (1u << 1) | (1u << 9) | (1u << 10), 0, 0, 0) ==
             (B.Confirm | B.Back | B.Previous | B.Next), "Physical face and bumper mapping independent of game config");
         Check(ControllerInput.FromSdl(15u << 11, 0, 0, 0) == (B.Up | B.Down | B.Left | B.Right), "SDL D-pad mapping");
+    }
+
+    static void LayoutMatching(DataPaths paths)
+    {
+        var xbox = new Gamepads.Pad("Xbox One Controller", Gamepads.Kind.Xbox);
+        var cube = new Gamepads.Pad("GameCube adapter", Gamepads.Kind.GameCube);
+        Check(Gamepads.KindOf(2) == Gamepads.Kind.Xbox && Gamepads.KindOf(3) == Gamepads.Kind.Xbox,
+            "SDL Xbox 360/One types are reliable Xbox classifications");
+        Check(Gamepads.KindOf(11) == Gamepads.Kind.GameCube, "SDL GameCube type");
+        Check(ControllerLayout.Match(new[] { xbox }) == "xbox_original", "Xbox One selects existing Original Xbox scheme");
+        Check(ControllerLayout.Match(new[] { cube }) == "gamecube", "GameCube selects GameCube scheme");
+        Check(ControllerLayout.Match(new[] { xbox, new Gamepads.Pad("Another Xbox", Gamepads.Kind.Xbox) }) == "xbox_original",
+            "Controllers agreeing on a scheme can match");
+        Check(ControllerLayout.Match(new[] { xbox, cube }) == null, "Conflicting supported types do not guess an active device");
+        Check(ControllerLayout.Match(Array.Empty<Gamepads.Pad>()) == null, "Disconnect does not select a default");
+        foreach (var kind in new[] { Gamepads.Kind.Other, Gamepads.Kind.PlayStation, Gamepads.Kind.Switch })
+        {
+            var other = new Gamepads.Pad("Xbox One Controller", kind);
+            Check(ControllerLayout.Match(new[] { other }) == null, "Unsupported type is not inferred from a controller name");
+            Check(ControllerLayout.Match(new[] { xbox, other }) == null, "Mixed unsupported devices do not silently take an Xbox scheme");
+        }
+        for (int type = 0; type <= 12; type++)
+            Check(Gamepads.KindOf(type) == (type is 2 or 3 ? Gamepads.Kind.Xbox :
+                type is 4 or 5 or 6 ? Gamepads.Kind.PlayStation :
+                type is 7 or 8 or 9 or 10 ? Gamepads.Kind.Switch :
+                type == 11 ? Gamepads.Kind.GameCube : Gamepads.Kind.Other), "SDL type classification remains in step with game");
+
+        string file = Path.Combine(paths.UserData, "SchemeTests.toml");
+        var config = new GameConfig(file);
+        Check(ControllerLayout.Automatic(config) && !ControllerLayout.NeedsConsent(config), "Unchosen default is automatic");
+        Check(!ControllerLayout.ApplyDetected(config, Array.Empty<Gamepads.Pad>()) && !File.Exists(file), "No controller creates no config");
+        config.SetString("controller", "a", "north@30,east");
+        config.SetString("controller", "xbox_black", "right_paddle1,left_shoulder");
+        config.SetString("future", "value", "keep");
+        Check(ControllerLayout.ApplyDetected(config, new[] { xbox }), "First supported detection selects a layout");
+        config.Save();
+        config = new GameConfig(file);
+        Check(ControllerLayout.Automatic(config) && config.Get("controller", "layout") == "xbox_original", "Auto mode and scheme persist");
+        Check(!ControllerLayout.ApplyDetected(config, new[] { xbox }), "Steady connected device does not rewrite config");
+        Check(!ControllerLayout.ApplyDetected(config, Array.Empty<Gamepads.Pad>()) &&
+            config.Get("controller", "layout") == "xbox_original", "Disconnect preserves last choice");
+        Check(ControllerLayout.ApplyDetected(config, new[] { cube }) && config.Get("controller", "layout") == "gamecube",
+            "Supported hotplug follows type while automatic");
+        Check(!ControllerLayout.ApplyDetected(config, new[] { xbox, cube }), "Conflicting hotplug keeps current scheme");
+        Check(config.Get("controller", "a") == "north@30,east" &&
+            config.Get("controller", "xbox_black") == "right_paddle1,left_shoulder" &&
+            config.Get("future", "value") == "keep", "Auto choice preserves custom bindings, thresholds, second bindings and unknown settings");
+
+        ControllerLayout.SetManual(config, "gamecube");
+        config.Save();
+        config = new GameConfig(file);
+        Check(!ControllerLayout.Automatic(config) && !ControllerLayout.ApplyDetected(config, new[] { xbox }),
+            "Manual choice of the same layout persists across restart and reconnect");
+        ControllerLayout.SetAutomatic(config, true);
+        Check(ControllerLayout.ApplyDetected(config, new[] { xbox }), "Explicitly re-enabling auto can switch again");
+        config.SetString("controller", "layout", "gamecube");
+        Check(ControllerLayout.ApplyDetected(config, new[] { xbox }) && !ControllerLayout.Automatic(config) &&
+            config.Get("controller", "layout") == "gamecube", "Changed manual preference from an older game ends automatic mode");
+
+        config.Remove("launcher", "auto_controller_layout");
+        Check(ControllerLayout.NeedsConsent(config) && !ControllerLayout.Automatic(config), "Legacy saved choice requires opt-in");
+        Check(!ControllerLayout.ApplyDetected(config, new[] { xbox }) && config.Get("controller", "layout") == "gamecube",
+            "Legacy preference is never overwritten without consent");
+        config.SetString("controller", "layout", "future-layout");
+        Check(ControllerLayout.Describe(config.Get("controller", "layout")) == "(custom) future-layout" &&
+            !ControllerLayout.ApplyDetected(config, new[] { xbox }), "Unknown layout is displayed and preserved");
+        config.Set("launcher", "auto_controller_layout", "future-mode");
+        Check(!ControllerLayout.Automatic(config) && !ControllerLayout.NeedsConsent(config), "Unknown intent value is not replaced by a default");
+        ControllerLayout.SetAutomatic(config, true);
+        Check(!ControllerLayout.ApplyDetected(config, new[] { new Gamepads.Pad("PS5", Gamepads.Kind.PlayStation) }) &&
+            config.Get("controller", "layout") == "future-layout", "Opt-in does not invent a PlayStation scheme");
+    }
+
+    static void OpenControls(MainForm form)
+    {
+        form.CloseControllerBoard();
+        var scene = All(form).OfType<MansionScene>().Single();
+        for (int i = 0; i < 5 && scene.FocusedSign != "settings"; i++) scene.Navigate(B.Down);
+        Press(form, B.Confirm);
+        Click(form, Find<PlankButton>(form, "Controls"));
+    }
+
+    static void LayoutControls(MainForm form, DataPaths paths)
+    {
+        string saved = File.ReadAllText(paths.ConfigPath);
+        var xbox = new[] { new Gamepads.Pad("Xbox One Controller", Gamepads.Kind.Xbox) };
+        var cube = new[] { new Gamepads.Pad("GameCube adapter", Gamepads.Kind.GameCube) };
+        try
+        {
+            using var foreign = new Form();
+            using var modal = new Form { Owner = form };
+            foreach (var target in new Form?[] { null, foreign, modal })
+                form.RefreshControllerLayout(xbox, target, false);
+            form.RefreshControllerLayout(xbox, form, true);
+            form.Enabled = false;
+            form.RefreshControllerLayout(xbox, form, false);
+            form.Enabled = true;
+            form.WindowState = FormWindowState.Minimized;
+            form.RefreshControllerLayout(xbox, form, false);
+            form.WindowState = FormWindowState.Normal;
+            Check(File.ReadAllText(paths.ConfigPath) == saved, "Foreign/modal/no foreground, game, disabled and minimized states cannot migrate or auto-write");
+            WithModal(() => form.RefreshControllerLayout(xbox, form, false), dialog =>
+            {
+                Check(Find<PlankButton>(dialog, "Keep my layout").Focused, "Legacy migration defaults to preserving a saved choice");
+                Shot(dialog, "Layout-migration");
+                Press(dialog, B.Back);
+            });
+            Check(File.ReadAllText(paths.ConfigPath) == saved, "Back defers migration without writing a preference");
+            form.RefreshControllerLayout(xbox, form, false);
+            Check(File.ReadAllText(paths.ConfigPath) == saved, "Cancelled migration does not ask again in the same start");
+
+            using (var next = new MainForm(dataPaths: paths, enableServices: false))
+            {
+                next.Show();
+                Application.DoEvents();
+                WithModal(() => next.RefreshControllerLayout(xbox, next, false), dialog =>
+                    Click(dialog, Find<PlankButton>(dialog, "Use auto-select")));
+                Check(ControllerLayout.Automatic(new GameConfig(paths.ConfigPath)), "Legacy opt-in persists automatic mode");
+                Check(new GameConfig(paths.ConfigPath).Get("controller", "layout") == "gamecube", "Opt-in rechecks ownership before changing layout");
+                next.RefreshControllerLayout(xbox, next, true);
+                Check(new GameConfig(paths.ConfigPath).Get("controller", "layout") == "gamecube", "Game ownership defers a pending auto selection");
+                next.RefreshControllerLayout(xbox, next, false);
+                OpenControls(next);
+                var layout = (ThemedCombo)Field(next, "Layout");
+                var automatic = Find<CheckBox>(next, "Auto-select controller layout");
+                Check(layout.Text == "Original Xbox" && automatic.Checked, "Auto-detected scheme and mode are visible");
+                Find<Label>(next, "Looking for controllers...").Text = "Offline sample: Xbox One Controller (Xbox)";
+                ControllerNavigation.Focus(automatic);
+                Shot(next, "Xbox-auto-layout");
+                WithModal(() => Click(next, layout), dialog => Press(dialog, B.Back));
+                Check(automatic.Checked, "Cancelling a scheme chooser keeps automatic mode");
+                WithModal(() => Click(next, layout), dialog => Press(dialog, B.Confirm));
+                Check(!automatic.Checked && !ControllerLayout.Automatic(new GameConfig(paths.ConfigPath)),
+                    "Confirming an already-selected scheme is an explicit manual choice");
+                next.RefreshControllerLayout(cube, next, false);
+                Check(layout.Text == "Original Xbox", "Manual choice survives replacement-device hotplug");
+                Click(next, automatic);
+                next.RefreshControllerLayout(cube, next, false);
+                Check(layout.Text == "GameCube" && automatic.Checked, "Controller-accessible checkbox re-enables matching");
+                Shot(next, "Auto-layout");
+                layout.CommitSelection(0);
+                Check(!automatic.Checked, "Native/keyboard commit path also records same-value manual intent");
+                next.Close();
+            }
+            Check(!ControllerLayout.Automatic(new GameConfig(paths.ConfigPath)), "Manual choice survives closing the launcher");
+            var legacy = new GameConfig(paths.ConfigPath);
+            legacy.Remove("launcher", "auto_controller_layout");
+            legacy.SetString("controller", "layout", "future-layout");
+            legacy.Save();
+            using (var keep = new MainForm(dataPaths: paths, enableServices: false))
+            {
+                keep.Show();
+                Application.DoEvents();
+                WithModal(() => keep.RefreshControllerLayout(xbox, keep, false), dialog =>
+                    Click(dialog, Find<PlankButton>(dialog, "Keep my layout")));
+                keep.RefreshControllerLayout(cube, keep, false);
+                OpenControls(keep);
+                Check(Field(keep, "Layout").Text == "(custom) future-layout" &&
+                    !ControllerLayout.NeedsConsent(new GameConfig(paths.ConfigPath)), "Keep preserves unknown layout and persists the one-time decision");
+                keep.Close();
+            }
+        }
+        finally
+        {
+            File.WriteAllText(paths.ConfigPath, saved);
+            form.Activate();
+        }
     }
 
     static void Routing(Form owner)
@@ -331,13 +502,13 @@ static class Tests
             Click(dialog, Find<Button>(dialog, "Select this folder"));
         });
         Check(selected == Path.Combine(fixture, "a"), "Controller can choose its newly created folder");
-        bool? xbox = true;
-        WithModal(() => xbox = owner.AskXboxLayout("Test controller"), dialog =>
+        bool? automatic = true;
+        WithModal(() => automatic = owner.AskAutoLayout("Test controller", "gamecube", "xbox_original"), dialog =>
         {
             Check(ControllerNavigation.Targets(dialog).OfType<PlankButton>().Count() == 2, "Both layout choices reachable");
             Press(dialog, B.Back);
         });
-        Check(xbox == null, "Back cancels Xbox layout prompt without changing game mappings");
+        Check(automatic == null, "Back cancels automatic-layout prompt without changing game mappings");
         MainForm.UpdateAnswer update = MainForm.UpdateAnswer.Update;
         WithModal(() => update = owner.AskUpdate(new Updater.Found("test", null, null)), dialog =>
         {

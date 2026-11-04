@@ -25,6 +25,8 @@ sealed class ControllerNavigation : IDisposable
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
+    internal static Form? ForegroundForm => Control.FromHandle(GetForegroundWindow()) as Form;
+
     internal static bool Owns(Form owner, Form? target)
     {
         for (var form = target; form != null; form = form.Owner)
@@ -36,8 +38,7 @@ sealed class ControllerNavigation : IDisposable
     {
         // A synchronous modal loop can tick this timer again while Dispatch is still on the stack.
         // It must be allowed to navigate the dialog, but never repeat its opening action.
-        var foreground = GetForegroundWindow();
-        var target = Control.FromHandle(foreground) as Form;
+        var target = ForegroundForm;
         var action = ReadInput(target, gamepads.Input, Environment.TickCount64);
         if (action == LauncherButtons.None || target == null) return;
         if (dispatching && target == owner) return;
@@ -150,7 +151,11 @@ sealed class ControllerNavigation : IDisposable
                 case RadioButton radio: radio.Checked = true; break;
                 case ComboBox combo:
                     int choice = LauncherDialogs.Choose(form, combo.Items.Cast<object>().Select(o => o.ToString() ?? "").ToArray(), combo.SelectedIndex);
-                    if (choice >= 0) combo.SelectedIndex = choice;
+                    if (choice >= 0)
+                    {
+                        if (combo is ThemedCombo themed) themed.CommitSelection(choice);
+                        else combo.SelectedIndex = choice;
+                    }
                     break;
                 case TextBox { Tag: Action edit }:
                     edit();

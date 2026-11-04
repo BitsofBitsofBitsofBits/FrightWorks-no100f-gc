@@ -115,7 +115,7 @@ sealed class Gamepads : IDisposable
     }
 
     // SDL_GamepadType, as the game sorts it (hle/input/pad.cpp).
-    static Kind KindOf(int type) => type switch
+    internal static Kind KindOf(int type) => type switch
     {
         2 or 3 => Kind.Xbox,                 // XBOX360, XBOXONE (also third-party pads in XInput mode)
         4 or 5 or 6 => Kind.PlayStation,     // PS3, PS4, PS5
