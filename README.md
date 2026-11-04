@@ -126,9 +126,21 @@ The game builds to `Play\`; the package goes to `dist\`. The first build downloa
 into `texture_pack\ScoobyHD` (not in git) and adds the HD Creeper frames from `tools\hd-pack-additions`. Every build
 copies the pack and the button prompt icons into `Play\` beside the game; the icons need Python and ImageMagick.
 
-**Linux** (x86_64, a native build; no release package yet). Needs clang, Ninja, Python 3 with Pillow, ImageMagick,
-curl, rsync and bsdtar (or 7z / unrar); SDL3 for controller detection in the launcher. CMake and the .NET 10 SDK are
-downloaded into `toolchain/`.
+**Linux** (x86_64, a native build; no release package yet). Needs clang 16 or newer, Ninja, Python 3 with Pillow,
+ImageMagick (7's `magick`, or the ImageMagick 6 that Ubuntu packages, with `librsvg2-bin`), curl with CA certificates,
+rsync and bsdtar (or 7z / unrar), plus the headers SDL3 is built from (X11; ALSA for sound); SDL3 for controller
+detection in the launcher. CMake and the .NET 10 SDK are downloaded into `toolchain/`. Ubuntu 24.04 (clang 18):
+
+```sh
+sudo apt install clang ninja-build python3 python3-pil imagemagick librsvg2-bin curl ca-certificates rsync \
+    libarchive-tools pkg-config libx11-dev libxext-dev libxcursor-dev libxi-dev libxrandr-dev libxss-dev \
+    libxtst-dev libasound2-dev
+```
+
+Ubuntu 22.04's clang is 14, too old (the code needs C++20 features that came with clang 16): add LLVM's apt repository
+(<https://apt.llvm.org>), install `clang-18 libstdc++-12-dev` instead of `clang`, and make `clang` and `clang++` on PATH
+point to clang-18 (the script calls them by those names). These packages build SDL3 for X11 only (no Wayland
+headers: not checked) and the game needs a Vulkan driver to run.
 
 ```sh
 tools/build-no100f-linux.sh /path/to/game.iso   # extracts the disc the first time, then builds the game into Play/
