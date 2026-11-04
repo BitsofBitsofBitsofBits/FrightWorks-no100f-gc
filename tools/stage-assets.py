@@ -9,7 +9,8 @@ own UserData/texture_replacements first, and an installed game's folder is repla
 (tools\\stage-assets.ps1 -GameDir <folder> [-Required] runs this on Windows.) Used by build-no100f.ps1 (Play\\, after
 every build) and package-scooby.ps1 (the release's data\\). Only what changed is copied or rebuilt. --required
 (packaging) stops on anything missing; without it a missing piece is a warning ("WARNING: ..."), so a test build still
-finishes. Failures print "ERROR: <text>" and exit 1.
+finishes. Failures print "ERROR: <text>" and exit 1. Right after the pack is mirrored, tools/hd-pack-fixes.py repairs
+known problems in the game folder's copy (it reads the disc's textures from Disc/DATA; a skipped fix fails --required).
 
 Python 3.8+, standard library only. The HD pack is a RAR: unpacking needs bsdtar (Windows' tar.exe, or libarchive's
 bsdtar on Linux), 7-Zip or unrar. The button icons need Pillow and ImageMagick (magick), like make-button-icons.py.
@@ -242,6 +243,16 @@ def stage(game_dir, required):
         except OSError as error:
             raise Failure("copying the HD pack failed (%s)" % error)
         say("HD pack: %s (%d files)" % (pack, sum(1 for e in os.scandir(pack) if e.is_file())))
+        # Fixes to dogerki's files in the game folder's copy (the mirror put the originals back; texture_pack stays as
+        # downloaded). A skipped fix is a log line, or a failure with --required (packaging).
+        fixes = subprocess.run([sys.executable, "-I", os.path.join(TOOLS, "hd-pack-fixes.py"), pack,
+                                os.path.join(ROOT, "Disc", "DATA")] + (["--required"] if required else []),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        output = fixes.stdout.decode("utf-8", "replace").rstrip()
+        if output:
+            say(output)
+        if fixes.returncode != 0:
+            fail("HD pack fixes failed (exit code %d)" % fixes.returncode, required)
     else:
         fail("%s is missing (the built-in HD texture pack): %s not updated"
              % (os.path.join("texture_pack", "ScoobyHD"), pack), required)
