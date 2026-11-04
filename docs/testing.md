@@ -217,20 +217,22 @@ useful:
 - **Audio capture**: `$env:AUDIO_RAW_DUMP = 'C:\temp\out.raw'` writes the mixed output; analysis tools in
   `tools\debug\audio\`.
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
-- **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>`
-  draws every page to `<dir>\<Page>.png`.
-- **Isolated launcher layout regression** (Windows, .NET 10 SDK or newer):
+- **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>` (Linux:
+  `launcher/publish/FrightWorks --shots <dir>`) draws every page to `<dir>\<Page>.png`. The window takes the size the
+  window manager gives it; for fixed sizes use the layout regression below.
+- **Isolated launcher layout regression** (Windows or Linux, .NET 10 SDK or newer):
   `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
-  This builds the launcher and checks Settings/Display, Controls, Mods and Extras at normal, minimum and smaller
-  window sizes, reopening and growing/shrinking layouts, long mod names, nested scrolling, dropdown widths, keyboard
-  button activation, transparent button corners (normal, hover, pressed and disabled, including the gradient-backed
-  close button), and preservation of custom HDR and unknown config values. It creates a disposable portable
-  fixture and page screenshots only in the output directory; it never starts the game or uses the player's data.
-  It also moves its own test window across existing monitors and back, logging actual DPI transitions without
-  changing display settings. An optional trailing zero-based monitor index selects the starting monitor.
-  Additional font/size stress at 125%, 150%, 200% and back to 100% is **simulated**, separate from those native
-  transitions. Also check first-open painting interactively. The rounded board region should only change on resize, not on ordinary layout,
-  and page content should scroll vertically without hiding dropdown arrows or producing horizontal scrollbars.
+  It runs the launcher's real window on Avalonia's headless platform (no screen needed, drawn with Skia like on
+  screen) and checks Settings/Display, Controls, Mods and Extras at 1180x830, the 960x680 minimum, 820x600 and 500x547
+  (what a tiling window manager can force): nothing wider than its page, no horizontal scrolling, usable drop-downs,
+  reopening keeps the layout, the wheel over a closed drop-down never changes a setting, long mod names, transparent
+  plank corners (normal, hover, pressed, disabled), keyboard activation and accessible names, the Xbox-only rows, the
+  fullscreen monitor row (Windows only), and that custom HDR and unknown config values survive. On Linux it also clicks
+  Play with stand-in scripts for the game: it starts in its folder and the launcher minimises, and a game that
+  exits with an error brings the launcher back with a message. It uses
+  a disposable portable fixture and writes page screenshots only to the output directory; it never starts the real
+  game or touches the player's data. Display scaling is Avalonia's (sizes are device-independent), so check a real
+  window at 125-200% by eye too.
 - **Screen recording**: `tools\debug\capture\record.ps1`.
 
 ## 8. Looking at the game's code and data

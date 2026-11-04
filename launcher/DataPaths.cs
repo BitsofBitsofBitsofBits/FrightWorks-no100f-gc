@@ -7,10 +7,12 @@ namespace ScoobyReMasked;
 // - Installed (Velopack, %LOCALAPPDATA%\FrightWorks, replaced on update and deleted on uninstall): settings, logs,
 //   caches, the disc and mods in %LOCALAPPDATA%\FrightWorks-Data, saves in Saved Games\FrightWorks, F2 / F3 in
 //   Pictures\FrightWorks and Videos\FrightWorks.
+// - On Linux (source builds and portable folders so far) the game without the marker keeps everything in
+//   $XDG_DATA_HOME/WiiCompiled (~/.local/share/WiiCompiled), saves in its Saves, F2 / F3 beside the game.
 // In both, [paths] saves_dir in Config.toml moves the saves.
 sealed class DataPaths
 {
-    public const string GameExe = "FrightWorks Game.exe";
+    public static readonly string GameExe = OperatingSystem.IsWindows() ? "FrightWorks Game.exe" : "FrightWorks Game";
     const string Marker = "portable.txt";
     const int MarkerSearchDepth = 4;  // the game's kPortableSearchDepth
     public const string InstalledDataName = "FrightWorks-Data", UserFolderName = "FrightWorks";
@@ -39,8 +41,18 @@ sealed class DataPaths
         return new DataPaths(AppContext.BaseDirectory, Path.Combine(AppContext.BaseDirectory, "data"));
     }
 
-    public static string InstalledDataDir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), InstalledDataName);
+    public static string InstalledDataDir
+    {
+        get
+        {
+            if (OperatingSystem.IsWindows())
+                return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), InstalledDataName);
+            // runtime_config.h ApplicationDataDirectory: the XDG data folder, under the runtime's own name.
+            var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
+            var data = !string.IsNullOrEmpty(xdg) ? xdg : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share");
+            return Path.Combine(data, "WiiCompiled");
+        }
+    }
 
     // From the game's folder upwards, like the game looks from its exe.
     static bool FindMarker(string game)
@@ -78,7 +90,7 @@ sealed class DataPaths
         }
     }
 
-    public string DefaultSaves => Portable ? Path.Combine(UserData, "Saves") : Path.Combine(KnownFolders.SavedGames, UserFolderName);
+    public string DefaultSaves => Portable || !OperatingSystem.IsWindows() ? Path.Combine(UserData, "Saves") : Path.Combine(KnownFolders.SavedGames, UserFolderName);
 
     // [paths] saves_dir when set (absolute, or relative to UserData), else the default.
     public string Saves
@@ -114,13 +126,15 @@ sealed class DataPaths
 
     string Capture(bool videos)
     {
-        if (!Portable)
+        if (!Portable && OperatingSystem.IsWindows())
             return Path.Combine(Environment.GetFolderPath(videos ? Environment.SpecialFolder.MyVideos : Environment.SpecialFolder.MyPictures), UserFolderName);
-        // Beside the launcher: the folder above data\ in a release, Play\ itself in the dev tree.
+        // Beside the launcher: the folder above data/ in a release, Play/ itself in the dev tree (on Linux the game puts
+        // them there with or without the marker).
         return Path.Combine(DevTree ? Game : Root, videos ? "Videos" : "Screenshots");
     }
 }
 
+[System.Runtime.Versioning.SupportedOSPlatform("windows")]
 static class KnownFolders
 {
     // Environment.SpecialFolder has no Saved Games.

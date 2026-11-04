@@ -1,3 +1,5 @@
+using Avalonia;
+
 namespace ScoobyReMasked;
 
 static class Program
@@ -10,7 +12,7 @@ static class Program
         // an uninstall leaves them (DataPaths). In the zip and the dev tree this does nothing.
         Velopack.VelopackApp.Build().Run();
 
-        // Headless: "--extract <image> <outdir>" writes <outdir>\extract.log; exit 0 ok, 2 holes, 3 wrong disc, 1 error.
+        // Headless: "--extract <image> <outdir>" writes <outdir>/extract.log; exit 0 ok, 2 holes, 3 wrong disc, 1 error.
         if (args.Length == 3 && args[0] == "--extract")
         {
             var log = new List<string>();
@@ -31,20 +33,11 @@ static class Program
                 return 1;
             }
         }
-        ApplicationConfiguration.Initialize();
-        // "--shots <dir>": draw every page to <dir>\<page>.png and exit. "--selftest": build every page, then exit 0.
-        int shots = Array.IndexOf(args, "--shots");
-        if (shots < 0 && !args.Contains("--selftest"))
-        {
-            var paths = DataPaths.Find();
-            if (paths.Portable) paths.RemoveOldShippedCopies();
-            DataImport.OfferAtStart(paths, MainForm.AppTitle);
-        }
-        var form = new MainForm(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null);
-        if (args.Contains("--selftest")) { form.Shown += (_, _) => form.Close(); }
-        Application.Run(form);
-        return 0;
+        return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
+
+    // Also used by the layout tests and Avalonia's designer.
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont();
 
     static void Write(string dir, List<string> log)
     {

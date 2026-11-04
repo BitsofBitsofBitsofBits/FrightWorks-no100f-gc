@@ -1,118 +1,136 @@
-﻿using System.Diagnostics;
-using static ScoobyReMasked.Theme;
+using System.Diagnostics;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Layout;
+using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+using static ScoobyReMasked.Skin;
 
 namespace ScoobyReMasked;
 
 // The launcher window: the haunted mansion (MansionScene) whose signs are the menu. Play starts the game; Settings,
 // Mods and Extras open a board over the left of the house. Everything it changes goes to Config.toml (DataPaths),
 // the keys the game's F10 menu uses. No game data or character art is shipped.
-sealed class MainForm : Form
+sealed class MainWindow : Window
 {
-    internal const string GameExe = DataPaths.GameExe, AppTitle = "FrightWorks: Night of 100 Frights";
+    internal const string AppTitle = "FrightWorks: Night of 100 Frights";
+    static readonly string GameExe = DataPaths.GameExe;
     const string ProjectUrl = "https://github.com/FrightWorks/FrightWorks-no100f";
 
-    readonly DataPaths paths;
+    internal readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
     readonly string? shotDir;
-    readonly MansionScene scene;
-    readonly Dictionary<string, Board> boards = new();
-    Label discStatus = null!, dumpHelp = null!;
+    internal readonly MansionScene scene;
+    internal readonly Dictionary<string, Board> boards = new();
+    readonly Stage stage;
+    TextBlock discStatus = null!, dumpHelp = null!;
     PlankButton chooseDisc = null!;
     ThemedBar progress = null!, ffmpegBar = null!;
-    Label ffmpegStatus = null!, savesNote = null!, updateStatus = null!;
+    TextBlock ffmpegStatus = null!, savesNote = null!, updateStatus = null!;
     PlankButton savesDefault = null!, checkNow = null!;
     readonly Updater updater;
     bool updating;  // checking, or downloading / applying an update: Play waits
     bool asking;    // a question (Xbox layout, update) is open: the other waits, so one never disables the other
     PlankButton ffmpegButton = null!;
     CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
-    Action<bool>? showControlsTab;
+    internal Action<bool>? showControlsTab;
     readonly Gamepads gamepads;
-    Label padStatus = null!;
-    ThemedCombo layoutBox = null!;
-    readonly List<(PadMapping.Row Row, Label Label, ThemedCombo Box)> padRows = new();
+    internal TextBlock padStatus = null!;
+    internal ThemedCombo layoutBox = null!;
+    readonly List<(PadMapping.Row Row, TextBlock Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
+    readonly DispatcherTimer padTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    public MainForm(string? shotDir = null, DataPaths? dataPaths = null)
+    public MainWindow(string? shotDir = null, DataPaths? dataPaths = null)
     {
         this.shotDir = shotDir;
-        K = DeviceDpi / 96f;
-        AutoScaleDimensions = new SizeF(DeviceDpi, DeviceDpi);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        SuspendLayout();
         paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
         updater = new Updater(paths);
 
-        Text = AppTitle;
-        try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch { }
-        var area = Screen.PrimaryScreen?.WorkingArea.Size ?? new Size(S(1180), S(830));
-        ClientSize = new Size(Math.Min(S(1180), area.Width - 40), Math.Min(S(830), area.Height - 60));
-        MinimumSize = new Size(Math.Min(S(960), area.Width), Math.Min(S(680), area.Height));
-        BackColor = BoardBottom;
-        Font = Body;
-        StartPosition = FormStartPosition.CenterScreen;
-        KeyPreview = true;
+        Title = AppTitle;
+        Icon = App.Icon;
+        var screen = Screens.Primary;
+        var area = screen == null ? new Size(1220, 890) : screen.WorkingArea.Size.ToSize(screen.Scaling);
+        Width = Math.Min(1180, area.Width - 40);
+        Height = Math.Min(830, area.Height - 60);
+        MinWidth = Math.Min(960, area.Width);
+        MinHeight = Math.Min(680, area.Height);
+        Background = Brush(BoardBottom);
+        WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        scene = new MansionScene(shotDir == null && SystemInformation.UIEffectsEnabled, shotDir == null ? Environment.TickCount : 1)
-        {
-            Dock = DockStyle.Fill,
-        };
-        scene.SignClicked += OnSign;
-        scene.Resize += (_, _) => PlaceBoards();
-        Controls.Add(scene);
+        scene = new MansionScene(shotDir == null && MansionScene.AnimationsEnabled(), shotDir == null ? Environment.TickCount : 1);
+        scene.SignClicked += id => _ = OnSign(id);
+        stage = new Stage(scene);
+        Content = stage;
 
         AddBoard("settings", "Settings", BuildSettings);
         AddBoard("mods", "Mods", BuildMods);
         AddBoard("extras", "Extras", BuildExtras);
-        PlaceBoards();
         RefreshDisc();
-        ResumeLayout(true);
 
+        // Escape closes an open board (an open drop-down list takes it first).
         KeyDown += (_, e) =>
         {
-            if (e.KeyCode == Keys.Escape && boards.Values.Any(b => b.Visible)) { CloseBoards(); e.Handled = true; }
+            if (e.Key == Key.Escape && boards.Values.Any(b => b.IsVisible)) { CloseBoards(); e.Handled = true; }
         };
         // Connected controllers: shown on Settings > Controls; an Xbox pad asks for the layout once.
-        var padTimer = new System.Windows.Forms.Timer { Interval = 1000 };
-        padTimer.Tick += (_, _) => RefreshGamepads();
-        FormClosed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
-        Shown += (_, _) =>
+        padTimer.Tick += (_, _) => _ = RefreshGamepads();
+        Closed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
+        Opened += (_, _) =>
         {
-            if (shotDir != null) { TakeShots(shotDir); return; }
+            if (shotDir != null) { Dispatcher.UIThread.Post(() => TakeShots(shotDir), DispatcherPriority.Background); return; }
             gamepads.Start();
             padTimer.Start();
             if (updater.CanCheck && updater.CheckAtStart) _ = CheckForUpdates(manual: false);
         };
     }
 
-    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    // The scene fills the window; the open board sits over the house's left part, clear of the signs.
+    sealed class Stage : Panel
     {
-        K = e.DeviceDpiNew / 96f;
-        base.OnDpiChanged(e);
-        PlaceBoards();
-        Invalidate(true);
-    }
+        readonly MansionScene scene;
 
-    protected override void OnLayout(LayoutEventArgs levent)
-    {
-        base.OnLayout(levent);
-        // A DPI transition scales children after their Resize events; place the boards at the final size.
-        if (scene != null) PlaceBoards();
+        public Stage(MansionScene scene)
+        {
+            this.scene = scene;
+            Children.Add(scene);
+        }
+
+        Rect BoardRect(Size size)
+        {
+            scene.Place(size);
+            double left = 14, top = 14, right = scene.SignsLeft - 18, bottom = size.Height - 44;
+            return new Rect(left, top, Math.Max(300, right - left), Math.Max(300, bottom - top));
+        }
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            scene.Measure(availableSize);
+            var board = BoardRect(availableSize).Size;
+            foreach (var child in Children) if (child != scene) child.Measure(board);
+            return availableSize;
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            scene.Arrange(new Rect(finalSize));
+            var board = BoardRect(finalSize);
+            foreach (var child in Children) if (child != scene) child.Arrange(board);
+            return finalSize;
+        }
     }
 
     // Headless visual check (--shots <dir>): the main screen, a lightning flash and every board, then exit.
     void TakeShots(string dir)
     {
         Directory.CreateDirectory(dir);
-        void Shot(string name)
-        {
-            Application.DoEvents();
-            using var bmp = new Bitmap(Width, Height);
-            DrawToBitmap(bmp, new Rectangle(Point.Empty, Size));
-            bmp.Save(Path.Combine(dir, name + ".png"));
-        }
+        void Shot(string name) => SaveShot(Path.Combine(dir, name + ".png"));
         scene.Showcase(false);
         Shot("Main");
         scene.Showcase(true);
@@ -124,132 +142,109 @@ sealed class MainForm : Form
             Shot(char.ToUpperInvariant(id[0]) + id[1..]);
         }
         ShowBoard("extras");
-        var extras = boards["extras"].Body;
-        extras.AutoScrollPosition = new Point(0, extras.DisplayRectangle.Height);  // the bottom: folders and saves
+        UpdateLayout();
+        boards["extras"].Scroller.ScrollToEnd();  // the bottom: folders and saves
         Shot("Extras-Folders");
-        extras.AutoScrollPosition = Point.Empty;
+        boards["extras"].Scroller.ScrollToHome();
         ShowBoard("settings");
         showControlsTab?.Invoke(true);
         Shot("Settings-Controls");
         Close();
     }
 
+    // The window as it looks now, at the screen's pixel density.
+    internal void SaveShot(string file)
+    {
+        UpdateLayout();
+        double scale = RenderScaling;
+        var size = new PixelSize(Math.Max(1, (int)Math.Round(Bounds.Width * scale)), Math.Max(1, (int)Math.Round(Bounds.Height * scale)));
+        using var bitmap = new RenderTargetBitmap(size, new Vector(96 * scale, 96 * scale));
+        bitmap.Render(this);
+        bitmap.Save(file, PngBitmapEncoderOptions.Default);
+    }
+
     // ----- Signs and boards -----
-    void OnSign(string id)
+    async Task OnSign(string id)
     {
         switch (id)
         {
             case "play":
                 if (updating && updater.Installed)
-                    MessageBox.Show(this, "The launcher is updating the game. It starts again by itself when it's done.", AppTitle);
-                else if (CanPlay()) Launch();
+                    await Dialogs.Message(this, "The launcher is updating the game. It starts again by itself when it's done.");
+                else if (CanPlay()) await Launch();
                 else ShowBoard("extras");
                 break;
             case "exit":
                 Close();
                 break;
             default:
-                if (boards.TryGetValue(id, out var b) && b.Visible) CloseBoards();
+                if (boards.TryGetValue(id, out var b) && b.IsVisible) CloseBoards();
                 else ShowBoard(id);
                 break;
         }
     }
 
-    void AddBoard(string id, string title, Action<FlowLayoutPanel> build)
+    void AddBoard(string id, string title, Action<StackPanel> build)
     {
         var board = new Board(title, CloseBoards);
-        board.SuspendLayout();
-        var flow = new FlowLayoutPanel
-        {
-            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown,
-            WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty,
-        };
-        flow.SuspendLayout();
-        build(flow);
-        board.Body.Controls.Add(flow);
+        build(board.Body);
         boards[id] = board;
-        scene.Controls.Add(board);
-        flow.ResumeLayout(true);
-        board.ResumeLayout(true);
+        stage.Children.Add(board);
     }
 
-    void PlaceBoards()
-    {
-        int left = S(14), top = S(14);
-        int right = (int)scene.SignsLeft - S(18), bottom = scene.Height - S(44);
-        var r = new Rectangle(left, top, Math.Max(S(300), right - left), Math.Max(S(300), bottom - top));
-        foreach (var b in boards.Values) b.Bounds = r;
-    }
-
-    void ShowBoard(string id)
+    internal void ShowBoard(string id)
     {
         RefreshDisc();
-        scene.SuspendLayout();
-        try
-        {
-            foreach (var (key, b) in boards) b.Visible = key == id;
-            boards[id].BringToFront();
-            boards[id].PerformLayout();
-            boards[id].Body.PerformLayout();
-            scene.ActiveSign = id;
-        }
-        finally { scene.ResumeLayout(true); }
+        foreach (var (key, b) in boards) b.IsVisible = key == id;
+        scene.ActiveSign = id;
     }
 
-    void CloseBoards()
+    internal void CloseBoards()
     {
-        foreach (var b in boards.Values) b.Visible = false;
+        foreach (var b in boards.Values) b.IsVisible = false;
         scene.ActiveSign = null;
         scene.Focus();
     }
 
-    static FlowLayoutPanel Row() => new()
-    {
-        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        Margin = Padding.Empty, BackColor = Color.Transparent, WrapContents = true,
-    };
+    static WrapPanel Row() => new() { Orientation = Orientation.Horizontal };
 
-    static TableLayoutPanel Table() => new()
-    {
-        AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-        ColumnCount = 2, BackColor = Color.Transparent, Margin = S(0, 2, 0, 6),
-    };
+    static StackPanel Column() => new() { Orientation = Orientation.Vertical };
 
-    void OpenFolder(string path)
+    async Task OpenFolder(string path)
     {
-        try { Process.Start("explorer.exe", Directory.CreateDirectory(path).FullName); }
-        catch (Exception e) { MessageBox.Show(this, "Couldn't open " + path + ": " + e.Message, AppTitle); }
+        try
+        {
+            var dir = Directory.CreateDirectory(path);
+            if (!await Launcher.LaunchDirectoryInfoAsync(dir)) throw new IOException("no file manager answered");
+        }
+        catch (Exception e) { await Dialogs.Message(this, "Couldn't open " + path + ": " + e.Message); }
     }
 
     // ----- Settings: Display and Controls -----
-    void BuildSettings(FlowLayoutPanel body)
+    void BuildSettings(StackPanel body)
     {
         var tabs = Row();
-        var display = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty };
-        var controls = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.Transparent, Margin = Padding.Empty, Visible = false };
+        var display = Column();
+        var controls = Column();
+        controls.IsVisible = false;
         PlankButton displayTab = null!, controlsTab = null!;
         void Select(bool showControls)
         {
-            body.SuspendLayout();
-            try
-            {
-                display.Visible = !showControls;
-                controls.Visible = showControls;
-                displayTab.Selected = !showControls;
-                controlsTab.Selected = showControls;
-            }
-            finally { body.ResumeLayout(true); }
+            display.IsVisible = !showControls;
+            controls.IsVisible = showControls;
+            displayTab.Selected = !showControls;
+            controlsTab.Selected = showControls;
         }
         displayTab = new PlankButton("Display", (_, _) => Select(false)) { Selected = true };
         controlsTab = new PlankButton("Controls", (_, _) => Select(true));
         showControlsTab = Select;
-        tabs.Controls.Add(displayTab);
-        tabs.Controls.Add(controlsTab);
-        body.Controls.Add(tabs);
+        tabs.Children.Add(displayTab);
+        tabs.Children.Add(controlsTab);
+        body.Children.Add(tabs);
         BuildDisplay(display);
         BuildControls(controls);
-        body.Controls.Add(display);
-        body.Controls.Add(controls);
+        body.Children.Add(display);
+        body.Children.Add(controls);
     }
 
     // Config values as the game reads them: numbers by value (F10 writes 8 or 0.75, a hand-edited file may say 8.0 or
@@ -280,10 +275,13 @@ sealed class MainForm : Form
         "120" => 120, "180" or "240" => 180, _ => 0,
     };
 
-    void BuildDisplay(FlowLayoutPanel body)
+    // The game picks the fullscreen monitor itself on Windows only ([video] fullscreen_display); elsewhere the row is left out.
+    internal static bool MonitorChoice => OperatingSystem.IsWindows();
+
+    void BuildDisplay(StackPanel body)
     {
         var cfg = new GameConfig(configPath);
-        var table = Table();
+        var table = new FormTable();
         void Row(string label, string key, (string text, string raw)[] options, string fallback, Action<GameConfig>? changed = null)
         {
             var box = new ThemedCombo();
@@ -293,26 +291,29 @@ sealed class MainForm : Form
             box.SelectedIndex = index >= 0 ? index : Array.FindIndex(options, o => SameValue(o.raw, fallback));
             box.SelectedIndexChanged += (_, _) =>
             {
+                if (box.SelectedIndex < 0) return;
                 var c = new GameConfig(configPath);
                 c.Set("video", key, options[box.SelectedIndex].raw);
                 changed?.Invoke(c);
                 c.Save();
             };
-            table.Controls.Add(FieldLabel(label));
-            table.Controls.Add(box);
+            table.Add(FieldLabel(label), box);
         }
         Row("Window", "display_mode", new[] { ("Borderless fullscreen", "\"borderless\""), ("Window", "\"windowed\""), ("Exclusive fullscreen", "\"exclusive\"") }, "borderless");
 
         // A saved monitor that isn't connected stays selected and saved, so it works again when plugged back in. One found
         // by model on another port keeps its saved id: both mean the same monitor to the game.
-        var monitors = Monitors.List();
-        string savedMonitor = cfg.Get("video", "fullscreen_display") ?? "";
-        if (savedMonitor.Length == 0) savedMonitor = "auto";
-        var savedMatch = Monitors.Find(monitors, savedMonitor);
-        var monitorOptions = new List<(string text, string raw)> { ("Automatic (where the game window is)", "\"auto\"") };
-        foreach (var m in monitors) monitorOptions.Add((m.Label, "\"" + (m == savedMatch ? savedMonitor : m.Id) + "\""));
-        if (savedMonitor != "auto" && savedMatch == null) monitorOptions.Add(("Saved monitor (not connected)", "\"" + savedMonitor + "\""));
-        Row("Fullscreen monitor", "fullscreen_display", monitorOptions.ToArray(), "auto");
+        if (MonitorChoice)
+        {
+            var monitors = Monitors.List();
+            string savedMonitor = cfg.Get("video", "fullscreen_display") ?? "";
+            if (savedMonitor.Length == 0) savedMonitor = "auto";
+            var savedMatch = Monitors.Find(monitors, savedMonitor);
+            var monitorOptions = new List<(string text, string raw)> { ("Automatic (where the game window is)", "\"auto\"") };
+            foreach (var m in monitors) monitorOptions.Add((m.Label, "\"" + (m == savedMatch ? savedMonitor : m.Id) + "\""));
+            if (savedMonitor != "auto" && savedMatch == null) monitorOptions.Add(("Saved monitor (not connected)", "\"" + savedMonitor + "\""));
+            Row("Fullscreen monitor", "fullscreen_display", monitorOptions.ToArray(), "auto");
+        }
 
         // Resolution: refilled when frame interpolation crosses 60 fps. A missing or unknown value is the game's 1080p.
         var resolutionBox = new ThemedCombo();
@@ -334,13 +335,12 @@ sealed class MainForm : Form
         FillResolutions(cfg);
         resolutionBox.SelectedIndexChanged += (_, _) =>
         {
-            if (filling) return;
+            if (filling || resolutionBox.SelectedIndex < 0) return;
             var c = new GameConfig(configPath);
             c.Set("video", "resolution_multiplier", shownResolutions[resolutionBox.SelectedIndex].raw);
             c.Save();
         };
-        table.Controls.Add(FieldLabel("Resolution"));
-        table.Controls.Add(resolutionBox);
+        table.Add(FieldLabel("Resolution"), resolutionBox);
 
         // Without aspect_mode the game goes by the older keys (main.cpp): force_16_9 = 16:9, widescreen = false = 4:3,
         // else fill the screen.
@@ -350,189 +350,199 @@ sealed class MainForm : Form
         Row("HD textures", "texture_replacements", new[] { ("On", "true"), ("Off (original textures)", "false") }, "true");
         Row("Anti-aliasing", "msaa", new[] { ("Off", "1"), ("2x MSAA", "2"), ("4x MSAA", "4"), ("8x MSAA", "8") }, "1");
         Row("Intro movies", "skip_intro", new[] { ("Play them", "false"), ("Skip them", "true") }, "false");
-        Row("HDR", "hdr", new[] { ("Off", "false"), ("On (needs HDR on in Windows)", "true") }, "false");
+        Row("HDR", "hdr", new[] { ("Off", "false"), (OperatingSystem.IsWindows() ? "On (needs HDR on in Windows)" : "On (needs HDR on in your desktop)", "true") }, "false");
         Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
-        body.Controls.Add(table);
-        body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
-                               "resolution, picture shape, window, fullscreen monitor and frame interpolation settings too, and more (sound, controls); " +
-                               "F11 switches between fullscreen and a window, and F2 saves a screenshot. " +
-                               "Fullscreen monitor also applies when F11 goes fullscreen from a window."));
+        body.Children.Add(table);
+        body.Children.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
+                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor and frame interpolation settings too, and more (sound, controls); "
+                                              : "resolution, picture shape, window and frame interpolation settings too, and more (sound, controls); ") +
+                               "F11 switches between fullscreen and a window, and F2 saves a screenshot." +
+                               (MonitorChoice ? " Fullscreen monitor also applies when F11 goes fullscreen from a window." : "")));
 
         // Experimental: F10's Smoothness > Frame interpolation. Going above 60 fps at 6x or 8x drops the resolution to
         // 4x, as F10 does.
-        body.Controls.Add(Title("Experimental"));
-        table = Table();  // Row adds to this one now
+        body.Children.Add(Title("Experimental"));
+        table = new FormTable();  // Row adds to this one now
         Row("Frame interpolation", "frame_interpolation_fps", new[] { ("Off", "0"), ("120 FPS", "120"), ("180 FPS", "180") },
             InterpolationFps(cfg).ToString(), c =>
             {
                 if (InterpolationFps(c) > 60 && AboveCap(c.Get("video", "resolution_multiplier") ?? "")) c.Set("video", "resolution_multiplier", "4");
                 FillResolutions(c);
             });
-        body.Controls.Add(table);
-        body.Controls.Add(Note("Draws extra frames between the game's own for smoother motion. Experimental: you might see visual " +
+        body.Children.Add(table);
+        body.Children.Add(Note("Draws extra frames between the game's own for smoother motion. Experimental: you might see visual " +
                                "glitches. At 120 or 180 FPS the resolution goes up to 4x (1920p)."));
     }
 
-    void BuildControls(FlowLayoutPanel body)
+    void BuildControls(StackPanel body)
     {
-        body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
+        body.Children.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
                                "Change the buttons below, or in the game with F10 > Controls."));
-        body.Controls.Add(Title("Gamepad"));
+        body.Children.Add(Title("Gamepad"));
         padStatus = FieldLabel("Looking for controllers...");
-        padStatus.Margin = S(0, 4, 0, 6);
-        body.Controls.Add(padStatus);
+        padStatus.Margin = new Thickness(0, 4, 0, 6);
+        body.Children.Add(padStatus);
         // [controller] layout: "gamecube" or "xbox_original" (the game's original Xbox controls, hle/no100f_xbox_layout.h).
-        var table = Table();
+        var table = new FormTable();
         layoutBox = new ThemedCombo();
         layoutBox.Items.Add("GameCube");
         layoutBox.Items.Add("Original Xbox");
         layoutBox.SelectedIndex = new GameConfig(configPath).Get("controller", "layout") == "xbox_original" ? 1 : 0;
         layoutBox.SelectedIndexChanged += (_, _) => { SaveLayout(layoutBox.SelectedIndex == 1); ShowXboxRows(); };
-        table.Controls.Add(FieldLabel("Layout"));
-        table.Controls.Add(layoutBox);
-        body.Controls.Add(table);
-        body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
+        table.Add(FieldLabel("Layout"), layoutBox);
+        body.Children.Add(table);
+        body.Children.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
                                "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black); the bumpers work together with the " +
                                "triggers, and the hints in the game name these buttons. Black and White can go on other buttons below. " +
                                "GameCube: B head smash and back in menus, X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). " +
                                "Also in F10 > Controls."));
         BuildPadMapping(body);
-        body.Controls.Add(Title("Keyboard"));
-        table = Table();
+        body.Children.Add(Title("Keyboard"));
+        table = new FormTable();
         foreach (var (what, key) in new[] { ("Move", "W A S D"), ("Camera (C-stick)", "Arrow keys"), ("A (jump)", "Space"), ("B", "Left Shift"),
                      ("X / Y", "R / F"), ("Z", "C"), ("L / R", "Q / E"), ("Start (pause)", "Enter"), ("D-pad", "I J K L") })
         {
             var name = FieldLabel(what);
-            name.Font = Body;
-            name.ForeColor = CreamDim;
-            table.Controls.Add(name);
-            table.Controls.Add(FieldLabel(key));
+            name.FontWeight = FontWeight.Normal;
+            name.Foreground = Brush(CreamDim);
+            table.Add(name, FieldLabel(key));
         }
-        body.Controls.Add(table);
-        body.Controls.Add(Title("In the game"));
-        body.Controls.Add(Note("F10 settings   ·   F11 fullscreen / window   ·   F2 screenshot   ·   F1 project page"));
+        body.Children.Add(table);
+        body.Children.Add(Title("In the game"));
+        body.Children.Add(Note("F10 settings   ·   F11 fullscreen / window   ·   F2 screenshot   ·   F1 project page"));
     }
 
     // ----- Mods -----
-    void BuildMods(FlowLayoutPanel body)
+    void BuildMods(StackPanel body)
     {
-        body.Controls.Add(Note("A mod is a folder in the mods folder (the button below opens it). Its files\\ folder mirrors the disc's files\\ (replacing game files), " +
-                               "and its textures\\ folder holds texture replacements. Untick a mod to switch it off; when two mods change the same file, the later name wins."));
-        var list = new FlowLayoutPanel
+        var sep = Path.DirectorySeparatorChar;
+        body.Children.Add(Note($"A mod is a folder in the mods folder (the button below opens it). Its files{sep} folder mirrors the disc's files{sep} (replacing game files), " +
+                               $"and its textures{sep} folder holds texture replacements. Untick a mod to switch it off; when two mods change the same file, the later name wins."));
+        var list = new StackPanel { Orientation = Orientation.Vertical };
+        var frame = new Border
         {
-            Size = S(480, 240), FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true,
-            BackColor = Field, Padding = S(10, 8, 10, 8), Margin = S(0, 8, 0, 8),
+            Background = Brush(Field), Padding = new Thickness(10, 8, 10, 8), Margin = new Thickness(0, 8, 0, 8),
+            Height = 240,
+            Child = new ScrollViewer { Content = list, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, AllowAutoHide = false },
         };
-        var empty = Note("No mods yet.");
         void Fill()
         {
-            list.Controls.Clear();
+            list.Children.Clear();
             var dirs = Directory.Exists(modsDir) ? Directory.GetDirectories(modsDir).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray() : Array.Empty<string>();
-            if (dirs.Length == 0) { list.Controls.Add(empty); return; }
+            if (dirs.Length == 0) { list.Children.Add(Note("No mods yet.")); return; }
             foreach (var d in dirs)
             {
                 var box = new CheckBox
                 {
-                    Text = Path.GetFileName(d), Checked = !File.Exists(Path.Combine(d, "disabled")), AutoSize = true, AutoEllipsis = true,
-                    ForeColor = Cream, BackColor = Field, Font = Body, FlatStyle = FlatStyle.Standard, Cursor = Cursors.Hand, Margin = S(0, 3, 0, 3),
+                    Content = new TextBlock { Text = Path.GetFileName(d), TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis },
+                    IsChecked = !File.Exists(Path.Combine(d, "disabled")), Foreground = Brush(Cream),
+                    Cursor = new Cursor(StandardCursorType.Hand), Margin = new Thickness(0, 3, 0, 3),
                 };
                 var dir = d;
-                box.CheckedChanged += (_, _) =>
+                box.IsCheckedChanged += (_, _) =>
                 {
                     var flag = Path.Combine(dir, "disabled");
-                    if (box.Checked) File.Delete(flag); else File.WriteAllText(flag, "");
+                    if (box.IsChecked == true) File.Delete(flag); else File.WriteAllText(flag, "");
                 };
-                list.Controls.Add(box);
+                list.Children.Add(box);
             }
         }
-        body.Controls.Add(list);
+        body.Children.Add(new LeftCap(480, frame));
         var row = Row();
-        row.Controls.Add(new PlankButton("Open the mods folder", (_, _) => OpenFolder(modsDir)));
-        row.Controls.Add(new PlankButton("Refresh", (_, _) => Fill()));
-        body.Controls.Add(row);
+        row.Children.Add(new PlankButton("Open the mods folder", (_, _) => _ = OpenFolder(modsDir)));
+        row.Children.Add(new PlankButton("Refresh", (_, _) => Fill()));
+        body.Children.Add(row);
         Fill();
     }
 
     // ----- Extras: the disc, holidays, folders, about -----
-    void BuildExtras(FlowLayoutPanel body)
+    void BuildExtras(StackPanel body)
     {
-        body.Controls.Add(Title("Game disc"));
+        body.Children.Add(Title("Game disc"));
         discStatus = FieldLabel("");
-        discStatus.MaximumSize = new Size(S(520), 0);
-        body.Controls.Add(discStatus);
-        chooseDisc = new PlankButton("Choose disc image", async (_, _) => await ChooseDisc(), primary: true);
-        body.Controls.Add(chooseDisc);
-        progress = new ThemedBar { Visible = false };
-        body.Controls.Add(progress);
-        body.Controls.Add(dumpHelp = Note(
+        discStatus.MaxWidth = 520;
+        body.Children.Add(discStatus);
+        chooseDisc = new PlankButton("Choose disc image", (_, _) => _ = ChooseDisc(), primary: true);
+        body.Children.Add(chooseDisc);
+        progress = new ThemedBar { IsVisible = false };
+        body.Children.Add(new LeftCap(480, progress));
+        body.Children.Add(dumpHelp = Note(
             "FrightWorks runs your own copy of Scooby-Doo! Night of 100 Frights for the GameCube (USA, GIHE78, version 1.01). " +
             "Dump the disc you own (for example with CleanRip on a Wii) as a plain .iso or .ciso, then choose it here. " +
             "The launcher copies the game files once; the image file isn't needed afterwards."));
 
-        body.Controls.Add(Title("Holidays"));
-        body.Controls.Add(HolidayBox());
-        body.Controls.Add(Note("Outside Mystic Manor and in the playground, the game celebrates holidays on their real dates. " +
+        body.Children.Add(Title("Holidays"));
+        body.Children.Add(HolidayBox());
+        body.Children.Add(Note("Outside Mystic Manor and in the playground, the game celebrates holidays on their real dates. " +
                                "Pick one to see it any day, or turn them off."));
 
-        body.Controls.Add(Title("Developer tools"));
-        body.Controls.Add(DevToolsBox());
-        body.Controls.Add(Note("For testing and bug hunting: F8 in the game opens the dev menu (go to any level, saved spots, " +
+        body.Children.Add(Title("Developer tools"));
+        body.Children.Add(DevToolsBox());
+        body.Children.Add(Note("For testing and bug hunting: F8 in the game opens the dev menu (go to any level, saved spots, " +
                                "free camera, god mode, texture finder, recording options), F3 records a video of the game into " +
                                "the Videos folder with a .txt for bug reports, and the game shows DEV and its build in the " +
                                "corner. Applies the next time the game starts."));
         ffmpegStatus = Note("");
-        body.Controls.Add(ffmpegStatus);
-        ffmpegButton = new PlankButton("Download ffmpeg", async (_, _) => await DownloadFfmpeg());
-        body.Controls.Add(ffmpegButton);
-        ffmpegBar = new ThemedBar { Visible = false };
-        body.Controls.Add(ffmpegBar);
+        body.Children.Add(ffmpegStatus);
+        ffmpegButton = new PlankButton("Download ffmpeg", (_, _) => _ = DownloadFfmpeg());
+        body.Children.Add(ffmpegButton);
+        ffmpegBar = new ThemedBar { IsVisible = false };
+        body.Children.Add(new LeftCap(480, ffmpegBar));
         RefreshFfmpeg(offerDownload: false);
 
-        body.Controls.Add(Title("Folders"));
+        body.Children.Add(Title("Folders"));
         var folders = Row();
-        folders.MaximumSize = new Size(S(520), 0);  // wrap instead of widening the page
-        folders.Controls.Add(new PlankButton("Saves", (_, _) => OpenFolder(paths.Saves)));
-        folders.Controls.Add(new PlankButton("Settings and mods", (_, _) => OpenFolder(userData)));
-        folders.Controls.Add(new PlankButton("Screenshots", (_, _) => OpenFolder(paths.Screenshots)));
-        folders.Controls.Add(new PlankButton("Videos", (_, _) => OpenFolder(paths.Videos)));
-        folders.Controls.Add(new PlankButton("Game", (_, _) => OpenFolder(play)));
-        body.Controls.Add(folders);
+        folders.MaxWidth = 520;  // wrap instead of widening the page
+        folders.HorizontalAlignment = HorizontalAlignment.Left;
+        folders.Children.Add(new PlankButton("Saves", (_, _) => _ = OpenFolder(paths.Saves)));
+        folders.Children.Add(new PlankButton("Settings and mods", (_, _) => _ = OpenFolder(userData)));
+        folders.Children.Add(new PlankButton("Screenshots", (_, _) => _ = OpenFolder(paths.Screenshots)));
+        folders.Children.Add(new PlankButton("Videos", (_, _) => _ = OpenFolder(paths.Videos)));
+        folders.Children.Add(new PlankButton("Game", (_, _) => _ = OpenFolder(play)));
+        body.Children.Add(folders);
         savesNote = Note("");
-        body.Controls.Add(savesNote);
+        body.Children.Add(savesNote);
         var saveRow = Row();
-        saveRow.MaximumSize = new Size(S(520), 0);
-        saveRow.Controls.Add(new PlankButton("Change the saves folder", (_, _) => ChooseSavesFolder()));
-        savesDefault = new PlankButton("Back to the usual folder", (_, _) => MoveSaves(null));
-        saveRow.Controls.Add(savesDefault);
-        saveRow.Controls.Add(new PlankButton("Copy from an earlier version", (_, _) => { DataImport.FromFolder(this, paths, AppTitle); RefreshDisc(); RefreshSaves(); }));
-        body.Controls.Add(saveRow);
+        saveRow.MaxWidth = 520;
+        saveRow.HorizontalAlignment = HorizontalAlignment.Left;
+        saveRow.Children.Add(new PlankButton("Change the saves folder", (_, _) => _ = ChooseSavesFolder()));
+        savesDefault = new PlankButton("Back to the usual folder", (_, _) => _ = MoveSaves(null));
+        saveRow.Children.Add(savesDefault);
+        saveRow.Children.Add(new PlankButton("Copy from an earlier version", async (_, _) =>
+        {
+            await DataImport.FromFolder(this, paths, AppTitle);
+            RefreshDisc();
+            RefreshSaves();
+        }));
+        body.Children.Add(saveRow);
         RefreshSaves();
 
-        body.Controls.Add(Title("Updates"));
+        body.Children.Add(Title("Updates"));
         updateStatus = Note("");
         if (updater.CanCheck)
         {
-            body.Controls.Add(UpdateBox());
-            body.Controls.Add(updateStatus);
-            checkNow = new PlankButton("Check now", async (_, _) => await CheckForUpdates(manual: true));
-            body.Controls.Add(checkNow);
+            body.Children.Add(UpdateBox());
+            body.Children.Add(updateStatus);
+            checkNow = new PlankButton("Check now", (_, _) => _ = CheckForUpdates(manual: true));
+            body.Children.Add(checkNow);
             ShowUpdateState(null);
         }
         else
         {
             updateStatus.Text = paths.DevTree ? "A source build doesn't look for updates."
                                               : "This copy wasn't installed with the FrightWorks installer, so it can't look for updates.";
-            body.Controls.Add(updateStatus);
+            body.Children.Add(updateStatus);
         }
 
-        body.Controls.Add(Title("About"));
-        var version = typeof(MainForm).Assembly.GetName().Version;
-        body.Controls.Add(Note("FrightWorks " + (version == null ? "" : "v" + version.ToString(3) + " ") + "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. Built on WiiCompiled (GPLv3) " +
+        body.Children.Add(Title("About"));
+        var version = typeof(MainWindow).Assembly.GetName().Version;
+        body.Children.Add(Note("FrightWorks " + (version == null ? "" : "v" + version.ToString(3) + " ") + "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. Built on WiiCompiled (GPLv3) " +
                                "and Aurora (MIT). HD texture pack by dogerki. Button prompts by Kenney (CC0). Lettering in " +
-                               "Luckiest Guy by Astigmatic and in-game menu text in Roboto by Christian Robertson (both Apache 2.0). " +
+                               "Luckiest Guy by Astigmatic and in-game menu text in Roboto by Christian Robertson (both Apache 2.0)" +
+                               (OperatingSystem.IsWindows() ? "" : "; launcher text in Inter by Rasmus Andersson (SIL Open Font License)") + ". " +
                                "Scooby-Doo is a trademark of Hanna-Barbera / Warner Bros.; this is an unofficial fan project."));
-        body.Controls.Add(new PlankButton("Project page", (_, _) => Process.Start(new ProcessStartInfo(ProjectUrl) { UseShellExecute = true })));
+        body.Children.Add(new PlankButton("Project page", async (_, _) => await Launcher.LaunchUriAsync(new Uri(ProjectUrl))));
     }
 
     // ----- The saves folder ([paths] saves_dir) -----
@@ -541,51 +551,55 @@ sealed class MainForm : Form
         bool custom = !string.IsNullOrWhiteSpace(new GameConfig(configPath).Get("paths", "saves_dir"));
         savesNote.Text = "Saves are in " + paths.Saves + (custom ? " (your choice)." : ".") +
                          " Settings and mods are in " + userData + ".";
-        savesDefault.Visible = custom;
+        savesDefault.IsVisible = custom;
     }
 
-    void ChooseSavesFolder()
+    async Task ChooseSavesFolder()
     {
-        using var dialog = new FolderBrowserDialog
+        var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            Description = "Choose the folder for your saves", UseDescriptionForTitle = true, SelectedPath = paths.Saves,
-        };
-        if (dialog.ShowDialog(this) == DialogResult.OK) MoveSaves(dialog.SelectedPath);
+            Title = "Choose the folder for your saves", AllowMultiple = false,
+            SuggestedStartLocation = Directory.Exists(paths.Saves) ? await StorageProvider.TryGetFolderFromPathAsync(paths.Saves) : null,
+        });
+        if (picked.Count > 0 && picked[0].TryGetLocalPath() is string path) await MoveSaves(path);
     }
+
+    static bool SamePath(string a, string b) => string.Equals(Path.TrimEndingDirectorySeparator(a), Path.TrimEndingDirectorySeparator(b),
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     // Points [paths] saves_dir at target (null = the usual folder) and offers to move the saves already there. Files the
     // new folder already has are left in both places.
-    void MoveSaves(string? target)
+    async Task MoveSaves(string? target)
     {
         var from = paths.Saves;
         var to = Path.GetFullPath(target ?? paths.DefaultSaves);
-        if (string.Equals(Path.TrimEndingDirectorySeparator(from), Path.TrimEndingDirectorySeparator(to), StringComparison.OrdinalIgnoreCase))
+        if (SamePath(from, to))
         {
             if (target == null) { var c = new GameConfig(configPath); c.Remove("paths", "saves_dir"); c.Save(); RefreshSaves(); }
             return;
         }
         // An installed game's folder (%LOCALAPPDATA%\FrightWorks) is replaced on update and deleted on uninstall.
         var program = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(root)) ?? root;
-        if (!paths.Portable && (to + "\\").StartsWith(program + "\\", StringComparison.OrdinalIgnoreCase))
+        var sep = Path.DirectorySeparatorChar;
+        if (!paths.Portable && (to + sep).StartsWith(program + sep, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         {
-            MessageBox.Show(this, "That folder is part of the installed game, which an update replaces. Choose another one.", AppTitle);
+            await Dialogs.Message(this, "That folder is part of the installed game, which an update replaces. Choose another one.");
             return;
         }
         if (GameRunning())
         {
-            MessageBox.Show(this, "Close the game first: it is using the saves.", AppTitle);
+            await Dialogs.Message(this, "Close the game first: it is using the saves.");
             return;
         }
         var files = Directory.Exists(from) ? Directory.GetFiles(from, "*", SearchOption.AllDirectories) : Array.Empty<string>();
-        var answer = files.Length == 0 ? DialogResult.No
-            : MessageBox.Show(this, $"Move your saves from\n{from}\nto\n{to}?\n\nNo uses the new folder without moving them.",
-                              AppTitle, MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-        if (answer == DialogResult.Cancel) return;
+        var answer = files.Length == 0 ? Dialogs.Answer.No
+            : await Dialogs.YesNoCancel(this, $"Move your saves from\n{from}\nto\n{to}?\n\nNo uses the new folder without moving them.");
+        if (answer == Dialogs.Answer.Cancel) return;
         int kept = 0;
         try
         {
             Directory.CreateDirectory(to);
-            if (answer == DialogResult.Yes)
+            if (answer == Dialogs.Answer.Yes)
                 foreach (var f in files)
                 {
                     var dest = Path.Combine(to, Path.GetRelativePath(from, f));
@@ -597,8 +611,7 @@ sealed class MainForm : Form
         }
         catch (Exception e)
         {
-            MessageBox.Show(this, "Moving the saves stopped: " + e.Message + "\n\nThe saves folder is unchanged.", AppTitle,
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            await Dialogs.Message(this, "Moving the saves stopped: " + e.Message + "\n\nThe saves folder is unchanged.");
             return;
         }
         var cfg = new GameConfig(configPath);
@@ -606,12 +619,23 @@ sealed class MainForm : Form
         cfg.Save();
         RefreshSaves();
         if (kept > 0)
-            MessageBox.Show(this, $"{kept} save file(s) already in {to} were kept; the old copies are still in {from}.", AppTitle);
+            await Dialogs.Message(this, $"{kept} save file(s) already in {to} were kept; the old copies are still in {from}.");
     }
 
+    // This checkout's or release's game is running (another copy of the game elsewhere doesn't count).
     bool GameRunning()
     {
-        var exe = Path.Combine(play, GameExe);
+        var exe = Path.GetFullPath(Path.Combine(play, GameExe));
+        if (OperatingSystem.IsLinux())
+        {
+            foreach (var dir in Directory.EnumerateDirectories("/proc"))
+            {
+                if (!int.TryParse(Path.GetFileName(dir), out _)) continue;
+                try { if (File.ResolveLinkTarget(Path.Combine(dir, "exe"), false)?.FullName == exe) return true; }
+                catch (Exception) { }  // another user's process, or gone
+            }
+            return false;
+        }
         foreach (var p in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(GameExe)))
         {
             try { if (string.Equals(p.MainModule?.FileName, exe, StringComparison.OrdinalIgnoreCase)) return true; }
@@ -629,7 +653,7 @@ sealed class MainForm : Form
         box.Items.Add("Don't look");
         box.SelectedIndex = updater.CheckAtStart ? 0 : 1;
         box.SelectedIndexChanged += (_, _) => updater.SetCheckAtStart(box.SelectedIndex == 0);
-        return box;
+        return new LeftCap(320, box);
     }
 
     void ShowUpdateState(string? text)
@@ -646,35 +670,37 @@ sealed class MainForm : Form
     {
         if (updating) return;
         updating = true;
-        checkNow.Enabled = false;
+        checkNow.IsEnabled = false;
         ShowUpdateState("Looking for a new version...");
         Updater.Found? found = null;
+        string? failure = null;
         try { found = await updater.CheckAsync(CancellationToken.None); }
         catch (Exception e)
         {
-            ShowUpdateState("Couldn't look for a new version: " + e.Message);
-            if (manual) MessageBox.Show(this, "Couldn't look for a new version: " + e.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            failure = "Couldn't look for a new version: " + e.Message;
+            ShowUpdateState(failure);
         }
         updating = false;
-        if (IsDisposed) return;
-        checkNow.Enabled = true;
+        if (!IsVisible) return;
+        checkNow.IsEnabled = true;
+        if (failure != null && manual) await Dialogs.Message(this, failure);
         if (found == null)
         {
-            if (updateStatus.Text.StartsWith("Looking")) ShowUpdateState(manual ? "You have the newest version, " + updater.CurrentVersion + "." : null);
+            if (updateStatus.Text?.StartsWith("Looking") == true) ShowUpdateState(manual ? "You have the newest version, " + updater.CurrentVersion + "." : null);
             return;
         }
         ShowUpdateState($"Version {found.Version} is out (you have {updater.CurrentVersion}).");
         if (!manual && (updater.Skipped == found.Version || GameRunning())) return;  // the game has the screen: Extras says it
         while (asking) await Task.Delay(300);
-        if (IsDisposed) return;
+        if (!IsVisible) return;
         UpdateAnswer answer;
         asking = true;
-        try { answer = AskUpdate(found); }
+        try { answer = await AskUpdate(found); }
         finally { asking = false; }
         switch (answer)
         {
             case UpdateAnswer.Update when updater.Installed: await InstallUpdate(found); break;
-            case UpdateAnswer.Update: Process.Start(new ProcessStartInfo(found.PageUrl!) { UseShellExecute = true }); break;
+            case UpdateAnswer.Update: await Launcher.LaunchUriAsync(new Uri(found.PageUrl!)); break;
             case UpdateAnswer.Skip: updater.Skip(found.Version); break;
         }
     }
@@ -682,14 +708,14 @@ sealed class MainForm : Form
     async Task InstallUpdate(Updater.Found found)
     {
         while (GameRunning())
-            if (MessageBox.Show(this, "Close the game first, then press OK to update.", AppTitle, MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+            if (!await Dialogs.OkCancel(this, "Close the game first, then press OK to update.")) return;
         updating = true;
-        checkNow.Enabled = false;
-        void Show(string text) { if (!IsDisposed) { scene.SetStatus(text, false); ShowUpdateState(text); } }
+        checkNow.IsEnabled = false;
+        void Show(string text) { if (IsVisible) { scene.SetStatus(text, false); ShowUpdateState(text); } }
         Show($"Downloading version {found.Version}...");
         try
         {
-            await updater.DownloadAsync(found, p => { try { BeginInvoke(() => Show($"Downloading version {found.Version}: {p}%")); } catch (InvalidOperationException) { } },
+            await updater.DownloadAsync(found, p => Dispatcher.UIThread.Post(() => Show($"Downloading version {found.Version}: {p}%")),
                                         CancellationToken.None);
             Show($"Installing version {found.Version}...");
             updater.ApplyAndRestart(found);  // exits the launcher
@@ -697,43 +723,25 @@ sealed class MainForm : Form
         catch (Exception e)
         {
             updating = false;
-            checkNow.Enabled = true;
+            checkNow.IsEnabled = true;
             RefreshDisc();
             ShowUpdateState("The update failed: " + e.Message);
-            MessageBox.Show(this, "The update failed: " + e.Message + "\n\nThe game is unchanged; try again with Extras > Check now.", AppTitle,
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            await Dialogs.Message(this, "The update failed: " + e.Message + "\n\nThe game is unchanged; try again with Extras > Check now.");
         }
     }
 
     enum UpdateAnswer { Update, Later, Skip }
 
-    UpdateAnswer AskUpdate(Updater.Found found)
+    async Task<UpdateAnswer> AskUpdate(Updater.Found found)
     {
-        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-        using var dialog = new Form
+        int pick = await Dialogs.Choose(this, "A new version of FrightWorks", $"FrightWorks {found.Version} is out", new[]
         {
-            Text = "A new version of FrightWorks", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-            StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, BackColor = BoardBottom, Font = Body,
-            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = S(20, 14, 20, 14), Icon = Icon,
-        };
-        var body = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = BoardBottom };
-        var title = Title($"FrightWorks {found.Version} is out");
-        title.Margin = S(0, 0, 0, 6);
-        body.Controls.Add(title);
-        body.Controls.Add(Note($"You have version {updater.CurrentVersion}. " + (updater.Installed
-            ? "Updating downloads the new version and restarts the launcher; your saves, settings and mods stay."
-            : "This is the zip, which can't update itself: download the new version from its release page and unzip it over this folder.")));
-        body.Controls.Add(Note("Extras > Updates turns this question off."));
-        var row = Row();
-        row.Margin = S(0, 8, 0, 0);
-        var answer = UpdateAnswer.Later;
-        row.Controls.Add(new PlankButton(updater.Installed ? "Update now" : "Open the download page", (_, _) => { answer = UpdateAnswer.Update; dialog.Close(); }, primary: true));
-        row.Controls.Add(new PlankButton("Not now", (_, _) => { answer = UpdateAnswer.Later; dialog.Close(); }));
-        row.Controls.Add(new PlankButton("Skip this version", (_, _) => { answer = UpdateAnswer.Skip; dialog.Close(); }));
-        body.Controls.Add(row);
-        dialog.Controls.Add(body);
-        dialog.ShowDialog(this);
-        return answer;
+            $"You have version {updater.CurrentVersion}. " + (updater.Installed
+                ? "Updating downloads the new version and restarts the launcher; your saves, settings and mods stay."
+                : "This is the zip, which can't update itself: download the new version from its release page and unzip it over this folder."),
+            "Extras > Updates turns this question off.",
+        }, (updater.Installed ? "Update now" : "Open the download page", true), ("Not now", false), ("Skip this version", false));
+        return pick switch { 0 => UpdateAnswer.Update, 2 => UpdateAnswer.Skip, _ => UpdateAnswer.Later };
     }
 
     // The hubs' holiday events ([game] holiday): the game checks the date when a hub loads. "auto" uses today's date,
@@ -754,12 +762,12 @@ sealed class MainForm : Form
         box.SelectedIndex = index;
         box.SelectedIndexChanged += (_, _) =>
         {
-            if (box.SelectedIndex >= Holidays.Length) return;
+            if (box.SelectedIndex < 0 || box.SelectedIndex >= Holidays.Length) return;
             var c = new GameConfig(configPath);
             c.SetString("game", "holiday", Holidays[box.SelectedIndex].value);
             c.Save();
         };
-        return box;
+        return new LeftCap(320, box);
     }
 
     // [game] dev_tools: the F8 dev menu and the DEV build mark (the game reads it at startup).
@@ -776,43 +784,55 @@ sealed class MainForm : Form
             c.Save();
             RefreshFfmpeg(offerDownload: box.SelectedIndex == 1);
         };
-        return box;
+        return new LeftCap(320, box);
     }
 
     // F3 videos need ffmpeg. Looked for only while the developer tools are on; turning them on offers the download.
+    // The game records only on Windows so far (no100f_recorder.cpp): elsewhere the page just says so.
     void RefreshFfmpeg(bool offerDownload)
     {
         bool dev = new GameConfig(configPath).Get("game", "dev_tools") == "true";
         bool busy = ffmpegCancel != null;
+        if (!FfmpegSetup.Supported)
+        {
+            ffmpegStatus.IsVisible = dev;
+            ffmpegButton.IsVisible = false;
+            ffmpegStatus.Text = "F3 video recording is Windows-only for now.";
+            ffmpegStatus.Foreground = Brush(CreamDim);
+            return;
+        }
         var found = dev && !busy ? FfmpegSetup.Find(paths) : null;
-        ffmpegStatus.Visible = dev || busy;
-        ffmpegButton.Visible = dev && !busy && found == null;
+        ffmpegStatus.IsVisible = dev || busy;
+        ffmpegButton.IsVisible = dev && !busy && found == null;
         if (busy || !dev) return;
         ffmpegStatus.Text = found != null
             ? "F3 videos use ffmpeg from " + found + "."
             : "F3 videos need ffmpeg, which isn't installed. The launcher can download it (about 200 MB, the free " +
               "win64 build from github.com/BtbN/FFmpeg-Builds) into " + FfmpegSetup.InstallDir(paths) + ".";
-        ffmpegStatus.ForeColor = found != null ? Good : Warn;
-        if (found == null && offerDownload &&
-            MessageBox.Show(this, "F3 video recording needs ffmpeg, which isn't installed.\n\nDownload it now? (about 200 MB, " +
-                                  "the free win64 build from github.com/BtbN/FFmpeg-Builds, checked against its published SHA-256)",
-                            AppTitle, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-            _ = DownloadFfmpeg();
+        ffmpegStatus.Foreground = Brush(found != null ? Good : Warn);
+        if (found == null && offerDownload) _ = OfferFfmpeg();
+    }
+
+    async Task OfferFfmpeg()
+    {
+        if (await Dialogs.YesNo(this, "F3 video recording needs ffmpeg, which isn't installed.\n\nDownload it now? (about 200 MB, " +
+                                      "the free win64 build from github.com/BtbN/FFmpeg-Builds, checked against its published SHA-256)"))
+            await DownloadFfmpeg();
     }
 
     async Task DownloadFfmpeg()
     {
         if (ffmpegCancel != null) return;
         ffmpegCancel = new CancellationTokenSource();
-        ffmpegButton.Visible = false;
-        ffmpegBar.Visible = true;
+        ffmpegButton.IsVisible = false;
+        ffmpegBar.IsVisible = true;
         ffmpegBar.Maximum = 1000;
         ffmpegBar.Value = 0;
-        ffmpegStatus.ForeColor = CreamDim;
+        ffmpegStatus.Foreground = Brush(CreamDim);
         ffmpegStatus.Text = "Downloading ffmpeg...";
         var report = new Progress<(long done, long total)>(p =>
         {
-            if (IsDisposed || ffmpegCancel == null) return;
+            if (ffmpegCancel == null) return;
             ffmpegBar.Value = p.total > 0 ? (int)(p.done * 1000 / p.total) : 0;
             ffmpegStatus.Text = p.total > 0 ? $"Downloading ffmpeg: {p.done >> 20} of {p.total >> 20} MB" : $"Downloading ffmpeg: {p.done >> 20} MB";
         });
@@ -824,10 +844,10 @@ sealed class MainForm : Form
         {
             ffmpegCancel.Dispose();
             ffmpegCancel = null;
-            if (!IsDisposed) ffmpegBar.Visible = false;
+            ffmpegBar.IsVisible = false;
         }
         RefreshFfmpeg(offerDownload: false);
-        if (error != null) MessageBox.Show(this, "Downloading ffmpeg failed: " + error, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        if (error != null) await Dialogs.Message(this, "Downloading ffmpeg failed: " + error);
     }
 
     // ----- The disc and starting the game -----
@@ -848,30 +868,34 @@ sealed class MainForm : Form
         scene.SetStatus(!exe ? "Game files missing: re-extract the download" : ok ? "Ready to play" : "No game disc yet: press Play to set it up", ok && exe);
         if (discStatus == null) return;
         discStatus.Text = text;
-        discStatus.ForeColor = ok ? Good : Warn;
+        discStatus.Foreground = Brush(ok ? Good : Warn);
         chooseDisc.Text = ok ? "Change disc image" : "Choose disc image";
-        dumpHelp.Visible = !ok;
+        dumpHelp.IsVisible = !ok;
     }
 
     async Task ChooseDisc()
     {
-        using var dialog = new OpenFileDialog
+        var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            Title = "Choose your Scooby-Doo! Night of 100 Frights disc image",
-            Filter = "GameCube disc images (*.iso;*.gcm;*.ciso)|*.iso;*.gcm;*.ciso|All files (*.*)|*.*",
-        };
-        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            Title = "Choose your Scooby-Doo! Night of 100 Frights disc image", AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("GameCube disc images (*.iso, *.gcm, *.ciso)") { Patterns = new[] { "*.iso", "*.gcm", "*.ciso", "*.ISO", "*.GCM", "*.CISO" } },
+                FilePickerFileTypes.All,
+            },
+        });
+        if (picked.Count == 0 || picked[0].TryGetLocalPath() is not string file) return;
         GcDisc disc;
-        try { disc = GcDisc.Open(dialog.FileName); }
-        catch (Exception e) { MessageBox.Show(this, "That file can't be read: " + e.Message, AppTitle); return; }
+        try { disc = GcDisc.Open(file); }
+        catch (Exception e) { await Dialogs.Message(this, "That file can't be read: " + e.Message); return; }
         using (disc)
         {
             var problem = disc.Problem();
-            if (problem.Length > 0) { MessageBox.Show(this, problem, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (problem.Length > 0) { await Dialogs.Message(this, problem); return; }
             var staging = discDir + ".new";
             if (Directory.Exists(staging)) Directory.Delete(staging, true);
-            chooseDisc.Enabled = false;
-            progress.Visible = true;
+            chooseDisc.IsEnabled = false;
+            progress.IsVisible = true;
             progress.Value = 0;
             var report = new Progress<(int done, int total, string name)>(p =>
             {
@@ -879,6 +903,7 @@ sealed class MainForm : Form
                 progress.Value = Math.Min(p.done, progress.Maximum);
                 discStatus.Text = $"Extracting {p.done}/{p.total}: {p.name}";
             });
+            string? error = null;
             try
             {
                 await Task.Run(() => disc.Extract(staging, (d, t, n) => ((IProgress<(int, int, string)>)report).Report((d, t, n))));
@@ -888,44 +913,77 @@ sealed class MainForm : Form
                 cfg.Set("paths", "dvd_root", paths.DvdRootValue);  // relative to UserData, so the folder can move
                 cfg.Save();
             }
-            catch (Exception e) { MessageBox.Show(this, "Extraction failed: " + e.Message, AppTitle, MessageBoxButtons.OK, MessageBoxIcon.Error); }
-            finally { progress.Visible = false; chooseDisc.Enabled = true; RefreshDisc(); }
+            catch (Exception e) { error = e.Message; }
+            finally { progress.IsVisible = false; chooseDisc.IsEnabled = true; RefreshDisc(); }
+            if (error != null) await Dialogs.Message(this, "Extraction failed: " + error);
         }
     }
 
-    void Launch()
+    async Task Launch()
     {
         var exe = Path.Combine(play, GameExe);
-        if (!File.Exists(exe)) { MessageBox.Show(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher.", AppTitle); return; }
+        if (!File.Exists(exe)) { await Dialogs.Message(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher."); return; }
+        // One game at a time: two would share the saves and settings.
+        if (game is { HasExited: false } || GameRunning()) { await Dialogs.Message(this, "The game is already running."); return; }
         gamepads.Pause();  // the game has the controllers to itself
-        var game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = true });
-        if (game != null)
+        try { game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = false }); }
+        catch (Exception e)
         {
-            game.EnableRaisingEvents = true;
-            game.Exited += (_, _) => { try { BeginInvoke(() => gamepads.Start()); } catch (InvalidOperationException) { } };
+            gamepads.Start();
+            await Dialogs.Message(this, "The game couldn't start: " + e.Message);
+            return;
         }
-        WindowState = FormWindowState.Minimized;
+        if (game == null) { gamepads.Start(); return; }
+        // The status says so too: some window managers (tiling ones) don't minimise, and the launcher stays in view.
+        scene.SetStatus("The game is running", true);
+        var started = game;
+        started.EnableRaisingEvents = true;
+        started.Exited += (_, _) => Dispatcher.UIThread.Post(() => _ = GameExited(started));
+        WindowState = WindowState.Minimized;
+    }
+
+    Process? game;  // the game this launcher started, while it runs
+
+    // Back from the game: controllers to the launcher again, and when the game ended with an error (it writes 0 when the
+    // player quits), the launcher comes back to say so instead of looking as if Play did nothing.
+    async Task GameExited(Process exited)
+    {
+        int code;
+        try { code = exited.ExitCode; } catch (InvalidOperationException) { code = 0; }
+        exited.Dispose();
+        if (game == exited) game = null;
+        gamepads.Start();
+        RefreshDisc();
+        if (code == 0) return;
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        var logs = Path.Combine(userData, "Logs");
+        int pick = await Dialogs.Choose(this, "The game stopped", new[]
+        {
+            $"The game closed because of an error (exit code {code}). Its log and crash report are in the Logs folder; " +
+            "they help when you report the problem.",
+        }, ("Open the Logs folder", false), ("OK", true));
+        if (pick == 0) await OpenFolder(logs);
     }
 
     // ----- Controllers -----
     // Gamepad buttons: the [controller] keys F10 > Controls edits too (PadMapping). The game reads them at start.
-    void BuildPadMapping(FlowLayoutPanel body)
+    void BuildPadMapping(StackPanel body)
     {
-        body.Controls.Add(Title("Gamepad buttons"));
-        body.Controls.Add(Note("The controller button that presses each GameCube button. Buttons go by position: South is A " +
+        body.Children.Add(Title("Gamepad buttons"));
+        body.Children.Add(Note("The controller button that presses each GameCube button. Buttons go by position: South is A " +
                                "on Xbox, Cross on PlayStation, B on Nintendo. Used from the next game start; F10 > Controls " +
                                "in the game edits the same mapping."));
-        var table = Table();
+        var table = new FormTable();
         var config = new GameConfig(configPath);
         foreach (var row in PadMapping.Rows)
         {
             var label = FieldLabel(row.Label);
-            label.Font = Body;
-            label.ForeColor = CreamDim;
+            label.FontWeight = FontWeight.Normal;
+            label.Foreground = Brush(CreamDim);
             var box = new ThemedCombo();
             foreach (var choice in PadMapping.ChoicesFor(row)) box.Items.Add(choice);
-            table.Controls.Add(label);
-            table.Controls.Add(box);
+            table.Add(label, box);
             padRows.Add((row, label, box));
             ShowPadValue(row, box, config.Get("controller", row.Key));
             box.SelectedIndexChanged += (_, _) =>
@@ -939,11 +997,10 @@ sealed class MainForm : Form
                 c.Save();
             };
         }
-        body.Controls.Add(table);
+        body.Children.Add(table);
         ShowXboxRows();
-        var restore = new PlankButton("Restore defaults", (_, _) => RestorePadDefaults());
-        restore.Margin = S(0, 4, 0, 8);
-        body.Controls.Add(restore);
+        var restore = new PlankButton("Restore defaults", (_, _) => RestorePadDefaults()) { Margin = new Thickness(0, 4, 0, 8) };
+        body.Children.Add(restore);
     }
 
     // Selects the value's pad button; one the list doesn't know stays as it is, shown as "(custom)".
@@ -955,7 +1012,7 @@ sealed class MainForm : Form
         int index = -1;
         for (int i = 0; i < box.Items.Count; i++)
             if (box.Items[i] is PadMapping.Choice c && c.Name == name) { index = i; break; }
-        if (index < 0) index = box.Items.Add("(custom) " + value);
+        if (index < 0) { box.Items.Add("(custom) " + value); index = box.Items.Count - 1; }
         box.SelectedIndex = index;
     }
 
@@ -964,7 +1021,7 @@ sealed class MainForm : Form
     {
         bool xbox = layoutBox.SelectedIndex == 1;
         foreach (var (row, label, box) in padRows)
-            if (row.Xbox) { label.Visible = xbox; box.Visible = xbox; }
+            if (row.Xbox) { label.IsVisible = xbox; box.IsVisible = xbox; }
     }
 
     // Writes every GameCube button's default (so a mapping saved for one controller in F10 doesn't stay in force) and
@@ -988,10 +1045,11 @@ sealed class MainForm : Form
         c.Save();
     }
 
-    void RefreshGamepads()
+    internal async Task RefreshGamepads()
     {
         var pads = gamepads.Connected;
-        padStatus.Text = !gamepads.Available ? "Controller detection is not available (SDL3.dll missing from the game folder)."
+        padStatus.Text = !gamepads.Available ? (OperatingSystem.IsWindows() ? "Controller detection is not available (SDL3.dll missing from the game folder)."
+                                                                            : "Controller detection is not available (SDL3 isn't installed: libSDL3.so.0).")
             : pads.Count == 0 ? "No controller connected."
             : "Connected: " + string.Join(", ", pads.Select(p => $"{p.Name} ({Gamepads.Describe(p.Kind)})"));
         // An Xbox pad and no layout chosen yet (key absent): ask once per launcher start.
@@ -1000,7 +1058,7 @@ sealed class MainForm : Form
         askedLayout = true;
         bool? original;
         asking = true;
-        try { original = AskXboxLayout(xbox.Name); }
+        try { original = await AskXboxLayout(xbox.Name); }
         finally { asking = false; }
         if (original == null) return;
         SaveLayout(original.Value);
@@ -1008,32 +1066,16 @@ sealed class MainForm : Form
     }
 
     // true = original Xbox layout, false = GameCube layout, null = closed without choosing (asked again next start).
-    bool? AskXboxLayout(string padName)
+    async Task<bool?> AskXboxLayout(string padName)
     {
-        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-        using var dialog = new Form
+        int pick = await Dialogs.Choose(this, "Xbox controller detected", "Play with the original Xbox controls?", new[]
         {
-            Text = "Xbox controller detected", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-            StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, BackColor = BoardBottom, Font = Body,
-            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = S(20, 14, 20, 14), Icon = Icon,
-        };
-        var body = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = BoardBottom };
-        var title = Title("Play with the original Xbox controls?");
-        title.Margin = S(0, 0, 0, 6);
-        body.Controls.Add(title);
-        body.Controls.Add(Note($"{padName} is connected. Night of 100 Frights came out on the Xbox too, with its own button layout."));
-        body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk, LT gum, RT run, LB soap bubble, RB sneak. " +
-                               "The bumpers work together with the triggers, like on the Xbox."));
-        body.Controls.Add(Note("GameCube: B head smash, X dig / enter / talk, RB (Z) + a trigger for soap bubble and sneak."));
-        body.Controls.Add(Note("You can change this any time in Settings > Controls or in the game (F10 > Controls)."));
-        var row = Row();
-        row.Margin = S(0, 8, 0, 0);
-        bool? answer = null;
-        row.Controls.Add(new PlankButton("Original Xbox layout", (_, _) => { answer = true; dialog.Close(); }, primary: true));
-        row.Controls.Add(new PlankButton("GameCube layout", (_, _) => { answer = false; dialog.Close(); }));
-        body.Controls.Add(row);
-        dialog.Controls.Add(body);
-        dialog.ShowDialog(this);
-        return answer;
+            $"{padName} is connected. Night of 100 Frights came out on the Xbox too, with its own button layout.",
+            "Original Xbox: A jump, X head smash, B dig / enter / talk, LT gum, RT run, LB soap bubble, RB sneak. " +
+            "The bumpers work together with the triggers, like on the Xbox.",
+            "GameCube: B head smash, X dig / enter / talk, RB (Z) + a trigger for soap bubble and sneak.",
+            "You can change this any time in Settings > Controls or in the game (F10 > Controls).",
+        }, ("Original Xbox layout", true), ("GameCube layout", false));
+        return pick switch { 0 => true, 1 => false, _ => null };
     }
 }

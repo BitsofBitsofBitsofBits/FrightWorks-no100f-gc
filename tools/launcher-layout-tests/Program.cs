@@ -1,15 +1,22 @@
-using System.Reflection;
+using System.Runtime.InteropServices;
+using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Automation.Peers;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using ScoobyReMasked;
+using Rectangle = System.Drawing.Rectangle;
 
+// Layout regression checks for the launcher, on its real window and pages, without a screen (Avalonia's headless
+// platform drawn with Skia, the same renderer as on screen). Windows and Linux. Writes page screenshots to the output
+// directory; never starts the game or touches the player's files (a disposable portable fixture).
 static class LauncherLayoutTests
 {
-    const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
     static int checks;
-
-    static object? Call(object target, string name, params object[] args) =>
-        target.GetType().GetMethod(name, Private)!.Invoke(target, args);
-
-    static IEnumerable<Control> Descendants(Control c) =>
-        c.Controls.Cast<Control>().SelectMany(child => new[] { child }.Concat(Descendants(child)));
 
     static void Check(bool condition, string message)
     {
@@ -17,14 +24,22 @@ static class LauncherLayoutTests
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    // Simulated monitor layouts: the same cases and expected text as the game's wiicompiled/runtime/tests/monitor_labels_tests.cpp.
-    static void CheckMonitorLabels(Assembly assembly)
+    static IEnumerable<Visual> Descendants(Visual v) => v.GetVisualDescendants();
+
+    static void Pump()
     {
-        var labels = assembly.GetType("ScoobyReMasked.Monitors")!.GetMethod("Labels", BindingFlags.Static | BindingFlags.Public)!;
+        Dispatcher.UIThread.RunJobs();
+        AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    // Simulated monitor layouts: the same cases and expected text as the game's wiicompiled/runtime/tests/monitor_labels_tests.cpp.
+    static void CheckMonitorLabels()
+    {
         (string, Rectangle, bool) M(string name, int x, int y, int w, int h, bool primary = false) => (name, new Rectangle(x, y, w, h), primary);
         void Case(string name, (string, Rectangle, bool)[] layout, params string[] expected)
         {
-            var got = (List<string>)labels.Invoke(null, new object[] { layout.ToList() })!;
+            var got = Monitors.Labels(layout.ToList());
             Check(got.SequenceEqual(expected), $"Monitor labels, {name}: {string.Join(" | ", got)}");
         }
         Case("no clash: names and places differ",
@@ -50,18 +65,33 @@ static class LauncherLayoutTests
             "Main (2560x1440, main)", "VS248 (1920x1080, 1)", "VS248 (1920x1080, 2)", "G215HV (1920x1080)");
     }
 
-    [STAThread]
+    // The control drawn on its own over a transparent bitmap: its four corners must stay see-through (a plank, not a box).
+    static void CheckCorners(PlankButton button, string state, string output)
+    {
+        var size = new PixelSize(Math.Max(1, (int)Math.Ceiling(button.Bounds.Width)), Math.Max(1, (int)Math.Ceiling(button.Bounds.Height)));
+        using var bitmap = new RenderTargetBitmap(size);
+        bitmap.Render(button);
+        bitmap.Save(Path.Combine(output, $"button-{button.Text}-{state}.png"), PngBitmapEncoderOptions.Default);
+        var pixels = new byte[size.Width * size.Height * 4];
+        var handle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+        try { bitmap.CopyPixels(new PixelRect(size), handle.AddrOfPinnedObject(), pixels.Length, size.Width * 4); }
+        finally { handle.Free(); }
+        foreach (var (x, y) in new[] { (0, 0), (size.Width - 1, 0), (0, size.Height - 1), (size.Width - 1, size.Height - 1) })
+        {
+            byte alpha = pixels[(y * size.Width + x) * 4 + 3];
+            Check(alpha == 0, $"{button.Text} ({state}): corner ({x},{y}) is painted (alpha {alpha}), not see-through");
+        }
+    }
+
     static int Main(string[] args)
     {
-        if (args.Length is < 1 or > 2)
+        if (args.Length != 1)
         {
-            Console.Error.WriteLine("Usage: LauncherLayoutTests <scratch-output-directory> [monitor-index]");
+            Console.Error.WriteLine("Usage: LauncherLayoutTests <scratch-output-directory>");
             return 2;
         }
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
         string output = Path.GetFullPath(args[0]);
+        Directory.CreateDirectory(output);
         string fixture = Path.Combine(output, "fixture-" + Guid.NewGuid().ToString("N"));
         string game = Path.Combine(fixture, "Play");
         string userData = Path.Combine(game, "UserData");
@@ -73,262 +103,231 @@ static class LauncherLayoutTests
         for (int i = 0; i < 20; i++)
             Directory.CreateDirectory(Path.Combine(userData, "mods", $"{i:D2}-" + new string('M', 100)));
 
-        var assembly = Assembly.Load("FrightWorks");
-        var type = assembly.GetType("ScoobyReMasked.MainForm")!;
-        var paths = Activator.CreateInstance(assembly.GetType("ScoobyReMasked.DataPaths")!, fixture, game);
-        using var form = (Form)Activator.CreateInstance(type, new object?[] { null, paths })!;
-        form.Text = "Launcher layout regression checks";
-        Console.WriteLine($"Available monitors: {Screen.AllScreens.Length}");
-        if (args.Length == 2)
+        AppBuilder.Configure<App>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
+                  .WithInterFont().SetupWithoutStarting();
+        try
         {
-            if (!int.TryParse(args[1], out int monitor) || monitor < 0 || monitor >= Screen.AllScreens.Length)
-            {
-                Console.Error.WriteLine("Monitor index is out of range.");
-                return 2;
-            }
-            form.StartPosition = FormStartPosition.Manual;
-            var area = Screen.AllScreens[monitor].WorkingArea;
-            form.Location = new Point(area.Left + 32, area.Top + 32);
+            Run(fixture, game, config, initialConfig, output);
+            Console.WriteLine($"PASS {checks} assertions.");
+            return 0;
         }
-        form.DpiChanged += (_, e) => Console.WriteLine($"Actual monitor DPI transition: {e.DeviceDpiOld} -> {e.DeviceDpiNew}");
-        int result = 0;
-        form.Shown += (_, _) => form.BeginInvoke(() =>
+        catch (Exception e)
         {
-            try
+            Console.Error.WriteLine(e);
+            return 1;
+        }
+        finally
+        {
+            try { Directory.Delete(fixture, true); } catch (Exception) { }
+        }
+    }
+
+    static void Run(string fixture, string game, string config, string initialConfig, string output)
+    {
+        CheckMonitorLabels();
+
+        var window = new MainWindow(null, new DataPaths(fixture, game)) { Title = "Launcher layout regression checks" };
+        window.Show();
+        Pump();
+        // Controller detection runs on its own thread; the Controls status line changes when it is first read.
+        Thread.Sleep(500);
+        _ = window.RefreshGamepads();
+        Pump();
+        Check(window.padStatus.Text?.StartsWith("Looking") == false, "Controller detection status was not filled in");
+        window.scene.Showcase(false);
+
+        // ----- Planks: see-through corners in every state -----
+        window.ShowBoard("settings");
+        window.showControlsTab!(false);
+        Pump();
+        var settings = window.boards["settings"];
+        foreach (var button in Descendants(settings).OfType<PlankButton>().Where(b => b.IsEffectivelyVisible).ToArray())
+        {
+            var center = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), window)!.Value;
+            CheckCorners(button, "normal", output);
+            window.MouseMove(center);
+            Pump();
+            Check(button.IsPointerOver, $"{button.Text}: the pointer over it doesn't count as hover");
+            CheckCorners(button, "hover", output);
+            window.MouseDown(center, MouseButton.Left);
+            Pump();
+            CheckCorners(button, "pressed", output);
+            window.MouseMove(new Point(1, 1));
+            window.MouseUp(new Point(1, 1), MouseButton.Left);  // released elsewhere: no click
+            button.IsEnabled = false;
+            Pump();
+            CheckCorners(button, "disabled", output);
+            button.IsEnabled = true;
+        }
+        window.showControlsTab!(false);
+
+        void Validate(string name, bool controls = false)
+        {
+            window.ShowBoard(name);
+            if (name == "settings") window.showControlsTab!(controls);
+            Pump();
+            var board = window.boards[name];
+            var stage = (Control)window.Content!;
+            string page = controls ? "controls" : name;
+            window.SaveShot(Path.Combine(output, $"{window.ClientSize.Width:0}x{window.ClientSize.Height:0}-{page}.png"));
+            Check(new Rect(stage.Bounds.Size).Contains(board.Bounds), $"{page}: board {board.Bounds} escapes the window {stage.Bounds.Size}");
+            var scroller = board.Scroller;
+            Check(scroller.Extent.Width <= scroller.Viewport.Width + 1,
+                $"{page}: content {scroller.Extent.Width} is wider than the page {scroller.Viewport.Width} at {window.ClientSize}");
+            Check(board.Body.Bounds.Right <= scroller.Viewport.Width + 1, $"{page}: page body wider than its viewport");
+            string Describe(Control c) => $"{c.GetType().Name} '{(c as TextBlock)?.Text ?? (c as PlankButton)?.Text ?? (c as ThemedCombo)?.SelectedItem}'" +
+                (c is TextBlock or PlankButton or ThemedCombo ? "" : $" in {string.Join(" < ", c.GetVisualAncestors().Take(3).Select(a => a.GetType().Name + (a is Control { Name: { } n } ? "#" + n : "")))}");
+            double Right(Control c) => c.TranslatePoint(new Point(c.Bounds.Width, 0), board.Body)!.Value.X;
+            var visible = Descendants(board.Body).OfType<Control>().Where(c => c.IsEffectivelyVisible && c.Bounds.Width > 0).ToList();
+            // Report the innermost control that sticks out (its panels stick out with it).
+            var outside = visible.Where(c => Right(c) > board.Body.Bounds.Width + 1).ToList();
+            var innermost = outside.Where(c => !outside.Any(o => o != c && o.GetVisualAncestors().Contains(c))).ToList();
+            Check(innermost.Count == 0, $"{page}: sticks out of the {board.Body.Bounds.Width:0} wide page: " +
+                  string.Join("; ", innermost.Take(5).Select(c => $"{Describe(c)} to {Right(c):0} (width {c.Bounds.Width:0})")));
+            foreach (var box in visible.OfType<ThemedCombo>())
+                Check(box.Bounds.Width >= 80, $"{page}: unusably narrow drop-down ({box.Bounds.Width:0})");
+            // The wheel over a closed drop-down scrolls the page and never changes (and saves) a setting.
+            var firstBox = Descendants(board.Body).OfType<ThemedCombo>().FirstOrDefault(c => c.IsEffectivelyVisible);
+            if (firstBox != null)
             {
-                var scene = form.Controls[0];
-                // Controller detection runs on its own thread and rewrites the Controls status line when it finishes
-                // ("Looking for controllers..." -> found / none / SDL3 missing): wait for it, or the layout can change
-                // between two snapshots of the same page.
-                var padStatus = (Label)type.GetField("padStatus", Private)!.GetValue(form)!;
-                for (var waited = System.Diagnostics.Stopwatch.StartNew(); padStatus.Text.StartsWith("Looking") && waited.Elapsed.TotalSeconds < 10;)
-                {
-                    Thread.Sleep(25);
-                    Application.DoEvents();
-                }
-                Check(!padStatus.Text.StartsWith("Looking"), "Controller detection did not finish within 10 seconds");
-                scene.GetType().GetMethod("Showcase")!.Invoke(scene, new object[] { false });
-                var selectTab = (Action<bool>)type.GetField("showControlsTab", Private)!.GetValue(form)!;
-                var initialDpi = form.DeviceDpi;
-                float nativeScale = initialDpi / 96f;
-                int regionChanges = 0;
-                foreach (Control board in scene.Controls) board.RegionChanged += (_, _) => regionChanges++;
-
-                Call(form, "ShowBoard", "settings");
-                selectTab(false);
-                var buttonBoard = scene.Controls.Cast<Control>().Single(c => c.Visible);
-                var tabButtons = Descendants(buttonBoard).OfType<Button>().Where(b => b.Text is "Display" or "Controls").ToArray();
-                var tabStrip = tabButtons[0].Parent!;
-                using (var strip = new Bitmap(tabStrip.Width, tabStrip.Height))
-                {
-                    tabStrip.DrawToBitmap(strip, new Rectangle(Point.Empty, tabStrip.Size));
-                    strip.Save(Path.Combine(output, "button-borders.png"));
-                }
-                foreach (var button in Descendants(buttonBoard).OfType<Button>().Where(b => b.Visible).ToArray())
-                {
-                    Check(!(bool)Call(button, "GetStyle", ControlStyles.Opaque)!, $"{button.Text}: background painting is suppressed");
-                    using var parentBackground = new Bitmap(button.Parent!.Width, button.Parent.Height);
-                    using (var graphics = Graphics.FromImage(parentBackground))
-                    {
-                        graphics.Clear(Color.Magenta);
-                        using var paint = new PaintEventArgs(graphics, button.Parent.ClientRectangle);
-                        Call(button.Parent, "OnPaintBackground", paint);
-                        Call(button.Parent, "OnPaint", paint);
-                    }
-                    void CheckCorners(string state)
-                    {
-                        Check(!(bool)Call(button, "GetStyle", ControlStyles.Opaque)!, $"{button.Text} ({state}): background painting is suppressed");
-                        using var bitmap = new Bitmap(button.Width, button.Height);
-                        using (var graphics = Graphics.FromImage(bitmap))
-                        {
-                            graphics.Clear(Color.Magenta);
-                            using var paint = new PaintEventArgs(graphics, button.ClientRectangle);
-                            Call(button, "OnPaintBackground", paint);
-                            Call(button, "OnPaint", paint);
-                        }
-                        bitmap.Save(Path.Combine(output, $"button-{button.Text}-{state}.png"));
-                        foreach (var corner in new[] { Point.Empty, new Point(button.Width - 1, 0),
-                                     new Point(0, button.Height - 1), new Point(button.Width - 1, button.Height - 1) })
-                        {
-                            var expected = parentBackground.GetPixel(button.Left + corner.X, button.Top + corner.Y);
-                            Check(bitmap.GetPixel(corner.X, corner.Y).ToArgb() == expected.ToArgb(),
-                                $"{button.Text} ({state}): rectangular border at {corner}; got {bitmap.GetPixel(corner.X, corner.Y)}, expected {expected}");
-                        }
-                    }
-                    CheckCorners("normal");
-                    Call(button, "OnMouseEnter", EventArgs.Empty);
-                    CheckCorners("hover");
-                    Call(button, "OnMouseLeave", EventArgs.Empty);
-                    Call(button, "OnMouseDown", new MouseEventArgs(MouseButtons.Left, 1, button.Width / 2, button.Height / 2, 0));
-                    CheckCorners("pressed");
-                    Call(button, "OnMouseUp", new MouseEventArgs(MouseButtons.Left, 1, -1, -1, 0));
-                    button.Enabled = false;
-                    CheckCorners("disabled");
-                    button.Enabled = true;
-                }
-
-                void Validate(string name, bool controls = false)
-                {
-                    Call(form, "ShowBoard", name);
-                    if (name == "settings") selectTab(controls);
-                    Application.DoEvents();
-                    var board = scene.Controls.Cast<Control>().Single(c => c.Visible);
-                    var body = (Panel)board.GetType().GetField("Body")!.GetValue(board)!;
-                    Check(scene.ClientRectangle.Contains(board.Bounds), $"{name}: board escapes the window after scaling");
-                    Check(!body.HorizontalScroll.Visible, $"{name}: horizontal scrollbar at {form.ClientSize}");
-                    foreach (var button in Descendants(board).OfType<Button>().Where(b => b.Visible))
-                        Check(!(bool)Call(button, "GetStyle", ControlStyles.Opaque)!, $"{name}: button background painting was suppressed after layout/scaling");
-                    foreach (var panel in Descendants(body).OfType<ScrollableControl>().Where(p => p.Visible && p.AutoScroll))
-                        Check(!panel.HorizontalScroll.Visible, $"{name}: nested horizontal scrollbar");
-                    foreach (var child in Descendants(body).Where(c => c.Visible && c.Parent is FlowLayoutPanel))
-                        Check(child.Right + child.Margin.Right <= child.Parent!.ClientSize.Width + 1,
-                            $"{name}: child exceeds its flow viewport");
-                    foreach (var table in Descendants(body).OfType<TableLayoutPanel>().Where(t => t.Visible))
-                    {
-                        foreach (Control child in table.Controls)
-                        {
-                            if (!child.Visible) continue;
-                            Check(child.Right + child.Margin.Right <= table.Width + 1, $"{name}: clipped {child.Text}");
-                            int row = table.GetPositionFromControl(child).Row;
-                            Check(table.GetRowHeights()[row] >= child.Height + child.Margin.Vertical,
-                                $"{name}: row clips a control or its vertical spacing");
-                            if (child is ComboBox box)
-                            {
-                                Check(box.Width >= 80, $"{name}: unusably narrow field");
-                                Call(box, "OnDropDown", EventArgs.Empty);
-                                int textWidth = box.Items.Cast<object>().Select(item =>
-                                    TextRenderer.MeasureText(box.GetItemText(item), box.Font).Width).Max();
-                                Check(box.DropDownWidth >= Math.Min(textWidth, Screen.FromControl(box).WorkingArea.Width),
-                                    $"{name}: dropdown truncates options");
-                            }
-                        }
-                    }
-                    var firstBox = Descendants(board).OfType<ComboBox>().FirstOrDefault(c => c.Visible);
-                    if (firstBox != null)
-                    {
-                        int selected = firstBox.SelectedIndex;
-                        var wheel = Message.Create(firstBox.Handle, 0x020A, new IntPtr(-120 << 16), IntPtr.Zero);
-                        Call(firstBox, "WndProc", wheel);
-                        Check(firstBox.SelectedIndex == selected, "Closed dropdown changed a setting on mouse wheel");
-                    }
-                    string signature = string.Join("\n", Descendants(board).Where(c => c.Visible).Select(c => $"{c.GetType().Name} {c.Text} {c.Bounds}"));
-                    Call(form, "CloseBoards");
-                    Call(form, "ShowBoard", name);
-                    Application.DoEvents();
-                    string reopened = string.Join("\n", Descendants(board).Where(c => c.Visible).Select(c => $"{c.GetType().Name} {c.Text} {c.Bounds}"));
-                    if (signature != reopened)
-                    {
-                        File.WriteAllText(Path.Combine(output, "unstable-before.txt"), signature);
-                        File.WriteAllText(Path.Combine(output, "unstable-after.txt"), reopened);
-                    }
-                    Check(signature == reopened, $"{name}: reopening changes layout");
-                    int before = regionChanges;
-                    board.PerformLayout();
-                    board.PerformLayout();
-                    Check(before == regionChanges, $"{name}: unchanged layout replaces the native window region");
-                    body.AutoScrollPosition = Point.Empty;
-                    using var bitmap = new Bitmap(form.Width, form.Height);
-                    form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
-                    string page = controls ? "controls" : name;
-                    bitmap.Save(Path.Combine(output, $"{form.ClientSize.Width}-{page}.png"));
-                    Console.WriteLine($"PASS {form.ClientSize.Width}x{form.ClientSize.Height} {page}: viewport {body.ClientSize}; content {body.DisplayRectangle.Size}");
-                }
-
-                foreach (var size in new[] { new Size(1180, 830), new Size(960, 680), new Size(820, 600), new Size(1180, 830) })
-                {
-                    // The 820 case deliberately exercises less than the normal minimum.
-                    form.MinimumSize = Size.Empty;
-                    form.ClientSize = new Size((int)Math.Round(size.Width * nativeScale), (int)Math.Round(size.Height * nativeScale));
-                    Validate("settings");
-                    Validate("settings", controls: true);
-                    Validate("mods");
-                    Validate("extras");
-                }
-                Check(File.ReadAllText(config) == initialConfig, "Opening, resizing, or navigation changed configuration");
-
-                Call(form, "ShowBoard", "settings");
-                var settings = scene.Controls.Cast<Control>().Single(c => c.Visible);
-                var displayTab = Descendants(settings).OfType<Button>().Single(b => b.Text == "Display");
-                Check(displayTab.TabStop && displayTab.CanSelect, "Display tab is not keyboard focusable");
-                Check(displayTab.AccessibilityObject.Role == AccessibleRole.PushButton, "Themed button lacks a native button role");
-                Check(Descendants(settings).OfType<Button>().Any(b => b.AccessibleName == "Close Settings"), "Close button lacks an accessible name");
-                displayTab.Focus();
-                Call(displayTab, "OnKeyDown", new KeyEventArgs(Keys.Space));
-                Call(displayTab, "OnKeyUp", new KeyEventArgs(Keys.Space));
-                Application.DoEvents();
-                var display = displayTab.Parent!.Parent!.Controls.Cast<Control>().Single(c => c.Visible && Descendants(c).OfType<ComboBox>().Count() == 12);
-                Check(display.Visible, "Space did not select the Display tab");
-                var window = Descendants(display).OfType<ComboBox>().First();
-                window.SelectedIndex = 1;
-                string saved = File.ReadAllText(config);
-                Check(saved.Contains("display_mode = \"windowed\""), "Changed display setting was not saved");
-                Check(saved.Contains("hdr = true") && saved.Contains("hdr_paper_white_nits = 237.5") &&
-                    saved.Contains("hdr_peak_nits = 1234.0") && saved.Contains("unknown_setting = 42"),
-                    "Changing another setting overwrote custom HDR/unknown values");
-                var monitorBox = Descendants(display).OfType<ComboBox>().ElementAt(1);
-                Check((string)monitorBox.SelectedItem! == "Saved monitor (not connected)", "A missing monitor is not shown as saved");
-                Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
-                monitorBox.SelectedIndex = 0;
-                Check(File.ReadAllText(config).Contains("fullscreen_display = \"auto\""), "Automatic monitor was not saved");
-                CheckMonitorLabels(assembly);
-                var layout = (ComboBox)type.GetField("layoutBox", Private)!.GetValue(form)!;
-                layout.SelectedIndex = 0;
-                selectTab(true);
-                var xboxLabel = Descendants(settings).OfType<Label>().Single(l => l.Text == "Black (sneak)");
-                Check(!xboxLabel.Visible, "GameCube layout did not hide Xbox-only mapping");
-                layout.SelectedIndex = 1;
-                Check(xboxLabel.Visible, "Xbox layout did not restore Xbox-only mapping");
-
-                var home = form.Location;
-                foreach (var screen in Screen.AllScreens)
-                {
-                    form.Location = new Point(screen.WorkingArea.Left + 32, screen.WorkingArea.Top + 32);
-                    Application.DoEvents();
-                    Console.WriteLine($"Native monitor check: DPI={form.DeviceDpi}, client={form.ClientSize}");
-                    Validate("settings");
-                    Validate("settings", controls: true);
-                    Validate("mods");
-                    Validate("extras");
-                }
-                form.Location = home;
-                Application.DoEvents();
-                Check(form.DeviceDpi == initialDpi, "Returning to the original monitor did not restore DPI");
-
-                // This is a layout stress simulation, not a physical monitor-DPI transition.
-                form.AutoScaleMode = AutoScaleMode.None;
-                float syntheticScale = 1;
-                var fonts = Descendants(form).Prepend(form).Select(c => (Control: c, Font: c.Font)).ToArray();
-                foreach (float factor in new[] { 1.25f, 1.2f, 4f / 3f, 0.5f })
-                {
-                    form.SuspendLayout();
-                    syntheticScale *= factor;
-                    assembly.GetType("ScoobyReMasked.Theme")!.GetField("K")!.SetValue(null, nativeScale * syntheticScale);
-                    form.Scale(new SizeF(factor, factor));
-                    foreach (var entry in fonts)
-                        entry.Control.Font = new Font(entry.Font.FontFamily, entry.Font.Size * syntheticScale, entry.Font.Style);
-                    foreach (var box in Descendants(form).OfType<ComboBox>())
-                        Call(box, "OnDpiChangedAfterParent", EventArgs.Empty);
-                    form.ResumeLayout(true);
-                    foreach (var board in scene.Controls.Cast<Control>()) board.PerformLayout();
-                    Validate("settings");
-                    Validate("settings", controls: true);
-                    Validate("mods");
-                    Validate("extras");
-                    var normalSize = form.ClientSize;
-                    form.ClientSize = new Size((int)Math.Round(960 * nativeScale * syntheticScale), (int)Math.Round(680 * nativeScale * syntheticScale));
-                    Validate("settings");
-                    Validate("settings", controls: true);
-                    Validate("mods");
-                    Validate("extras");
-                    form.ClientSize = normalSize;
-                }
-                Check(form.DeviceDpi == initialDpi, "Stress test must not change operating-system DPI");
-                Console.WriteLine($"PASS {checks} assertions. Actual DPI: {initialDpi}; font/size stress: 125%, 150%, 200%, back to 100% (simulated).");
+                int selected = firstBox.SelectedIndex;
+                var over = firstBox.TranslatePoint(new Point(firstBox.Bounds.Width / 2, firstBox.Bounds.Height / 2), window)!.Value;
+                window.MouseWheel(over, new Vector(0, -1));
+                Pump();
+                Check(firstBox.SelectedIndex == selected, $"{page}: the wheel over a closed drop-down changed a setting");
+                scroller.ScrollToHome();
+                Pump();
             }
-            catch (Exception e) { Console.Error.WriteLine(e); result = 1; }
-            finally { form.Close(); }
-        });
-        Application.Run(form);
-        return result;
+            string Signature() => string.Join("\n", Descendants(board).OfType<Control>().Where(c => c.IsEffectivelyVisible)
+                .Select(c => $"{c.GetType().Name} {(c as TextBlock)?.Text ?? (c as PlankButton)?.Text} {c.Bounds}"));
+            string before = Signature();
+            window.CloseBoards();
+            Pump();
+            window.ShowBoard(name);
+            Pump();
+            string after = Signature();
+            if (before != after)
+            {
+                File.WriteAllText(Path.Combine(output, "unstable-before.txt"), before);
+                File.WriteAllText(Path.Combine(output, "unstable-after.txt"), after);
+            }
+            Check(before == after, $"{page}: reopening changes layout");
+            Console.WriteLine($"PASS {window.ClientSize.Width:0}x{window.ClientSize.Height:0} {page}: viewport {scroller.Viewport}, content {scroller.Extent}");
+        }
+
+        // Normal, minimum, below the minimum (a tiling window manager ignores it), very narrow, and back.
+        window.MinWidth = window.MinHeight = 0;
+        foreach (var size in new[] { new Size(1180, 830), new Size(960, 680), new Size(820, 600), new Size(500, 547), new Size(1180, 830) })
+        {
+            window.Width = size.Width;
+            window.Height = size.Height;
+            Pump();
+            Check(Math.Abs(window.ClientSize.Width - size.Width) < 1, $"window did not take {size}: {window.ClientSize}");
+            Validate("settings");
+            Validate("settings", controls: true);
+            Validate("mods");
+            Validate("extras");
+        }
+        Check(File.ReadAllText(config) == initialConfig, "Opening, resizing, or navigation changed configuration");
+
+        // ----- Keyboard and accessibility -----
+        window.ShowBoard("settings");
+        window.showControlsTab!(true);
+        Pump();
+        var displayTab = Descendants(settings).OfType<PlankButton>().Single(b => b.Text == "Display");
+        Check(displayTab.Focusable && displayTab.IsEffectivelyEnabled, "Display tab is not keyboard focusable");
+        Check(ControlAutomationPeer.CreatePeerForElement(displayTab).GetAutomationControlType() == AutomationControlType.Button,
+              "Themed button lacks a button role");
+        Check(Descendants(settings).OfType<PlankButton>().Any(b => AutomationProperties.GetName(b) == "Close Settings"), "Close button lacks an accessible name");
+        displayTab.Focus(NavigationMethod.Tab);
+        window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, " ");
+        window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, " ");
+        Pump();
+        var display = (StackPanel)settings.Body.Children[1];
+        Check(display.IsVisible, "Space did not select the Display tab");
+
+        // ----- Settings are saved, and nothing else in the file changes -----
+        var boxes = Descendants(display).OfType<ThemedCombo>().ToList();
+        boxes[0].SelectedIndex = 1;
+        string saved = File.ReadAllText(config);
+        Check(saved.Contains("display_mode = \"windowed\""), "Changed display setting was not saved");
+        Check(saved.Contains("hdr = true") && saved.Contains("hdr_paper_white_nits = 237.5") &&
+              saved.Contains("hdr_peak_nits = 1234.0") && saved.Contains("unknown_setting = 42"),
+              "Changing another setting overwrote custom HDR/unknown values");
+        bool hasMonitorRow = Descendants(display).OfType<TextBlock>().Any(t => t.Text == "Fullscreen monitor");
+        if (MainWindow.MonitorChoice)
+        {
+            Check(hasMonitorRow, "Fullscreen monitor row is missing");
+            var monitorBox = boxes[1];
+            Check((string)monitorBox.SelectedItem! == "Saved monitor (not connected)", "A missing monitor is not shown as saved");
+            Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
+            monitorBox.SelectedIndex = 0;
+            Check(File.ReadAllText(config).Contains("fullscreen_display = \"auto\""), "Automatic monitor was not saved");
+        }
+        else
+        {
+            Check(!hasMonitorRow, "Fullscreen monitor row shown where the game can't pick a monitor");
+            Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
+        }
+
+        // ----- The Xbox-only button rows follow the layout -----
+        window.layoutBox.SelectedIndex = 0;
+        window.showControlsTab!(true);
+        Pump();
+        var xboxLabel = Descendants(settings).OfType<TextBlock>().Single(l => l.Text == "Black (sneak)");
+        Check(!xboxLabel.IsVisible, "GameCube layout did not hide Xbox-only mapping");
+        window.layoutBox.SelectedIndex = 1;
+        Pump();
+        Check(xboxLabel.IsVisible, "Xbox layout did not restore Xbox-only mapping");
+
+        // ----- Play starts the game (Linux: a stand-in script for the game) and the launcher steps aside -----
+        if (!OperatingSystem.IsWindows())
+        {
+            var sys = Path.Combine(fixture, "Disc", "DATA", "sys");
+            Directory.CreateDirectory(sys);
+            File.WriteAllBytes(Path.Combine(sys, "boot.bin"), System.Text.Encoding.ASCII.GetBytes("GIHE78\0\u0001"));
+            string stub = Path.Combine(game, DataPaths.GameExe), marker = Path.Combine(game, "started.txt");
+            File.WriteAllText(stub, "#!/bin/sh\npwd > started.txt\n");
+            File.SetUnixFileMode(stub, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            window.CloseBoards();
+            Pump();
+            var play = window.scene.SignCenter("play")!.Value;
+            var at = window.scene.TranslatePoint(play, window)!.Value;
+            window.MouseMove(at);
+            window.MouseDown(at, MouseButton.Left);
+            window.MouseUp(at, MouseButton.Left);
+            for (var waited = System.Diagnostics.Stopwatch.StartNew(); !File.Exists(marker) && waited.Elapsed.TotalSeconds < 10;)
+            {
+                Thread.Sleep(25);
+                Pump();
+            }
+            Check(File.Exists(marker), "Play did not start the game");
+            Check(File.ReadAllText(marker).Trim() == game, "The game did not start in its own folder");
+            Check(window.WindowState == WindowState.Minimized, "The launcher did not minimise when the game started");
+
+            // A game that ends with an error brings the launcher back with a message (it used to look like Play did nothing).
+            File.WriteAllText(stub, "#!/bin/sh\nexit 3\n");
+            window.WindowState = WindowState.Normal;
+            Thread.Sleep(300);
+            Pump();
+            window.MouseMove(at);
+            window.MouseDown(at, MouseButton.Left);
+            window.MouseUp(at, MouseButton.Left);
+            Window? dialog = null;
+            for (var waited = System.Diagnostics.Stopwatch.StartNew(); dialog == null && waited.Elapsed.TotalSeconds < 10;)
+            {
+                Thread.Sleep(25);
+                Pump();
+                dialog = window.OwnedWindows.FirstOrDefault();
+            }
+            Check(dialog != null, "A game that failed at start left no message");
+            Check(Descendants(dialog!).OfType<TextBlock>().Any(t => t.Text?.Contains("exit code 3") == true), "The message doesn't give the exit code");
+            Check(window.WindowState == WindowState.Normal, "The launcher stayed minimised after the game failed");
+            dialog!.Close();
+            Pump();
+        }
+
+        window.Close();
+        Pump();
     }
 }

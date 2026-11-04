@@ -1,3 +1,9 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Layout;
+using Avalonia.Platform.Storage;
+using Avalonia.Threading;
+
 namespace ScoobyReMasked;
 
 // Bringing the player's files over from an earlier copy of the game: a FrightWorks or Scooby-Doo: Refrightened zip
@@ -15,7 +21,7 @@ static class DataImport
 
     sealed record Source(string Name, string UserData, string? Disc);
 
-    public static void OfferAtStart(DataPaths paths, string title)
+    public static async Task OfferAtStart(DataPaths paths, string title)
     {
         if (paths.DevTree) return;
         var userData = paths.UserData;
@@ -24,50 +30,46 @@ static class DataImport
             return;
         var source = FindNewest(paths);
         if (source == null) return;
-        var answer = MessageBox.Show(
+        bool yes = await Dialogs.YesNo(null,
             $"Found your saves and settings from an earlier version in\n{source.Name}\n\nCopy its saves, settings, controls " +
             "and mods into this one?" + (CopiesDisc(source, paths) ? " Its game files come too, so you don't have to choose the disc again." : "") +
-            "\n\nThe old folder is left as it is. Extras > Folders can copy from another folder later.",
-            title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            "\n\nThe old folder is left as it is. Extras > Folders can copy from another folder later.");
         Directory.CreateDirectory(userData);
-        if (answer != DialogResult.Yes)
+        if (!yes)
         {
             File.WriteAllText(Path.Combine(userData, Mark), $"Not copied from {source.Name}{Environment.NewLine}");
             return;
         }
-        var (error, _) = Import(source, paths, title);
+        var (error, _) = await Import(source, paths, title, null);
         if (error != null)
-            MessageBox.Show($"Copying stopped: {error.Message}\n\nCopy the old folder's files by hand if something is missing.",
-                            title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            await Dialogs.Message(null, $"Copying stopped: {error.Message}\n\nCopy the old folder's files by hand if something is missing.");
         File.WriteAllText(Path.Combine(userData, Mark),
                           $"{(error == null ? "Copied" : "Partly copied")} from {source.Name}{Environment.NewLine}");
     }
 
     // Extras > Folders: the player picks the old game's folder (or its data, UserData or MarioWiiSaveData folder).
-    public static void FromFolder(IWin32Window owner, DataPaths paths, string title)
+    public static async Task FromFolder(Window owner, DataPaths paths, string title)
     {
-        using var dialog = new FolderBrowserDialog
+        var picked = await owner.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
         {
-            Description = "Choose the folder of the earlier FrightWorks or Refrightened (the one with its launcher), or a folder with a Config.toml",
-            UseDescriptionForTitle = true,
-        };
-        if (dialog.ShowDialog(owner) != DialogResult.OK) return;
-        var source = Describe(dialog.SelectedPath);
+            Title = "Choose the folder of the earlier FrightWorks or Refrightened (the one with its launcher), or a folder with a Config.toml",
+            AllowMultiple = false,
+        });
+        if (picked.Count == 0 || picked[0].TryGetLocalPath() is not string folder) return;
+        var source = Describe(folder);
         if (source == null || SameFolder(source.UserData, paths.UserData))
         {
-            MessageBox.Show(owner, "No saves or settings of another copy of the game are in\n" + dialog.SelectedPath, title,
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+            await Dialogs.Message(owner, "No saves or settings of another copy of the game are in\n" + folder);
             return;
         }
-        if (MessageBox.Show(owner, $"Copy the saves, settings, controls and mods from\n{source.Name}?" +
-                                   (CopiesDisc(source, paths) ? " The game files come too." : "") +
-                                   "\n\nFiles this game already has are kept; the old folder is left as it is.",
-                            title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        if (!await Dialogs.YesNo(owner, $"Copy the saves, settings, controls and mods from\n{source.Name}?" +
+                                        (CopiesDisc(source, paths) ? " The game files come too." : "") +
+                                        "\n\nFiles this game already has are kept; the old folder is left as it is."))
             return;
-        var (error, skipped) = Import(source, paths, title);
-        MessageBox.Show(owner, error != null ? $"Copying stopped: {error.Message}"
-                               : skipped > 0 ? $"Done. {skipped} file(s) this game already had were kept as they are."
-                               : "Done.", title, MessageBoxButtons.OK, error != null ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
+        var (error, skipped) = await Import(source, paths, title, owner);
+        await Dialogs.Message(owner, error != null ? $"Copying stopped: {error.Message}"
+                                     : skipped > 0 ? $"Done. {skipped} file(s) this game already had were kept as they are."
+                                     : "Done.");
     }
 
     // A folder the player names: the game's own folder, its data\ or Play\, a UserData, or MarioWiiSaveData.
@@ -142,7 +144,7 @@ static class DataImport
                 }
             }
         }
-        if (!paths.Portable)
+        if (!paths.Portable && OperatingSystem.IsWindows())
         {
             var nsmbw = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "MarioWiiSaveData");
             if (IsThisGamesConfig(Path.Combine(nsmbw, "Config.toml"))) candidates.Add(Make(nsmbw, nsmbw));
@@ -182,15 +184,15 @@ static class DataImport
     {
         try
         {
-            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
-                                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)), StringComparison.OrdinalIgnoreCase);
+            return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+                                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
         catch (Exception) { return false; }
     }
 
     // Copies everything (the disc into a staging folder first) and points the settings at this game's disc.
     // Returns the error, if any, and how many files were already there.
-    static (Exception? error, int skipped) Import(Source source, DataPaths paths, string title)
+    static async Task<(Exception? error, int skipped)> Import(Source source, DataPaths paths, string title, Window? owner)
     {
         var files = new List<(string from, string to)>();
         bool configCopied = !File.Exists(paths.ConfigPath);
@@ -213,7 +215,7 @@ static class DataImport
             foreach (var f in Directory.EnumerateFiles(source.Disc!, "*", SearchOption.AllDirectories))
                 files.Add((f, Path.Combine(staging, Path.GetRelativePath(source.Disc!, f))));
         }
-        var (error, skipped) = Copy(files, title);
+        var (error, skipped) = await Copy(files, title, owner);
         if (error == null && copyDisc)
         {
             try
@@ -240,20 +242,23 @@ static class DataImport
     }
 
     // Copies with a small progress window; never overwrites a file the game already has.
-    static (Exception? error, int skipped) Copy(List<(string from, string to)> files, string title)
+    static async Task<(Exception? error, int skipped)> Copy(List<(string from, string to)> files, string title, Window? owner)
     {
         Exception? error = null;
         int skipped = 0;
-        using var form = new Form
+        var dialog = Dialogs.Make(title, owner);
+        dialog.WindowDecorations = WindowDecorations.BorderOnly;
+        var label = Skin.Note("Copying...");
+        label.Foreground = Skin.Brush(Skin.Cream);
+        var bar = new ThemedBar { Maximum = Math.Max(1, files.Count), Width = 448 };
+        dialog.Content = new Border
         {
-            Text = title, FormBorderStyle = FormBorderStyle.FixedDialog, ControlBox = false, StartPosition = FormStartPosition.CenterScreen,
-            ClientSize = new Size(480, 96), Font = new Font("Segoe UI", 10f),
+            Padding = new Thickness(16, 14, 16, 14),
+            Child = new StackPanel { Orientation = Orientation.Vertical, Children = { label, bar } },
         };
-        var label = new Label { Text = "Copying...", Location = new Point(16, 14), AutoSize = true };
-        var bar = new ProgressBar { Location = new Point(16, 48), Size = new Size(448, 20), Maximum = Math.Max(1, files.Count) };
-        form.Controls.Add(label);
-        form.Controls.Add(bar);
-        form.Shown += async (_, _) =>
+        bool done = false;
+        dialog.Closing += (_, e) => e.Cancel = !done;  // it closes itself when the copy ends
+        dialog.Opened += async (_, _) =>
         {
             var progress = new Progress<int>(i =>
             {
@@ -275,9 +280,10 @@ static class DataImport
                 });
             }
             catch (Exception e) { error = e; }
-            form.Close();
+            done = true;
+            Dispatcher.UIThread.Post(dialog.Close);
         };
-        form.ShowDialog();
+        await Dialogs.ShowModal(dialog, owner);
         return (error, skipped);
     }
 }

@@ -2,23 +2,25 @@ using System.Runtime.InteropServices;
 
 namespace ScoobyReMasked;
 
-// Connected gamepads, read with the game's own SDL3.dll so the launcher sees the same controller types as the game
+// Connected gamepads, read with the game's own SDL3 library so the launcher sees the same controller types as the game
 // (button prompts, Xbox layout). SDL runs on its own thread (its device notifications need that thread's message
 // loop); HIDAPI is off, so the launcher never sends anything to a controller. Paused while the game runs.
+// On Linux the game has SDL built in: a libSDL3.so.0 beside the game is used if there is one, else the system's.
 sealed class Gamepads : IDisposable
 {
     public enum Kind { Other, Xbox, PlayStation, Switch, GameCube }
     public sealed record Pad(string Name, Kind Kind);
 
+    public static string LibraryName => OperatingSystem.IsWindows() ? "SDL3.dll" : "libSDL3.so.0";
     readonly string sdlPath;
     readonly object gate = new();
     IReadOnlyList<Pad> pads = Array.Empty<Pad>();
     Thread? thread;
     volatile bool stop;
 
-    public Gamepads(string gameFolder) => sdlPath = Path.Combine(gameFolder, "SDL3.dll");
+    public Gamepads(string gameFolder) => sdlPath = Path.Combine(gameFolder, LibraryName);
 
-    // False when SDL3.dll is missing or failed to start (no detection; the launcher works without it).
+    // False when SDL3 is missing or failed to start (no detection; the launcher works without it).
     public bool Available { get; private set; } = true;
 
     public IReadOnlyList<Pad> Connected { get { lock (gate) return pads; } }
@@ -47,7 +49,9 @@ sealed class Gamepads : IDisposable
         IntPtr lib = IntPtr.Zero;
         try
         {
-            if (!File.Exists(sdlPath) || !NativeLibrary.TryLoad(sdlPath, out lib)) { Available = false; return; }
+            bool loaded = File.Exists(sdlPath) ? NativeLibrary.TryLoad(sdlPath, out lib)
+                        : !OperatingSystem.IsWindows() && NativeLibrary.TryLoad(LibraryName, out lib);
+            if (!loaded) { Available = false; return; }
             var api = new Api(lib);
             api.SetHint("SDL_JOYSTICK_HIDAPI", "0");
             api.SetHint("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1");
@@ -102,7 +106,7 @@ sealed class Gamepads : IDisposable
         _ => "other",
     };
 
-    // The few SDL3 functions used, bound from the game's DLL.
+    // The few SDL3 functions used, bound from the game's library.
     sealed class Api
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.U1)] delegate bool InitFn(uint flags);

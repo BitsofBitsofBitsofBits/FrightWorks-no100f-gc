@@ -1,13 +1,11 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>FrightWorks</AssemblyName>
     <RootNamespace>ScoobyReMasked</RootNamespace>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <Version>1.1.1</Version>
     <Product>FrightWorks: Night of 100 Frights</Product>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
@@ -15,8 +13,15 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>embedded</DebugType>
     <ApplicationIcon>frightworks.ico</ApplicationIcon>
+    <BuiltInComInteropSupport>false</BuiltInComInteropSupport>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The UI (Windows and Linux): Avalonia draws the whole window itself with Skia. -->
+    <PackageReference Include="Avalonia" Version="12.1.5" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.5" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.5" />
+    <!-- Body text on Linux, where Segoe UI isn't installed (SIL Open Font License). -->
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.5" />
     <!-- The installer and updates (Velopack): keep in step with $VpkVersion in tools\package-scooby.ps1. -->
     <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
@@ -25,20 +30,25 @@
     <EmbeddedResource Include="art\mansion.json" LogicalName="ScoobyReMasked.mansion.json" />
     <EmbeddedResource Include="art\dog.png" LogicalName="ScoobyReMasked.dog.png" />
     <EmbeddedResource Include="art\ghost.png" LogicalName="ScoobyReMasked.ghost.png" />
-    <EmbeddedResource Include="fonts\LuckiestGuy-Regular.ttf" LogicalName="ScoobyReMasked.LuckiestGuy-Regular.ttf" />
+    <EmbeddedResource Include="frightworks.ico" LogicalName="ScoobyReMasked.frightworks.ico" />
+    <AvaloniaResource Include="fonts\LuckiestGuy-Regular.ttf" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="LauncherLayoutTests" />
   </ItemGroup>
   <!-- The build ID (footer pill) goes in InformationalVersion: the game's own rules and text, from
        wiicompiled/runtime/cmake/build_info.cmake (release = clean checkout at tag v<Version>: just the version, else
-       "<Version> branch@commit[+diff hash]"). Needs the portable CMake in toolchain\ (tools/build-no100f.ps1 installs
-       it) or CMakeExe=<path>; without one the ID says so. -->
+       "<Version> branch@commit[+diff hash]"). Needs the portable CMake in toolchain/ (tools/build-no100f.ps1 or
+       tools/build-no100f-linux.sh installs it) or CMakeExe=<path>; without one the ID says so. -->
   <PropertyGroup>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
-    <CMakeExe Condition="'$(CMakeExe)' == ''">$(MSBuildThisFileDirectory)..\toolchain\CMake\bin\cmake.exe</CMakeExe>
+    <CMakeExe Condition="'$(CMakeExe)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">$(MSBuildThisFileDirectory)..\toolchain\CMake\bin\cmake.exe</CMakeExe>
+    <CMakeExe Condition="'$(CMakeExe)' == ''">$(MSBuildThisFileDirectory)../toolchain/CMake/bin/cmake</CMakeExe>
   </PropertyGroup>
   <Target Name="FrightWorksBuildId" BeforeTargets="GetAssemblyVersion">
     <PropertyGroup>
       <_BuildIdRepo>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..').Replace('\', '/'))</_BuildIdRepo>
-      <_BuildIdFile>$(MSBuildProjectDirectory)\$(IntermediateOutputPath)build_id.txt</_BuildIdFile>
+      <_BuildIdFile>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'build_id.txt'))</_BuildIdFile>
     </PropertyGroup>
     <Exec Condition="Exists('$(CMakeExe)')" StandardOutputImportance="low"
           Command="&quot;$(CMakeExe)&quot; &quot;-DREPO=$(_BuildIdRepo)&quot; &quot;-DOUT=$(_BuildIdFile.Replace('\', '/'))&quot; -P &quot;$(_BuildIdRepo)/wiicompiled/runtime/cmake/build_info.cmake&quot;" />
