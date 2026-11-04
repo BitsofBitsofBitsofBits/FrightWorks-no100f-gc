@@ -586,7 +586,9 @@ class Worktree:
             unlink_link(link)
         left = find_links(path)
         if left:
-            raise Fail('remove: links still present; nothing deleted:\n%s' % '\n'.join(left))
+            raise Fail('remove: these links are still there after the unlink pass (other links may already have been '
+                       'unlinked; no files were deleted and git worktree remove was not run). Run remove again '
+                       'once they can be unlinked:\n%s' % '\n'.join(left))
         self.git('worktree', 'remove', '--force', path)
         say('remove: %s removed; branch %s kept (%s commit(s) not in origin/main)' % (path, w['branch'], ahead))
 
