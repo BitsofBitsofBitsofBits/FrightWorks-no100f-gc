@@ -51,6 +51,9 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
    effort (`claude --model/--effort`); left out, the session uses the defaults. They apply to that session only, nothing
    is remembered.
 
+`worktree.ps1` is a thin wrapper over `tools\debug\worktree.py` (Python 3.8+); the commands and options here are the
+same either way.
+
 ## Check on, message, reopen
 
 - `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock.
