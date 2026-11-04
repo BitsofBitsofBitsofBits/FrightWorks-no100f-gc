@@ -124,7 +124,8 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
 - Controller rumble is off in every test run (`[controller] rumble = false`), with no switch to turn it on. The game's
   default is on, so a script that starts the game has to set it: `manual-session` writes it, `level-sweep.py` writes it
   in its workers' configs, and `play-patched`, `iterate` and `capture-window` set it for the run and put your
-  `Config.toml` back afterwards. The helpers are in `tools\debug\kit-common.ps1`.
+  `Config.toml` back afterwards. Sound is muted the same way in `iterate`, `capture-window` and `level-sweep.py`
+  (no switch), and all three wait for the game-run lock and give it back when the run ends. The helpers are in `tools\debug\kit-common.ps1`.
   Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
   or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
   `e001`.
