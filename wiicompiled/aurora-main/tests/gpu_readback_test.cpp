@@ -229,6 +229,9 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0,
   gx::set_cutout_mode(mode);
   gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
   require(gfx::begin_frame(), "Alpha-order frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{
+      .pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+      .color = {0.f, 0.f, 0.f, 1.f}, .depth = gx::clear_depth_value()});
   alignas(32) static std::array<uint8_t, 32768> fifo;
   alignas(32) static std::array<uint8_t, 64> white;
   white.fill(255);
