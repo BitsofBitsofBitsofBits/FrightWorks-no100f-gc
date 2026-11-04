@@ -112,7 +112,7 @@ notes. If you're interested, email [therider@unmarkedrider.com](mailto:therider@
 
 ## Building
 
-Windows 10/11 x64 with Python 3 and Git. The build downloads its own toolchain into the repo.
+Windows 10/11 x64 with Python 3.8 or newer and Git. The build downloads its own toolchain into the repo.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1
@@ -125,6 +125,18 @@ The game builds to `Play\`; the package goes to `dist\`. The first build downloa
 (604 MB, from the [Internet Archive](https://archive.org/details/dolphin-scooby-doo-night-of-100-frights-hd-texture-pack))
 into `texture_pack\ScoobyHD` (not in git) and adds the HD Creeper frames from `tools\hd-pack-additions`. Every build
 copies the pack and the button prompt icons into `Play\` beside the game; the icons need Python and ImageMagick.
+
+**Linux** (x86_64, a native build; no release package yet). Needs clang, Ninja, Python 3 with Pillow, ImageMagick,
+curl, rsync and bsdtar (or 7z / unrar); SDL3 for controller detection in the launcher. CMake and the .NET 10 SDK are
+downloaded into `toolchain/`.
+
+```sh
+tools/build-no100f-linux.sh /path/to/game.iso   # extracts the disc the first time, then builds the game into Play/
+tools/build-launcher.sh                         # the launcher: launcher/publish/FrightWorks
+launcher/publish/FrightWorks                    # or start the game directly: "Play/FrightWorks Game"
+```
+
+On Linux the game doesn't record F3 videos or pick a fullscreen monitor yet, so the launcher leaves those out.
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
 

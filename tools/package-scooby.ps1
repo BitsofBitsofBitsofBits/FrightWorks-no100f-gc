@@ -1,5 +1,5 @@
 # Assembles dist\FrightWorks: one exe on top (the launcher, named "FrightWorks.exe"), README.txt, and
-# data\ with the game's runtime files. No disc data.
+# data\ with the game's runtime files. No disc data in the package (but the HD pack fix reads the repo's Disc\DATA).
 #   powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 [-Build] [-Zip]
 #   powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Installer [-Version <v>] [-Feed <dir>] [-NoDownload]
 # -Build first rebuilds the game (build-no100f.ps1 -SkipTools) and the launcher.

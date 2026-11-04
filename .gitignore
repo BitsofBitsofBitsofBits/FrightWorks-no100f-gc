@@ -15,6 +15,7 @@
 /wiicompiled/generated/
 /wiicompiled/native-build/
 /dawn-build/
+/wiicompiled/native-build-linux/
 /wiicompiled/build/
 /wiicompiled/Dependencies/
 /wiicompiled/translator/**/bin/

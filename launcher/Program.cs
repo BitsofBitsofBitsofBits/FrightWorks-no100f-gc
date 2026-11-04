@@ -1,3 +1,5 @@
+using Avalonia;
+
 namespace ScoobyReMasked;
 
 static class Program
@@ -10,7 +12,7 @@ static class Program
         // an uninstall leaves them (DataPaths). In the zip and the dev tree this does nothing.
         Velopack.VelopackApp.Build().Run();
 
-        // Headless: "--extract <image> <outdir>" writes <outdir>\extract.log; exit 0 ok, 2 holes, 3 wrong disc, 1 error.
+        // Headless: "--extract <image> <outdir>" writes <outdir>/extract.log; exit 0 ok, 2 holes, 3 wrong disc, 1 error.
         if (args.Length == 3 && args[0] == "--extract")
         {
             var log = new List<string>();
@@ -31,20 +33,24 @@ static class Program
                 return 1;
             }
         }
-        ApplicationConfiguration.Initialize();
-        // "--shots <dir>": draw every page to <dir>\<page>.png and exit. "--selftest": build every page, then exit 0.
-        int shots = Array.IndexOf(args, "--shots");
-        if (shots < 0 && !args.Contains("--selftest"))
+        // Errors on other threads (a timer, the thread pool, a native callback) would end the process with no message. The
+        // runtime stops the process when this handler returns, so show the dialog (Quit only) and wait for the answer; on the
+        // UI thread's own death the dialog can't be shown, so the error goes to stderr. UI thread errors that handlers and
+        // posted jobs leave uncaught are App's (Dispatcher.UnhandledException), unawaited tasks Fault.Watch's.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
-            var paths = DataPaths.Find();
-            if (paths.Portable) paths.RemoveOldShippedCopies();
-            DataImport.OfferAtStart(paths, MainForm.AppTitle);
-        }
-        var form = new MainForm(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null);
-        if (args.Contains("--selftest")) { form.Shown += (_, _) => form.Close(); }
-        Application.Run(form);
-        return 0;
+            if (e.ExceptionObject is not Exception ex) { Console.Error.WriteLine(e.ExceptionObject); return; }
+            Console.Error.WriteLine(ex);
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess() || Avalonia.Application.Current == null) return;
+            try { Fault.Report(ex, canContinue: false).Wait(TimeSpan.FromMinutes(10)); } catch (Exception) { }
+        };
+        // A faulted task nobody awaited: only noted (it doesn't end the process), the ones we start go through Fault.Watch.
+        TaskScheduler.UnobservedTaskException += (_, e) => { Console.Error.WriteLine(e.Exception); e.SetObserved(); };
+        return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
+
+    // Also used by the layout tests and Avalonia's designer.
+    public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont();
 
     static void Write(string dir, List<string> log)
     {

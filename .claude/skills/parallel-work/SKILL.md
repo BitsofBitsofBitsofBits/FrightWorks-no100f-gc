@@ -47,13 +47,21 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
    The goal goes into the worktree's `TASK.md` and the new session starts on it. Quote the goal; keep `;` out of it
    (Windows Terminal splits its command line there).
 
+   Optional: `-Model sonnet|opus|<full model ID>` and `-Effort low|medium|high|xhigh|max` pick the worker's model and
+   effort (`claude --model/--effort`); left out, the session uses the defaults. They apply to that session only, nothing
+   is remembered.
+
+`worktree.ps1` is a thin wrapper over `tools\debug\worktree.py` (Python 3.8+); the commands and options here are the
+same either way.
+
 ## Check on, message, reopen
 
 - `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock.
 - ListAgents: which sessions are running. SendMessage to `<name>` to ask for a status or pass on a decision from the
   human; the answer arrives as a message. Don't report a worker's state you haven't heard back.
 - A closed tab: `worktree.ps1 open -Name <name>` starts a new session that picks the task up from `TASK.md` (so keep
-  workers writing their Status there). `-Continue` tries `claude -c` (the folder's last conversation) instead. That
+  workers writing their Status there). `-Continue` tries `claude -c` (the folder's last conversation) instead. `-Model`/`-Effort` work here too but are
+  not remembered: pass them again on every `open`, or the session starts on the defaults. That
   only works for sessions started after the environment fix (branch `tools/worktree-session-env`): earlier ones,
   started from the coordinator's tool shell, ran as its children and saved no conversation (and weren't in ListAgents).
 - The human tests a worktree's build with its own `Play\FrightWorks Game.exe`, or its launcher (the worker runs

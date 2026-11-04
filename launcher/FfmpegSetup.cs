@@ -8,6 +8,9 @@ namespace ScoobyReMasked;
 // the release's checksums.sha256 (like tools\debug\capture\get-ffmpeg.ps1) and unpacks only what's needed.
 static class FfmpegSetup
 {
+    // The game records F3 videos only on Windows so far (no100f_recorder.cpp), so only there is ffmpeg looked for.
+    public static bool Supported => OperatingSystem.IsWindows();
+
     const string ZipName = "ffmpeg-master-latest-win64-gpl.zip";
     const string BaseUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/";
 

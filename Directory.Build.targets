@@ -1,0 +1,6 @@
+<Project>
+  <!-- Telemetry off: Avalonia.BuildServices (pulled in by Avalonia) runs this target on every build to post to
+       av-build-tel-api-v1.avaloniaui.net. An empty target of the same name replaces it. Needs the PackageReference pin in
+       the launcher and layout-test csproj files; Directory.Build.props does not work (imported before the package). -->
+  <Target Name="AvaloniaStats" />
+</Project>
