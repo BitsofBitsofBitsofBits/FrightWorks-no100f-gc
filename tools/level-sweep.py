@@ -4,7 +4,8 @@ a mod), skip its opening cutscene, run it, then save a window screenshot and the
     python tools/level-sweep.py [--levels h001,c003] [--seconds 30] [--workers 7]
 
 Output: autotest/level-sweep-<time>/ with REPORT.md, results.json, shots/<level>.png and logs/<level>.err.log.
-Each worker runs its own copy of Play/ (so the per-level mod and the settings don't collide), windowed 1280x720, rumble off.
+Each worker runs its own copy of Play/ (so the per-level mod and the settings don't collide), windowed 1280x720, rumble off, sound muted.
+The sweep holds the game-run lock (Enter-/Exit-GameLock of tools/debug/kit-common.ps1, run through PowerShell) while it runs.
 """
 import argparse, json, os, re, shutil, subprocess, sys, threading, time
 from pathlib import Path
@@ -32,8 +33,16 @@ def make_worker(base: Path, n: int) -> Path:
     (w / "UserData" / "Config.toml").write_text(
         f"[paths]\ndvd_root = '{dvd}'\n\n[video]\ndisplay_mode = \"windowed\"\nwindow_width = 1280\nwindow_height = 720\n"
         "resolution_multiplier = 1.5\naspect_mode = 2\nskip_intro = true\nframe_interpolation_fps = 120\n\n"
-        "[controller]\nrumble = false\n", encoding="utf-8")
+        "[controller]\nrumble = false\n\n[audio]\nmuted = true\n", encoding="utf-8")
     return w
+
+
+def game_lock(verb: str):
+    """Enter-/Exit-GameLock of the debug kit, so the sweep waits its turn like the PowerShell scripts do."""
+    kit = ROOT / "tools" / "debug" / "kit-common.ps1"
+    cmd = f". '{kit}'; {verb}-GameLock '{ROOT}'" + (" 'level-sweep'" if verb == "Enter" else "")
+    if subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd]).returncode:
+        sys.exit(f"{verb}-GameLock failed")
 
 
 def blank_shot(png: Path) -> bool:
@@ -106,8 +115,12 @@ def main():
                       f"fps={r['fps_last']}{flag}", flush=True)
 
     threads = [threading.Thread(target=worker, args=(w,)) for w in workers]
-    for t in threads: t.start()
-    for t in threads: t.join()
+    game_lock("Enter")
+    try:
+        for t in threads: t.start()
+        for t in threads: t.join()
+    finally:
+        game_lock("Exit")
     results.sort(key=lambda r: r["level"])
     (out / "results.json").write_text(json.dumps(results, indent=1))
     bad = [r for r in results if not r["alive"] or r["faults"] or r["panic"] or r["watchdog"]]
