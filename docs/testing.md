@@ -283,6 +283,9 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   (`-Continue` to resume the last conversation instead). `new`/`open` start the tab without the Claude Code
   variables of the shell that runs them, so a session started from the coordinator is its own session: listed by
   ListAgents, its conversation saved for `-Continue`.
+- `-Model <name|full ID>` and `-Effort <low|medium|high|xhigh|max>` (on `new` and `open`, also with `-Continue`) are
+  passed to `claude` as `--model` / `--effort`, only when given. They are not remembered: a later `open` without them
+  starts on the defaults. No semicolons in `-Model` (Windows Terminal splits its command line there).
 - `TASK.md` in the worktree holds that task's notes; the agent notes (`AGENTS.md`, local, not in git) are shared.
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its

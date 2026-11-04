@@ -1,8 +1,8 @@
 # Parallel work: one git worktree per task, each with its own branch, Play\ and Claude Code session.
 #
-#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer [-From origin/main] [-Task "goal"] [-Build] [-NoOpen]
+#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name installer -Branch feat/installer [-From origin/main] [-Task "goal"] [-Build] [-NoOpen] [-Model m] [-Effort e]
 #   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 list
-#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name installer [-Continue]
+#   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name installer [-Continue] [-Model m] [-Effort e]
 #   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 open -Name main
 #   powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name installer
 #
@@ -23,6 +23,10 @@
 # `open -Name main` opens the main checkout's session, named `coordinator`: it creates and removes worktrees and can
 # message the others by name (session name = worktree name). Not `main`: in SendMessage, "main" always means the
 # sender's own conversation, so workers could not reach a session of that name.
+# -Model <name or full model ID> and -Effort <low|medium|high|xhigh|max> (new and open) are passed to claude as --model
+# and --effort, only when given; without them the session uses Claude Code's own defaults. They apply to that one
+# session only: nothing is remembered, so a later open without them starts on the defaults again. -Model can't contain
+# a semicolon (Windows Terminal splits its command line there).
 # -Build runs the first full build there (translator tools, translate, compile).
 # remove refuses while the worktree has uncommitted or untracked work, a program running from it (it first stops the
 # dotnet build servers a launcher or translator build leaves running there) or its Claude session. It unlinks the
@@ -38,10 +42,13 @@ param(
     [string]$Task,
     [switch]$Build,
     [switch]$NoOpen,
-    [switch]$Continue
+    [switch]$Continue,
+    [string]$Model,
+    [ValidateSet('low', 'medium', 'high', 'xhigh', 'max')][string]$Effort
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
+if ($Model -and $Model -match '[;\s]') { throw "-Model '$Model': no semicolons or spaces (Windows Terminal splits its command line at semicolons)" }
 
 # The main checkout (also when this runs from inside a worktree): the parent of the shared .git folder.
 $here = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -84,6 +91,8 @@ function Get-WorktreePath {
 function Open-Session([string]$path, [string]$title, [string]$prompt, [bool]$continue) {
     $claude = @('claude')
     if ($continue) { $claude += '-c' }
+    if ($Model) { $claude += @('--model', $Model) }
+    if ($Effort) { $claude += @('--effort', $Effort) }
     $claude += @('-n', $title)
     if ($prompt) { $claude += $prompt }
     $wt = Get-Command wt -ErrorAction SilentlyContinue
