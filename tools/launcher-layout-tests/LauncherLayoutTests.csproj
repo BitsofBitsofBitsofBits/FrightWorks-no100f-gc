@@ -10,6 +10,8 @@
     <!-- Runs the launcher's real window without a screen: Avalonia's headless platform, drawn with Skia. -->
     <PackageReference Include="Avalonia.Headless" Version="12.1.5" />
     <PackageReference Include="Avalonia.Skia" Version="12.1.5" />
+    <!-- Telemetry off: see the launcher csproj. -->
+    <PackageReference Include="Avalonia.BuildServices" Version="11.3.2" ExcludeAssets="all" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\launcher\ScoobyReMasked.Launcher.csproj" />
