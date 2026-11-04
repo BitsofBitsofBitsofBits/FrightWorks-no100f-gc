@@ -44,15 +44,11 @@ if [[ ! -x "$toolchain/CMake/bin/cmake" ]]; then
         tar -xz -C "$toolchain"
     mv "$toolchain/cmake-4.3.3-linux-x86_64" "$toolchain/CMake"
 fi
-# A toolchain/dotnet from before the move to .NET 10 gets the new SDK beside its old one (as get-dotnet.ps1 does).
-if ! "$toolchain/dotnet/dotnet" --list-sdks 2>/dev/null | grep -q '^10\.'; then
-    status 'tools: downloading the .NET 10 SDK'
-    [[ -x "$toolchain/dotnet/dotnet" ]] && "$toolchain/dotnet/dotnet" build-server shutdown >/dev/null 2>&1 || true
-    curl -fsSL -o "$toolchain/dotnet-install.sh" https://dot.net/v1/dotnet-install.sh
-    bash "$toolchain/dotnet-install.sh" --channel 10.0 --install-dir "$toolchain/dotnet" --no-path >"$logs/dotnet.log"
-fi
+# The .NET 10 SDK: tools/get-dotnet.py (also what tools/get-dotnet.ps1 runs on Windows) installs it into toolchain/dotnet,
+# beside an older SDK if there is one, and prints the path of dotnet as its last line.
+step get-dotnet python3 "$root/tools/get-dotnet.py"
 cmake="$toolchain/CMake/bin/cmake"
-dotnet="$toolchain/dotnet/dotnet"
+dotnet="$(tail -n 1 "$logs/get-dotnet.log")"
 export DOTNET_ROLL_FORWARD=Major DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 # 2. Translate
@@ -90,31 +86,9 @@ mkdir -p "$play/UserData"
 [[ -f "$play/UserData/Config.toml" ]] || printf "[paths]\ndvd_root = '../../Disc/DATA'\n" >"$play/UserData/Config.toml"
 status "copied to $play/FrightWorks Game"
 
-# 5. HD texture pack (texture_pack/ScoobyHD, downloaded once) and the button prompt icons, as stage-assets.ps1 does
-pack="$root/texture_pack/ScoobyHD"
-if [[ ! -d "$pack" ]]; then
-    rar="$root/texture_pack/ScoobyHD.rar"
-    unpack="$root/texture_pack/ScoobyHD.unpack"
-    mkdir -p "$root/texture_pack"
-    if [[ ! -f "$rar" ]] || [[ "$(sha1sum "$rar" | cut -d' ' -f1)" != 1e55e7f802bd0e5ad00538fb21d17a66417f723b ]]; then
-        status "HD pack: downloading dogerki's HD texture pack (604 MB) from archive.org"
-        curl -fL --retry 3 -o "$rar" "https://archive.org/download/dolphin-scooby-doo-night-of-100-frights-hd-texture-pack/Dolphin%20Scooby%20Doo%20Night%20of%20100%20Frights%20HD%20Texture%20Pack.rar"
-        [[ "$(sha1sum "$rar" | cut -d' ' -f1)" == 1e55e7f802bd0e5ad00538fb21d17a66417f723b ]] ||
-            { echo "HD pack: the download's SHA-1 doesn't match" >&2; exit 1; }
-    fi
-    rm -rf "$unpack"; mkdir -p "$unpack"
-    if command -v bsdtar >/dev/null; then bsdtar -xf "$rar" -C "$unpack"
-    elif command -v 7z >/dev/null; then 7z x -y "-o$unpack" "$rar" >/dev/null
-    else unrar x -y "$rar" "$unpack/" >/dev/null; fi
-    folder="$(find "$unpack" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-    [[ -n "$folder" ]] && compgen -G "$folder/*.png" >/dev/null || { echo "HD pack: no texture folder in the RAR" >&2; exit 1; }
-    mv "$folder" "$pack"
-    rm -rf "$unpack" "$rar"
-fi
-cp -r "$root/tools/hd-pack-additions/ScoobyHD/." "$pack/"
-mkdir -p "$play/texture_replacements"
-rsync -a --delete "$pack/" "$play/texture_replacements/ScoobyHD/"
-status "HD pack: $play/texture_replacements/ScoobyHD"
-rm -rf "$play/button_icons"
-step button-icons python3 "$root/tools/make-button-icons.py" --out "$play/button_icons"
+# 5. HD texture pack (downloaded once into texture_pack/ScoobyHD), its fixes (tools/hd-pack-fixes.py, from the disc's own
+# textures in Disc/DATA) and the button prompt icons: tools/stage-assets.py, the same script the Windows build runs, so a
+# fix to the pack reaches Linux builds too.
+step stage-assets python3 "$root/tools/stage-assets.py" --game-dir "$play"
+grep -E '^(HD pack|Button icons|WARNING)' "$logs/stage-assets.log" | while IFS= read -r line; do status "$line"; done || true
 status "DONE: run $play/FrightWorks Game (or the launcher: tools/build-launcher.sh)"
