@@ -153,3 +153,8 @@ if __name__ == "__main__":
         sys.exit(main(sys.argv[1:]))
     except KeyboardInterrupt:
         sys.exit(130)
+    except Exception as error:   # a bug or something unforeseen: say so on stdout, where the .ps1 wrapper reads it
+        import traceback
+        print("ERROR: unexpected %s: %s" % (type(error).__name__, error))
+        traceback.print_exc(file=sys.stdout)
+        sys.exit(1)
