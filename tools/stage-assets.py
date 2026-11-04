@@ -203,7 +203,7 @@ def copy_tree(source, target, mirror):
 
 def find_magick():
     """The directory to add to PATH for magick, '' when it's on PATH already, None when there is none."""
-    if shutil.which("magick"):
+    if shutil.which("magick") or (not WINDOWS and shutil.which("convert")):   # Ubuntu's ImageMagick 6 has only `convert`
         return ""
     if WINDOWS:
         # ImageMagick's installer doesn't always put itself on PATH.
@@ -271,7 +271,7 @@ def stage(game_dir, required):
         return
     magick = find_magick()
     if magick is None:
-        fail("button icons need Python and ImageMagick (magick) on PATH: %s not updated" % icons, required)
+        fail("button icons need Python and ImageMagick (magick, or convert on Linux) on PATH: %s not updated" % icons, required)
         return
     if not os.path.exists(pack_source):
         fail("button icons need %s: %s not updated" % (os.path.join("texture_pack", "ScoobyHD"), icons), required)

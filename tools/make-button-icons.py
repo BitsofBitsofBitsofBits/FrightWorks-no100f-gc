@@ -15,10 +15,13 @@ Every icon is drawn at the size of the biggest GameCube button (A), centred wher
 quarter of the atlas; the GameCube B button is smaller. The atlas is the HD pack's size.
 
     python tools/make-button-icons.py [--out Play/button_icons]
-Needs ImageMagick (magick) to render the SVGs, and the HD pack in texture_pack/ScoobyHD for the layout.
+Needs ImageMagick (magick) to render the SVGs, and the HD pack in texture_pack/ScoobyHD for the layout. Ubuntu 22.04/24.04
+only package ImageMagick 6, whose command is `convert` (used when there is no `magick`; its SVG reader also needs
+librsvg2-bin).
 """
 import argparse
 import os
+import shutil
 import subprocess
 import tempfile
 
@@ -26,6 +29,8 @@ from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ART = os.path.join(ROOT, "tools", "button-art")
+# ImageMagick 7 is `magick`; ImageMagick 6 (Ubuntu's package) only has `convert`. On Windows `convert` is a system tool.
+MAGICK = "convert" if os.name != "nt" and not shutil.which("magick") and shutil.which("convert") else "magick"
 ATLAS = "tex1_64x64_f05a599cb8feb028_14.png"
 # Pad buttons by position (SDL / controller_button_names.h names) -> art.
 FAMILIES = {
@@ -59,7 +64,7 @@ def regions(img):
 
 def render_svg(svg, size, tmp, dark_symbol):
     png = os.path.join(tmp, os.path.basename(svg) + f".{size}.png")
-    subprocess.run(["magick", "-background", "none", "-density", "600", svg, "-resize", f"{size}x{size}", png], check=True)
+    subprocess.run([MAGICK, "-background", "none", "-density", "600", svg, "-resize", f"{size}x{size}", png], check=True)
     icon = Image.open(png).convert("RGBA")
     # The symbol is cut out of the button: fill what the outside can't reach (white, dark on Nintendo's white buttons).
     outside = Image.new("L", (icon.width + 2, icon.height + 2), 0)
@@ -86,9 +91,6 @@ def main():
         left = min(max((x0 + x1 - size) // 2, qx), qx + base.width // 2 - size)
         top = min(max((y0 + y1 - size) // 2, qy), qy + base.height // 2 - size)
         lines.append(f"{name} {left} {top}")
-    with open(os.path.join(a.out, "layout.txt"), "w", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
-    print("wrote", os.path.join(a.out, "layout.txt"))
     with tempfile.TemporaryDirectory() as tmp:
         for family, buttons in FAMILIES.items():
             os.makedirs(os.path.join(a.out, family), exist_ok=True)
@@ -107,6 +109,10 @@ def main():
             assert icon.size == (size, size), (key, icon.size)
             icon.save(os.path.join(a.out, "keyboard", key + ".png"))
         print("wrote", os.path.join(a.out, "keyboard"), ", ".join(KEYBOARD))
+    # Last: stage-assets.py takes layout.txt as "the icons are complete", so a run that failed above must not leave one.
+    with open(os.path.join(a.out, "layout.txt"), "w", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    print("wrote", os.path.join(a.out, "layout.txt"))
 
 
 if __name__ == "__main__":
