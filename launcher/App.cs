@@ -164,13 +164,11 @@ static class Fault
             {
                 var desktop = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
                 var owner = (Owner ?? desktop?.MainWindow) is { IsVisible: true } w ? w : null;
-                var stack = string.Join("\n", (e.StackTrace ?? "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).Take(4));
                 var text = new List<string>
                 {
                     "The launcher hit an unexpected error:\n" + e.Message,
                     e.GetType().FullName + (canContinue ? "\n\nContinue tries to carry on with the launcher; Quit closes it." : ""),
                 };
-                if (stack.Length > 0) text.Add(stack);
                 var buttons = canContinue ? new[] { ("Continue", true), ("Quit", false) } : new[] { ("Quit", true) };
                 int pick = await Dialogs.Choose(owner, MainWindow.AppTitle, "Something went wrong", text, buttons);
                 if (!canContinue || pick == 1) Quit();  // the dialog's X or Escape (-1) carries on, like Continue
