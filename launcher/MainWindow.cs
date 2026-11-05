@@ -41,10 +41,14 @@ sealed class MainWindow : Window
     CancellationTokenSource? ffmpegCancel;  // an ffmpeg download is running
     internal Action<bool>? showControlsTab;
     readonly Gamepads gamepads;
+    internal readonly ControllerNavigation navigation;
     internal TextBlock padStatus = null!;
     internal ThemedCombo layoutBox = null!;
     readonly List<(PadMapping.Row Row, TextBlock Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
+    bool fillingLayout;
+    bool startupReady;
+    internal CheckBox autoLayout = null!;
     readonly DispatcherTimer padTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
     public MainWindow(string? shotDir = null, DataPaths? dataPaths = null, bool enableServices = true)
@@ -54,6 +58,8 @@ sealed class MainWindow : Window
         paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
+        navigation = new ControllerNavigation(this, gamepads);
+        startupReady = !enableServices;
         updater = new Updater(paths);
 
         Title = AppTitle;
@@ -84,14 +90,15 @@ sealed class MainWindow : Window
         };
         // Connected controllers: shown on Settings > Controls; an Xbox pad asks for the layout once.
         padTimer.Tick += (_, _) => RefreshGamepads().Watch();
-        Closed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
+        Closed += (_, _) => { padTimer.Stop(); navigation.Dispose(); gamepads.Dispose(); ffmpegCancel?.Cancel(); };
         Opened += (_, _) =>
         {
             if (shotDir != null) { Dispatcher.UIThread.Post(() => TakeShots(shotDir), DispatcherPriority.Background); return; }
             if (!enableServices) return;
             UpdateControllerOwnership();
+            navigation.Start();
             padTimer.Start();
-            if (updater.CanCheck && updater.CheckAtStart) CheckForUpdates(manual: false).Watch();
+            scene.Focus(NavigationMethod.Directional);
         };
     }
 
@@ -201,13 +208,17 @@ sealed class MainWindow : Window
         RefreshDisc();
         foreach (var (key, b) in boards) b.IsVisible = key == id;
         scene.ActiveSign = id;
+        UpdateLayout();
+        ControllerNavigation.FocusFirst(boards[id]);
+        navigation.Reset();
     }
 
     internal void CloseBoards()
     {
         foreach (var b in boards.Values) b.IsVisible = false;
         scene.ActiveSign = null;
-        scene.Focus();
+        scene.Focus(NavigationMethod.Directional);
+        navigation.Reset();
     }
 
     static WrapPanel Row() => new() { Orientation = Orientation.Horizontal };
@@ -309,7 +320,7 @@ sealed class MainWindow : Window
         // by model on another port keeps its saved id: both mean the same monitor to the game.
         if (MonitorChoice)
         {
-            var monitors = Monitors.List();
+            var monitors = enableServices ? Monitors.List() : new List<Monitors.Monitor>();
             string savedMonitor = cfg.Get("video", "fullscreen_display") ?? "";
             if (savedMonitor.Length == 0) savedMonitor = "auto";
             var savedMatch = Monitors.Find(monitors, savedMonitor);
@@ -381,8 +392,9 @@ sealed class MainWindow : Window
 
     void BuildControls(StackPanel body)
     {
-        body.Children.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
-                               "Change the buttons below, or in the game with F10 > Controls."));
+        body.Children.Add(Note("Navigate the launcher with the D-pad or left stick; South confirms, East goes back, bumpers move focus, " +
+                               "and the right stick scrolls. Launcher navigation is independent of the game's scheme and bindings. " +
+                               "Controller-operated file pickers and text entry use launcher dialogs; mouse-opened native pickers use the OS keyboard/mouse."));
         body.Children.Add(Title("Gamepad"));
         padStatus = FieldLabel("Looking for controllers...");
         padStatus.Margin = new Thickness(0, 4, 0, 6);
@@ -392,10 +404,32 @@ sealed class MainWindow : Window
         layoutBox = new ThemedCombo();
         layoutBox.Items.Add("GameCube");
         layoutBox.Items.Add("Original Xbox");
-        layoutBox.SelectedIndex = new GameConfig(configPath).Get("controller", "layout") == "xbox_original" ? 1 : 0;
-        layoutBox.SelectedIndexChanged += (_, _) => { SaveLayout(layoutBox.SelectedIndex == 1); ShowXboxRows(); };
+        var config = new GameConfig(configPath);
+        ShowLayout(config);
+        void ManualLayout()
+        {
+            if (fillingLayout || layoutBox.SelectedIndex < 0) return;
+            if (layoutBox.SelectedIndex <= 1) SaveLayout(layoutBox.SelectedIndex == 1);
+            else if (new GameConfig(configPath).Get("controller", "layout") is string saved) SaveLayout(saved);
+            ShowXboxRows();
+        }
+        layoutBox.SelectedIndexChanged += (_, _) => ManualLayout();
+        layoutBox.SelectionCommitted += (_, _) => ManualLayout();
         table.Add(FieldLabel("Layout"), layoutBox);
         body.Children.Add(table);
+        autoLayout = new CheckBox { Content = "Automatically match the connected controller until I choose a layout",
+                                   IsChecked = ControllerLayout.Automatic(config), Margin = new Thickness(0, 6, 0, 6) };
+        autoLayout.IsCheckedChanged += (_, _) =>
+        {
+            if (fillingLayout) return;
+            var c = new GameConfig(configPath);
+            ControllerLayout.SetAutomatic(c, autoLayout.IsChecked == true);
+            c.Save();
+            ApplyControllerLayout(gamepads.Connected).Watch();
+        };
+        body.Children.Add(autoLayout);
+        body.Children.Add(Note("Xbox (including Xbox One) matches Original Xbox; GameCube matches GameCube. Other or conflicting " +
+                               "controller types leave the layout unchanged. Explicit layout choices, including the current value, stop automatic selection; bindings are kept."));
         body.Children.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
                                "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black); the bumpers work together with the " +
                                "triggers, and the hints in the game name these buttons. Black and White can go on other buttons below. " +
@@ -560,12 +594,8 @@ sealed class MainWindow : Window
 
     async Task ChooseSavesFolder()
     {
-        var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-        {
-            Title = "Choose the folder for your saves", AllowMultiple = false,
-            SuggestedStartLocation = Directory.Exists(paths.Saves) ? await StorageProvider.TryGetFolderFromPathAsync(paths.Saves) : null,
-        });
-        if (picked.Count > 0 && picked[0].TryGetLocalPath() is string path) await MoveSaves(path);
+        var path = await ControllerDialogs.PickPath(this, "Choose the folder for your saves", paths.Saves, folder: true);
+        if (path != null) await MoveSaves(path);
     }
 
     static bool SamePath(string a, string b) => string.Equals(Path.TrimEndingDirectorySeparator(a), Path.TrimEndingDirectorySeparator(b),
@@ -879,16 +909,8 @@ sealed class MainWindow : Window
 
     async Task ChooseDisc()
     {
-        var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "Choose your Scooby-Doo! Night of 100 Frights disc image", AllowMultiple = false,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("GameCube disc images (*.iso, *.gcm, *.ciso)") { Patterns = new[] { "*.iso", "*.gcm", "*.ciso", "*.ISO", "*.GCM", "*.CISO" } },
-                FilePickerFileTypes.All,
-            },
-        });
-        if (picked.Count == 0 || picked[0].TryGetLocalPath() is not string file) return;
+        var file = await ControllerDialogs.PickPath(this, "Choose your Scooby-Doo! Night of 100 Frights disc image");
+        if (file == null) return;
         GcDisc disc;
         try { disc = GcDisc.Open(file); }
         catch (Exception e) { await Dialogs.Message(this, "That file can't be read: " + e.Message); return; }
@@ -931,6 +953,7 @@ sealed class MainWindow : Window
         // One game at a time: two would share the saves and settings.
         if (game is { HasExited: false } || GameRunning()) { await Dialogs.Message(this, "The game is already running."); return; }
         gamepads.Pause();  // the game has the controllers to itself
+        navigation.Reset();
         GameOwnsControllers = true;
         try { game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = false }); }
         catch (Exception e)
@@ -1044,12 +1067,13 @@ sealed class MainWindow : Window
         foreach (var (row, _, box) in padRows) ShowPadValue(row, box, c.Get("controller", row.Key));
     }
 
-    void SaveLayout(bool original)
+    void SaveLayout(bool original) => SaveLayout(original ? "xbox_original" : "gamecube");
+
+    void SaveLayout(string layout)
     {
         var c = new GameConfig(configPath);
-        c.Set("launcher", "auto_controller_layout", "false");
-        c.SetString("controller", "layout", original ? "xbox_original" : "gamecube");
-        c.Save();
+        if (ControllerLayout.SetManual(c, layout)) c.Save();
+        ShowLayout(c);
     }
 
     internal async Task RefreshGamepads()
@@ -1066,41 +1090,74 @@ sealed class MainWindow : Window
             return;
         }
         var pads = gamepads.Connected;
-        padStatus.Text = !gamepads.Available ? (OperatingSystem.IsWindows() ? "Controller detection is not available (SDL3.dll missing from the game folder)."
-                                                                            : "Controller detection is not available (SDL3 isn't installed: libSDL3.so.0).")
+        padStatus.Text = !gamepads.Available ? "Controller input is not available: " + gamepads.Error
             : pads.Count == 0 ? "No controller connected."
             : "Connected: " + string.Join(", ", pads.Select(p => $"{p.Name} ({Gamepads.Describe(p.Kind)})"));
-        // An Xbox pad and no layout chosen yet (key absent): ask once per launcher start.
-        var xbox = pads.FirstOrDefault(p => p.Kind == Gamepads.Kind.Xbox);
-        if (xbox == null || askedLayout || asking || new GameConfig(configPath).Get("controller", "layout") != null) return;
-        askedLayout = true;
-        bool? original;
-        asking = true;
-        try { original = await AskXboxLayout(xbox.Name); }
-        finally { asking = false; }
-        if (original == null) return;
-        SaveLayout(original.Value);
-        layoutBox.SelectedIndex = original.Value ? 1 : 0;
+        if (startupReady && IsActive && navigation.Modal == null && !asking) await ApplyControllerLayout(pads);
     }
 
     void UpdateControllerOwnership()
     {
         GameOwnsControllers = game is { HasExited: false } || GameRunning();
-        if (GameOwnsControllers) gamepads.Pause();
+        if (GameOwnsControllers) { gamepads.Pause(); navigation.Reset(); }
         else if (enableServices) gamepads.Start();
     }
 
-    // true = original Xbox layout, false = GameCube layout, null = closed without choosing (asked again next start).
-    async Task<bool?> AskXboxLayout(string padName)
+    internal void CompleteStartup()
     {
-        int pick = await Dialogs.Choose(this, "Xbox controller detected", "Play with the original Xbox controls?", new[]
+        foreach (var board in boards.Values) stage.Children.Remove(board);
+        boards.Clear();
+        padRows.Clear();
+        AddBoard("settings", "Settings", BuildSettings);
+        AddBoard("mods", "Mods", BuildMods);
+        AddBoard("extras", "Extras", BuildExtras);
+        RefreshDisc();
+        startupReady = true;
+        if (enableServices && updater.CanCheck && updater.CheckAtStart) CheckForUpdates(manual: false).Watch();
+    }
+
+    void ShowLayout(GameConfig config)
+    {
+        fillingLayout = true;
+        try
         {
-            $"{padName} is connected. Night of 100 Frights came out on the Xbox too, with its own button layout.",
-            "Original Xbox: A jump, X head smash, B dig / enter / talk, LT gum, RT run, LB soap bubble, RB sneak. " +
-            "The bumpers work together with the triggers, like on the Xbox.",
-            "GameCube: B head smash, X dig / enter / talk, RB (Z) + a trigger for soap bubble and sneak.",
-            "You can change this any time in Settings > Controls or in the game (F10 > Controls).",
-        }, ("Original Xbox layout", true), ("GameCube layout", false));
-        return pick switch { 0 => true, 1 => false, _ => null };
+            while (layoutBox.Items.Count > 2) layoutBox.Items.RemoveAt(2);
+            var layout = config.Get("controller", "layout");
+            int index = layout switch { "xbox_original" => 1, null or "gamecube" => 0, _ => 2 };
+            if (index == 2) layoutBox.Items.Add(ControllerLayout.Describe(layout));
+            layoutBox.SelectedIndex = index;
+            if (autoLayout != null) autoLayout.IsChecked = ControllerLayout.Automatic(config);
+            ShowXboxRows();
+        }
+        finally { fillingLayout = false; }
+    }
+
+    internal async Task ApplyControllerLayout(IReadOnlyList<Gamepads.Pad> pads)
+    {
+        if (GameOwnsControllers) return;
+        var config = new GameConfig(configPath);
+        if (ControllerLayout.NeedsConsent(config))
+        {
+            if (askedLayout || ControllerLayout.Match(pads) == null) return;
+            askedLayout = true;
+            asking = true;
+            int pick;
+            try
+            {
+                pick = await Dialogs.Choose(this, "Controller layout", new[]
+                {
+                    "Your saved layout predates automatic controller matching. Enable matching until you choose a layout manually, or keep your deliberate preference?",
+                    "Xbox controllers match the existing Original Xbox layout; GameCube adapters match GameCube. Unsupported or conflicting types do not change it. Custom bindings are never rewritten.",
+                }, ("Enable automatic matching", false), ("Keep my layout", true));
+            }
+            finally { asking = false; }
+            if (pick < 0) return;
+            config = new GameConfig(configPath);
+            ControllerLayout.SetAutomatic(config, pick == 0);
+            config.Save();
+        }
+        if (GameOwnsControllers) return;
+        if (ControllerLayout.ApplyDetected(config, pads)) config.Save();
+        ShowLayout(config);
     }
 }

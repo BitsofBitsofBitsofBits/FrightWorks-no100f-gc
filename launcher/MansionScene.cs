@@ -3,6 +3,9 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -68,6 +71,9 @@ sealed class MansionScene : Control
     double nextStrike, strikeAt = -100, nextEvent;
     List<Point[]>? bolt;
     string? hover;
+    int focusedSign;
+    readonly List<SignButton> signButtons = new();
+    internal string FocusedSign => signs[focusedSign].Id;
 
     double W => Bounds.Width;
     double H => Bounds.Height;
@@ -79,6 +85,13 @@ sealed class MansionScene : Control
         ClipToBounds = true;
         Focusable = true;
         LoadLayout();
+        foreach (var sign in signs)
+        {
+            var button = new SignButton(this, sign.Id);
+            signButtons.Add(button);
+            LogicalChildren.Add(button);
+            VisualChildren.Add(button);
+        }
         foreach (var (id, g) in groups)
         {
             g.Seed = rnd.NextDouble() * 100;
@@ -613,7 +626,8 @@ sealed class MansionScene : Control
 
         foreach (var sg in signs)
         {
-            bool lit = sg.Id == hover || sg.Id == active;
+            bool focused = sg.Id == FocusedSign && (IsFocused || signButtons.Any(b => b.IsFocused));
+            bool lit = sg.Id == hover || sg.Id == active || focused;
             double breathe = (Math.Sin(t * 2.6) + 1) / 2;
             if (sg.Id == "play" || lit)
             {
@@ -624,6 +638,9 @@ sealed class MansionScene : Control
             }
             if (lit) g.DrawImage(sg.Hover!, new Rect(sg.HoverAt, sg.Hover!.Size));
             else g.DrawImage(sg.Normal!, new Rect(sg.NormalAt, sg.Normal!.Size));
+            if (focused)
+                g.DrawGeometry(null, new Pen(Skin.Brush(Skin.Cream), Math.Max(1, 2 * s), new DashStyle(new double[] { 2, 2 }, 0)),
+                               Skin.Polygon(SignPoints(sg, 1.045)));
         }
 
         g.DrawImage(title!, new Rect(new Point(18, 12), title!.Size));
@@ -731,6 +748,89 @@ sealed class MansionScene : Control
 
     string? SignAt(Point p) => signs.LastOrDefault(sg => sg.Hit != null && sg.Hit.FillContains(p))?.Id;
 
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        Place(finalSize);
+        for (int i = 0; i < signs.Count; i++)
+        {
+            var points = signs[i].Points.Select(p => Map(p.X, p.Y)).ToArray();
+            var rect = new Rect(new Point(points.Min(p => p.X), points.Min(p => p.Y)),
+                                new Point(points.Max(p => p.X), points.Max(p => p.Y)));
+            signButtons[i].Measure(rect.Size);
+            signButtons[i].Arrange(rect);
+        }
+        return finalSize;
+    }
+
+    internal void Navigate(LauncherButtons action)
+    {
+        if (action == LauncherButtons.Confirm) { SignClicked?.Invoke(FocusedSign); return; }
+        if (action is not (LauncherButtons.Up or LauncherButtons.Down or LauncherButtons.Left or LauncherButtons.Right or LauncherButtons.Previous or LauncherButtons.Next)) return;
+        int direction = action is LauncherButtons.Up or LauncherButtons.Left or LauncherButtons.Previous ? -1 : 1;
+        focusedSign = (focusedSign + direction + signs.Count) % signs.Count;
+        signButtons[focusedSign].Focus(NavigationMethod.Directional);
+        InvalidateVisual();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        var action = e.Key switch
+        {
+            Key.Up or Key.Left => LauncherButtons.Previous,
+            Key.Down or Key.Right => LauncherButtons.Next,
+            Key.Enter or Key.Space => LauncherButtons.Confirm,
+            _ => LauncherButtons.None,
+        };
+        if (action != LauncherButtons.None) { Navigate(action); e.Handled = true; }
+    }
+
+    protected override void OnGotFocus(FocusChangedEventArgs e) { base.OnGotFocus(e); InvalidateVisual(); }
+    protected override void OnLostFocus(FocusChangedEventArgs e) { base.OnLostFocus(e); InvalidateVisual(); }
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new MenuPeer(this);
+
+    sealed class MenuPeer : ControlAutomationPeer
+    {
+        public MenuPeer(MansionScene owner) : base(owner) { }
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Menu;
+        protected override string? GetNameCore() => "Launcher menu";
+    }
+
+    sealed class SignButton : Control
+    {
+        readonly MansionScene scene;
+        readonly string id;
+        public SignButton(MansionScene scene, string id)
+        {
+            this.scene = scene;
+            this.id = id;
+            Focusable = true;
+            IsHitTestVisible = false;
+            AutomationProperties.SetName(this, char.ToUpperInvariant(id[0]) + id[1..]);
+        }
+        protected override void OnGotFocus(FocusChangedEventArgs e)
+        {
+            base.OnGotFocus(e);
+            scene.focusedSign = scene.signs.FindIndex(s => s.Id == id);
+            scene.InvalidateVisual();
+        }
+        protected override void OnLostFocus(FocusChangedEventArgs e) { base.OnLostFocus(e); scene.InvalidateVisual(); }
+        protected override AutomationPeer OnCreateAutomationPeer() => new Peer(this);
+        sealed class Peer : ControlAutomationPeer, IInvokeProvider
+        {
+            public Peer(SignButton owner) : base(owner) { }
+            protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Button;
+            protected override bool IsControlElementCore() => true;
+            protected override bool IsContentElementCore() => true;
+            public void Invoke()
+            {
+                var button = (SignButton)Owner;
+                if (button.IsEffectivelyEnabled) button.scene.SignClicked?.Invoke(button.id);
+            }
+        }
+    }
+
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
@@ -758,6 +858,10 @@ sealed class MansionScene : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (e.InitialPressMouseButton == MouseButton.Left && SignAt(e.GetPosition(this)) is string id) SignClicked?.Invoke(id);
+        if (e.InitialPressMouseButton == MouseButton.Left && SignAt(e.GetPosition(this)) is string id)
+        {
+            focusedSign = signs.FindIndex(s => s.Id == id);
+            SignClicked?.Invoke(id);
+        }
     }
 }

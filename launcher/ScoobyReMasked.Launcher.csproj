@@ -40,6 +40,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="LauncherLayoutTests" />
+    <InternalsVisibleTo Include="LauncherControllerTests" />
     <Compile Remove="tests\**" />
   </ItemGroup>
   <!-- The build ID (footer pill) goes in InformationalVersion: the game's own rules and text, from

@@ -1,5 +1,6 @@
 using System.Globalization;
 using Avalonia;
+using Avalonia.VisualTree;
 using Avalonia.Automation;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
@@ -379,6 +380,42 @@ sealed class ThemedCombo : ComboBox
 {
     protected override Type StyleKeyOverride => typeof(ComboBox);
     public event EventHandler? SelectedIndexChanged;
+    public event EventHandler? SelectionCommitted;
+
+    public void CommitSelection(int index)
+    {
+        SelectedIndex = index;
+        SelectionCommitted?.Invoke(this, EventArgs.Empty);
+    }
+
+    void Committed() => SelectionCommitted?.Invoke(this, EventArgs.Empty);
+
+    protected override Control CreateContainerForItemOverride(object? item, int index, object? recycleKey) => new ChoiceItem(this);
+
+    sealed class ChoiceItem : ComboBoxItem
+    {
+        readonly ThemedCombo combo;
+        public ChoiceItem(ThemedCombo combo) => this.combo = combo;
+        protected override Type StyleKeyOverride => typeof(ComboBoxItem);
+        protected override AutomationPeer OnCreateAutomationPeer() => new ChoicePeer(this);
+        sealed class ChoicePeer : ListItemAutomationPeer, ISelectionItemProvider
+        {
+            readonly ChoiceItem item;
+            public ChoicePeer(ChoiceItem item) : base(item) => this.item = item;
+            void ISelectionItemProvider.Select()
+            {
+                base.Select();
+                item.combo.Committed();
+            }
+        }
+    }
+
+    public override bool UpdateSelectionFromEvent(Control source, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        bool selected = base.UpdateSelectionFromEvent(source, e);
+        if (selected) Committed();
+        return selected;
+    }
 
     public ThemedCombo()
     {
@@ -388,6 +425,12 @@ sealed class ThemedCombo : ComboBox
         HorizontalAlignment = HorizontalAlignment.Stretch;
         VerticalAlignment = VerticalAlignment.Top;
         SelectionChanged += (_, _) => SelectedIndexChanged?.Invoke(this, EventArgs.Empty);
+        AddHandler(PointerReleasedEvent, (_, e) =>
+        {
+            if (e.InitialPressMouseButton == MouseButton.Left && e.Source is Control source &&
+                (source is ComboBoxItem || source.GetVisualAncestors().OfType<ComboBoxItem>().Any()))
+                SelectionCommitted?.Invoke(this, EventArgs.Empty);
+        }, Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
         // One line each, cut with an ellipsis when the list is narrower than a choice.
         ItemTemplate = new FuncDataTemplate<object?>((item, _) =>
             new TextBlock { Text = item?.ToString(), TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis });
@@ -397,6 +440,13 @@ sealed class ThemedCombo : ComboBox
     {
         if (IsDropDownOpen) base.OnPointerWheelChanged(e);
         // Closed: not handled, so it bubbles up to the board's scroll viewer.
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        bool commit = IsDropDownOpen && e.Key is Key.Enter or Key.Space;
+        base.OnKeyDown(e);
+        if (commit) SelectionCommitted?.Invoke(this, EventArgs.Empty);
     }
 }
 
