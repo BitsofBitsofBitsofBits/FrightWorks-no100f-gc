@@ -24,6 +24,8 @@ sealed class MainWindow : Window
     internal readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
     readonly string? shotDir;
+    readonly bool enableServices;
+    internal bool GameOwnsControllers { get; private set; }
     internal readonly MansionScene scene;
     internal readonly Dictionary<string, Board> boards = new();
     readonly Stage stage;
@@ -45,9 +47,10 @@ sealed class MainWindow : Window
     bool askedLayout;
     readonly DispatcherTimer padTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    public MainWindow(string? shotDir = null, DataPaths? dataPaths = null)
+    public MainWindow(string? shotDir = null, DataPaths? dataPaths = null, bool enableServices = true)
     {
         this.shotDir = shotDir;
+        this.enableServices = enableServices;
         paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
@@ -64,7 +67,7 @@ sealed class MainWindow : Window
         Background = Brush(BoardBottom);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        scene = new MansionScene(shotDir == null && MansionScene.AnimationsEnabled(), shotDir == null ? Environment.TickCount : 1);
+        scene = new MansionScene(enableServices && shotDir == null && MansionScene.AnimationsEnabled(), shotDir == null ? Environment.TickCount : 1);
         scene.SignClicked += id => OnSign(id).Watch();
         stage = new Stage(scene);
         Content = stage;
@@ -85,7 +88,8 @@ sealed class MainWindow : Window
         Opened += (_, _) =>
         {
             if (shotDir != null) { Dispatcher.UIThread.Post(() => TakeShots(shotDir), DispatcherPriority.Background); return; }
-            gamepads.Start();
+            if (!enableServices) return;
+            UpdateControllerOwnership();
             padTimer.Start();
             if (updater.CanCheck && updater.CheckAtStart) CheckForUpdates(manual: false).Watch();
         };
@@ -921,19 +925,21 @@ sealed class MainWindow : Window
 
     async Task Launch()
     {
+        if (!enableServices) throw new InvalidOperationException("Game launch is disabled in this test fixture.");
         var exe = Path.Combine(play, GameExe);
         if (!File.Exists(exe)) { await Dialogs.Message(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher."); return; }
         // One game at a time: two would share the saves and settings.
         if (game is { HasExited: false } || GameRunning()) { await Dialogs.Message(this, "The game is already running."); return; }
         gamepads.Pause();  // the game has the controllers to itself
+        GameOwnsControllers = true;
         try { game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = false }); }
         catch (Exception e)
         {
-            gamepads.Start();
+            UpdateControllerOwnership();
             await Dialogs.Message(this, "The game couldn't start: " + e.Message);
             return;
         }
-        if (game == null) { gamepads.Start(); return; }
+        if (game == null) { UpdateControllerOwnership(); return; }
         // The status says so too: some window managers (tiling ones) don't minimise, and the launcher stays in view.
         scene.SetStatus("The game is running", true);
         var started = game;
@@ -952,7 +958,7 @@ sealed class MainWindow : Window
         try { code = exited.ExitCode; } catch (InvalidOperationException) { code = 0; }
         exited.Dispose();
         if (game == exited) game = null;
-        gamepads.Start();
+        UpdateControllerOwnership();
         RefreshDisc();
         if (code == 0) return;
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
@@ -1041,12 +1047,24 @@ sealed class MainWindow : Window
     void SaveLayout(bool original)
     {
         var c = new GameConfig(configPath);
+        c.Set("launcher", "auto_controller_layout", "false");
         c.SetString("controller", "layout", original ? "xbox_original" : "gamecube");
         c.Save();
     }
 
     internal async Task RefreshGamepads()
     {
+        if (!enableServices)
+        {
+            padStatus.Text = "Controller services are disabled in this test fixture.";
+            return;
+        }
+        UpdateControllerOwnership();
+        if (GameOwnsControllers)
+        {
+            padStatus.Text = "The game is running; controller detection is paused.";
+            return;
+        }
         var pads = gamepads.Connected;
         padStatus.Text = !gamepads.Available ? (OperatingSystem.IsWindows() ? "Controller detection is not available (SDL3.dll missing from the game folder)."
                                                                             : "Controller detection is not available (SDL3 isn't installed: libSDL3.so.0).")
@@ -1063,6 +1081,13 @@ sealed class MainWindow : Window
         if (original == null) return;
         SaveLayout(original.Value);
         layoutBox.SelectedIndex = original.Value ? 1 : 0;
+    }
+
+    void UpdateControllerOwnership()
+    {
+        GameOwnsControllers = game is { HasExited: false } || GameRunning();
+        if (GameOwnsControllers) gamepads.Pause();
+        else if (enableServices) gamepads.Start();
     }
 
     // true = original Xbox layout, false = GameCube layout, null = closed without choosing (asked again next start).

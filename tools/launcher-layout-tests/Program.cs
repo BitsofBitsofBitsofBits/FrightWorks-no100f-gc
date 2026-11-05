@@ -126,13 +126,17 @@ static class LauncherLayoutTests
     {
         CheckMonitorLabels();
 
-        var window = new MainWindow(null, new DataPaths(fixture, game)) { Title = "Launcher layout regression checks" };
+        var window = new MainWindow(null, new DataPaths(fixture, game), enableServices: false) { Title = "Launcher layout regression checks" };
         window.Show();
         Pump();
-        // Controller detection runs on its own thread; the Controls status line changes when it is first read.
-        Thread.Sleep(500);
+        // The fixture never starts SDL; refresh only fills the managed status line.
         _ = window.RefreshGamepads();
         Pump();
+        var pads = typeof(MainWindow).GetField("gamepads", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(window)!;
+        Check(typeof(Gamepads).GetField("thread", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(pads) == null,
+              "Service-disabled fixture started the SDL controller thread");
+        Check(!window.GameOwnsControllers && File.ReadAllText(config) == initialConfig,
+              "Service-disabled construction/refresh changed ownership or saved preferences");
         Check(window.padStatus.Text?.StartsWith("Looking") == false, "Controller detection status was not filled in");
         window.scene.Showcase(false);
 

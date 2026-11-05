@@ -23,6 +23,8 @@
 /wiicompiled/Launcher/**/obj/
 /launcher/bin/
 /launcher/obj/
+/launcher/tests/bin/
+/launcher/tests/obj/
 /launcher/publish/
 /tools/launcher-layout-tests/bin/
 /tools/launcher-layout-tests/obj/
