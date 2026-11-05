@@ -1,12 +1,83 @@
 #include "gx_test_common.hpp"
 #include "gfx/staging_map.hpp"
 #include "gx/pipeline.hpp"
+#include "gx/billboard_depth.hpp"
 
+#include <bit>
+#include <limits>
 #include <thread>
 
 using aurora::gx::g_gxState;
 
+TEST(BillboardDepth, DecodesBigEndianCameraPlaneQuadsAndRejectsOtherGeometry) {
+  std::vector<uint8_t> bytes;
+  const auto quad = [&](float z) {
+    for (const auto& xy : std::array<std::array<float, 2>, 6>{
+             {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
+      for (float value : {xy[0], xy[1], z}) {
+        const auto bits = std::bit_cast<uint32_t>(value);
+        for (int shift : {24, 16, 8, 0}) bytes.push_back(bits >> shift);
+      }
+      bytes.insert(bytes.end(), 12, 0);
+    }
+  };
+  quad(-2); quad(-8);
+  constexpr std::array<float, 4> row{0, 0, 1, 0};
+  EXPECT_EQ(aurora::gx::billboard_depths(bytes, row), (std::vector<float>{2, 8}));
+  EXPECT_EQ(aurora::gx::billboard_depths(bytes, {0, 0, 1, -3}), (std::vector<float>{5, 11}));
+  const auto valid = bytes;
+  bytes.pop_back();
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  const auto putZ = [&](size_t vertex, float z) {
+    const auto bits = std::bit_cast<uint32_t>(z);
+    for (unsigned byte = 0; byte < 4; ++byte) bytes[vertex * 24 + 8 + byte] = bits >> (24 - byte * 8);
+  };
+  putZ(1, -3);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  putZ(1, std::numeric_limits<float>::quiet_NaN());
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+}
+
 namespace {
+TEST(ParticleDepth, RecognizesRotatedPlanarSpritesButRejectsMeshesAndMalformedInputs) {
+  std::vector<uint8_t> bytes;
+  for (const auto& xy : std::array<std::array<float, 2>, 6>{
+           {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
+    const auto put = [&](float value) {
+      const auto bits = std::bit_cast<uint32_t>(value);
+      for (int shift : {24, 16, 8, 0}) bytes.push_back(bits >> shift);
+    };
+    put(xy[0]); put(xy[1]); put(-3.f - xy[0]);
+    bytes.insert(bytes.end(), {111, 83, 49, 180});
+    put((xy[0] + 1.f) * .5f); put((1.f - xy[1]) * .5f);
+  }
+  constexpr std::array<float, 4> row{0, 0, 1, 0};
+  EXPECT_EQ(aurora::gx::billboard_depths(bytes, row), (std::vector<float>{3}));
+  const auto valid = bytes;
+  const auto put = [&](size_t offset, float value) {
+    const auto bits = std::bit_cast<uint32_t>(value);
+    for (unsigned byte = 0; byte < 4; ++byte) bytes[offset + byte] = bits >> (24 - byte * 8);
+  };
+  put(24 + 8, -4.25f);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  put(24 + 16, .75f);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  put(24 + 20, 1.f);
+  put(48 + 20, 0.f);
+  put(96 + 20, 0.f);
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  ++bytes[24 + 12];
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+  bytes = valid;
+  put(24 + 16, std::numeric_limits<float>::quiet_NaN());
+  EXPECT_TRUE(aurora::gx::billboard_depths(bytes, row).empty());
+}
+
 std::vector<u8> draw(GXPrimitive primitive, u16 count, GXVtxFmt format = GX_VTXFMT0) {
   std::vector<u8> bytes{static_cast<u8>(primitive | format), static_cast<u8>(count >> 8),
                         static_cast<u8>(count)};

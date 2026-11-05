@@ -389,9 +389,10 @@ template <typename DrawData>
 void push_draw_command(DrawData data);
 template <typename DrawData>
 DrawData* get_last_draw_command();
-// Cut-out fringe draws: recorded aside and drawn at the end of the current render pass, or when
-// flush_deferred_draws() runs (before a draw that isn't depth-tested and depth-writing, or a clear).
-void push_deferred_draw_command(const gx::DrawData& data);
+enum class DeferredDrawKind : uint8_t { Cutout, Translucent };
+// Preserve each draw's viewport/scissor. Finish cut-out fringes before translucent world draws;
+// a clear, overlay or render-pass boundary ends the deferred scene.
+void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind = DeferredDrawKind::Cutout);
 void flush_deferred_draws();
 
 template <typename PipelineConfig>

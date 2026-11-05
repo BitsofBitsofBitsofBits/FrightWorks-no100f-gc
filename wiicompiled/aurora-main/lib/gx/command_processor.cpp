@@ -13,6 +13,7 @@
 #include "gx_fmt.hpp"
 #include "pipeline.hpp"
 #include "shader_info.hpp"
+#include "billboard_depth.hpp"
 #include "../internal.hpp"
 
 #include <absl/container/flat_hash_map.h>
@@ -2086,7 +2087,8 @@ static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
 static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
                                  gfx::Range vertRange, uint16_t usedPnMtxMask,
                                  HashType matrixTopologySignature,
-                                 HashType geometrySignature, bool interpolationIdentityActive);
+                                 HashType geometrySignature, bool interpolationIdentityActive,
+                                 std::span<const float> particleDepths = {});
 
 // The per-draw geometry signature, matrix-usage mask and draw-identity hashes exist purely to feed frame interpolation (build_uniform consumes them only after its `frame_interpolation_fps() == 0` early-out).
 static inline bool frame_interpolation_identity_needed() noexcept {
@@ -2835,6 +2837,30 @@ static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t verte
   return gfx::staging_has_space(demand);
 }
 
+static std::vector<float> direct_billboard_depths(GXPrimitive prim, GXVtxFmt fmt,
+                                                 const uint8_t* vertices, uint32_t vertexBytes) {
+  const auto mode = cutout_mode();
+  if ((mode != CutoutMode::TwoPass && mode != CutoutMode::TwoPassAll) ||
+      prim != GX_TRIANGLES || g_gxState.projType != GX_PERSPECTIVE ||
+      !g_gxState.depthCompare || g_gxState.depthUpdate ||
+      (g_gxState.depthFunc != GX_LESS && g_gxState.depthFunc != GX_LEQUAL) ||
+      g_gxState.blendMode != GX_BM_BLEND || g_gxState.blendFacSrc != GX_BL_SRCALPHA ||
+      g_gxState.blendFacDst != GX_BL_INVSRCALPHA || g_gxState.zFreeze ||
+      g_gxState.zTextureOp != GX_ZT_DISABLE || frame_interpolation_identity_needed() ||
+      g_gxState.currentPnMtx >= MaxPnMtx ||
+      g_gxState.renderViewport.znear > g_gxState.renderViewport.zfar) return {};
+  for (size_t attr = 0; attr < g_gxState.vtxDesc.size(); ++attr) {
+    const bool direct = attr == GX_VA_POS || attr == GX_VA_CLR0 || attr == GX_VA_TEX0;
+    if (g_gxState.vtxDesc[attr] != (direct ? GX_DIRECT : GX_NONE)) return {};
+  }
+  const auto& attrs = g_gxState.vtxFmts[fmt].attrs;
+  if (attrs[GX_VA_POS].cnt != GX_POS_XYZ || attrs[GX_VA_POS].type != GX_F32 ||
+      attrs[GX_VA_CLR0].cnt != GX_CLR_RGBA || attrs[GX_VA_CLR0].type != GX_RGBA8 ||
+      attrs[GX_VA_TEX0].cnt != GX_TEX_ST || attrs[GX_VA_TEX0].type != GX_F32) return {};
+  const auto& row = g_gxState.pnMtx[g_gxState.currentPnMtx].pos.m2;
+  return billboard_depths({vertices, vertexBytes}, {row[0], row[1], row[2], row[3]});
+}
+
 bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxCount,
                      uint32_t vertexBytes) {
   ZoneScoped;
@@ -2903,7 +2929,8 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
                        matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive);
+                       interpolationIdentityActive,
+                       direct_billboard_depths(prim, fmt, vertices, vertexBytes));
   g_rawFullscreenOverlay = false;
   return true;
 }
@@ -3042,6 +3069,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     g_gxState.stateDirty = true;
   }
 
+  const auto particleDepths = direct_billboard_depths(prim, fmt, data + pos, totalVtxBytes);
   DrawData* mergeTarget = nullptr;
   // NSMBW debugging: NSMBW_NO_MERGE turns draw merging off.
   static const int noMergeMode = [] {
@@ -3056,7 +3084,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   // Decide admission before allocating anything. The merged path needs only
   // vertices and indices; it must not resolve pipelines or upload arrays.
   // Try to merge with previous draw call
-  if (!g_gxState.stateDirty && !noMerge) LIKELY {
+  if (!g_gxState.stateDirty && !noMerge && particleDepths.empty()) LIKELY {
     auto* lastDraw = gfx::get_last_draw_command<DrawData>();
     // Expanded lines/points have different vertex interpretation even with one instance.
     // Triangle-list output has no restart index; index 65535 is usable.
@@ -3121,7 +3149,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
                        matrixUsage.mask, matrixUsage.topologySignature,
                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive);
+                       interpolationIdentityActive, particleDepths);
   if (fullScreenQuad) {
     g_gxState.proj = widenedProj;
     g_gxState.stateDirty = true;
@@ -3151,7 +3179,8 @@ namespace aurora::gx::fifo {
 static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
                                  gfx::Range vertRange, uint16_t usedPnMtxMask,
                                  HashType matrixTopologySignature,
-                                 HashType geometrySignature, bool interpolationIdentityActive) {
+                                 HashType geometrySignature, bool interpolationIdentityActive,
+                                 std::span<const float> particleDepths) {
   ZoneScoped;
   if (g_spmDrawLimit != ~0u && g_spmDrawIdx++ >= g_spmDrawLimit) return;
   // NO100F diagnostic (env NO100F_SKIP_DRAWS=a-b): skip draws a..b of every frame to bisect a bad draw (use NSMBW_NO_MERGE=1).
@@ -3340,15 +3369,37 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
       .bindGroups = bindGroups,
       .dstAlpha = pipelineState.dstAlpha,
   };
-  if (!g_gxState.depthCompare || !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS) {
-    // The deferred cut-out fringes wait only for the solid scene (depth-tested, depth-writing draws): draw them
-    // before any other draw. Draws without depth write (the translucent part of the scene, HUD) go over them, and
-    // a draw that writes depth without testing it replaces the depth they are tested against: the game clears
-    // depth with a screen quad (depth test "always") before the HUD, and fringes drawn after it showed through
-    // everything (the hub's lamp glows and lighthouse beam: their alpha stays below 128, so they are all fringe).
+  const auto cutoutMode = cutout_mode();
+  const bool enhancedCutouts = cutoutMode == CutoutMode::TwoPass || cutoutMode == CutoutMode::TwoPassAll;
+  const bool orderedWorld = enhancedCutouts && g_gxState.projType == GX_PERSPECTIVE &&
+                            g_gxState.depthCompare &&
+                            (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
+  const bool translucentWorld = orderedWorld && !g_gxState.depthUpdate;
+  if (!orderedWorld && (enhancedCutouts || !g_gxState.depthCompare ||
+                        !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS)) {
     gfx::flush_deferred_draws();
   }
-  gfx::push_draw_command(draw);
+  // The game queues alpha-tested grass after particles. Finish that solid geometry and its
+  // fringes before blending clouds over it; retain submission order within the translucent tail.
+  if (translucentWorld) {
+    if (!particleDepths.empty()) {
+      const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
+      const HashType group = xxh3_hash_s(&g_gxState.proj, sizeof(g_gxState.proj),
+                                        xxh3_hash_s(&matrix, sizeof(matrix)));
+      draw.particleSortGroup = group == 0 ? 1 : group;
+      draw.indexCount = 6;
+      // Reuse the original vertices, uniforms and absolute indices; only the six-index view changes.
+      for (size_t quad = 0; quad < particleDepths.size(); ++quad) {
+        draw.idxRange = {idxRange.offset + static_cast<uint32_t>(quad * 6 * sizeof(u16)), 6 * sizeof(u16)};
+        draw.particleDepth = particleDepths[quad];
+        gfx::push_deferred_draw_command(draw, gfx::DeferredDrawKind::Translucent);
+      }
+    } else {
+      gfx::push_deferred_draw_command(draw, gfx::DeferredDrawKind::Translucent);
+    }
+  } else {
+    gfx::push_draw_command(draw);
+  }
   if (fringe) {
     // Same geometry again with the fringe pipeline, deferred until the solid scene behind it is drawn (the game
     // draws cut-outs early: a fringe drawn in place would be painted over by the scenery behind it). The next
@@ -3359,7 +3410,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
     gfx::push_deferred_draw_command(draw);
     g_gxState.stateDirty = true;
   } else {
-    g_gxState.stateDirty = false;
+    g_gxState.stateDirty = translucentWorld;
   }
   if (flatSave) {
     g_gxState.tevStages[0] = flatSave->st0;

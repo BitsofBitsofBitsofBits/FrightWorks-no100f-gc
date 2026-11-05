@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -30,10 +31,17 @@ std::array<uint8_t, 16 * 16 * 4 + 32> guardedBake;
 void require(bool value, const char* message) {
   if (!value) throw std::runtime_error(message);
 }
-void submit(bool final, bool download = false, bool async = false) {
+void submit(bool final, bool download = false, bool async = false, bool sealed = false) {
   auto encoder = webgpu::g_device.CreateCommandEncoder();
   if (final) gfx::end_frame(encoder); else gfx::end_batch(encoder);
-  gfx::render(encoder);
+  std::optional<gfx::SealedFrame> frame;
+  if (sealed) {
+    frame.emplace();
+    gfx::seal_frame(*frame);
+    gfx::render(*frame, encoder);
+  } else {
+    gfx::render(encoder);
+  }
   if (download) gfx::efb_ram::encode_downloads(encoder);
   if (async) gfx::efb_ram::encode_async_downloads(encoder);
   auto commands = encoder.Finish();
@@ -209,6 +217,189 @@ Pixels run(unsigned splitEvery, bool async = false, bool offscreen = false, unsi
   Pixels pixels(guarded.begin() + 16, guarded.begin() + 16 + bytes);
   return pixels;
 }
+
+enum class ParticlePath { Bridge, Immediate, ImmediateThenBridge, BridgeThenImmediate };
+
+constexpr std::array particlePaths{
+    ParticlePath::Bridge, ParticlePath::Immediate,
+    ParticlePath::ImmediateThenBridge, ParticlePath::BridgeThenImmediate};
+
+Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0,
+                       ParticlePath path = ParticlePath::Bridge) {
+  gx::set_cutout_mode(mode);
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Alpha-order frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{
+      .pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+      .color = {0.f, 0.f, 0.f, 1.f}, .depth = gx::clear_depth_value()});
+  alignas(32) static std::array<uint8_t, 32768> fifo;
+  alignas(32) static std::array<uint8_t, 64> white;
+  white.fill(255);
+  GXInit(fifo.data(), fifo.size());
+  gx::g_gxState.viewportPolicy = AURORA_VIEWPORT_NATIVE;
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetScissor(0, 0, 64, 64);
+  GXSetCullMode(GX_CULL_NONE);
+  GXSetColorUpdate(true);
+  GXSetAlphaUpdate(true);
+  GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_COPY);
+  GXSetAlphaCompare(GX_GREATER, 0, GX_AOP_AND, GX_ALWAYS, 0);
+  GXSetNumTexGens(1);
+  GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+  GXSetNumChans(1);
+  GXSetNumTevStages(1);
+  GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+  GXSetTevOp(GX_TEVSTAGE0, GX_MODULATE);
+  GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+  GXTexObj texture{};
+  GXInitTexObj(&texture, white.data(), 4, 4, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, false);
+  GXLoadTexObj(&texture, GX_TEXMAP0);
+  const float projection[]{0.f, 1.f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+  GXSetProjectionv(projection);
+  const float identity[3][4]{{1.f, 0.f, 0.f, 0.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+  GXLoadPosMtxImm(identity, GX_PNMTX0);
+  GXSetCurrentMtx(GX_PNMTX0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+  GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+  const auto quad = [](float z, std::array<u8, 4> color) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy : std::array<std::array<float, 2>, 4>{{{-1, 1}, {1, 1}, {1, -1}, {-1, -1}}}) {
+      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXColor4u8(color[0], color[1], color[2], color[3]);
+      GXTexCoord2f32(0.f, 0.f);
+    }
+    GXEnd();
+  };
+  GXSetZMode(true, GX_LEQUAL, true);
+  quad(variant >= 11 ? -8.f : -4.f, {0, 0, 255, 255});
+  if (variant >= 11) {
+    std::array<std::array<float, 3>, 4> post{{{-4, 4, -4}, {0, 4, -4}, {0, -4, -4}, {-4, -4, -4}}};
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetArray(GX_VA_POS, post.data(), sizeof(post), sizeof(post[0]), true);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (unsigned index = 0; index < post.size(); ++index) {
+      GXPosition1x8(index); GXColor4u8(255, 0, 0, 255); GXTexCoord2f32(0, 0);
+    }
+    GXEnd();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetZMode(true, GX_LEQUAL, false);
+    const auto particle = [](std::vector<uint8_t>& raw, float z, std::array<u8, 4> color,
+                             bool nonPlanar = false, bool rotated = false) {
+      unsigned vertex = 0;
+      for (const auto& xy : std::array<std::array<float, 2>, 6>{
+               {{-1, 1}, {1, 1}, {1, -1}, {-1, 1}, {1, -1}, {-1, -1}}}) {
+        const float vz = z + (nonPlanar && vertex == 1 ? .2f : 0.f) + (rotated ? xy[0] * .2f : 0.f);
+        const float size = rotated ? .15f : 1.f;
+        for (const float value : {xy[0] * -z * size, xy[1] * -z * size, vz}) {
+          const auto bits = std::bit_cast<uint32_t>(value);
+          for (int shift : {24, 16, 8, 0}) raw.push_back(bits >> shift);
+        }
+        raw.insert(raw.end(), color.begin(), color.end());
+        for (const float value : {(xy[0] + 1.f) * .5f, (1.f - xy[1]) * .5f}) {
+          const auto bits = std::bit_cast<uint32_t>(value);
+          for (int shift : {24, 16, 8, 0}) raw.push_back(bits >> shift);
+        }
+        ++vertex;
+      }
+    };
+    auto send = [path, draw = 0u](const std::vector<uint8_t>& raw) mutable {
+      const bool immediate = path == ParticlePath::Immediate ||
+                             (path == ParticlePath::ImmediateThenBridge && draw == 0) ||
+                             (path == ParticlePath::BridgeThenImmediate && draw != 0);
+      ++draw;
+      if (!immediate) {
+        require(gx::fifo::submit_raw_draw(GX_TRIANGLES, GX_VTXFMT0, raw.data(), raw.size() / 24, raw.size()),
+                "Particle bridge rejected test data");
+        return;
+      }
+      const auto read = [&](size_t offset) {
+        const uint32_t bits = uint32_t(raw[offset]) << 24 | uint32_t(raw[offset + 1]) << 16 |
+                              uint32_t(raw[offset + 2]) << 8 | uint32_t(raw[offset + 3]);
+        return std::bit_cast<float>(bits);
+      };
+      GXBegin(GX_TRIANGLES, GX_VTXFMT0, raw.size() / 24);
+      for (size_t offset = 0; offset < raw.size(); offset += 24) {
+        GXPosition3f32(read(offset), read(offset + 4), read(offset + 8));
+        GXColor4u8(raw[offset + 12], raw[offset + 13], raw[offset + 14], raw[offset + 15]);
+        GXTexCoord2f32(read(offset + 16), read(offset + 20));
+      }
+      GXEnd();
+    };
+    std::vector<uint8_t> green;
+    const u8 alpha = variant == 22 ? 64 : variant == 23 ? 255 : variant == 24 ? 0 : 128;
+    particle(green, -2, {0, 255, 0, alpha});
+    send(green);
+    if (variant >= 21) {
+      std::vector<uint8_t> leaf;
+      particle(leaf, -3, {111, 83, 49, 180}, false, true);
+      send(leaf);
+    }
+    if (variant == 13) quad(-3, {255, 255, 255, 128});
+    if (variant == 14) GXSetScissor(32, 0, 32, 64);
+    if (variant == 15) {
+      const float changed[]{0.f, 1.01f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+      GXSetProjectionv(changed);
+    }
+    if (variant == 18) GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_ONE, GX_LO_COPY);
+    std::vector<uint8_t> gray;
+    particle(gray, variant == 17 ? -2.f : -6.f, {128, 128, 128, 128}, variant == 16);
+    if (variant != 12) particle(gray, variant == 17 ? -2.f : -1.f, {0, 0, 255, 128});
+    send(gray);
+    if (variant == 19) gfx::flush_deferred_draws();
+  } else {
+  GXSetZMode(true, GX_LEQUAL, false);
+  if (variant == 4) GXSetScissor(0, 0, 32, 64);
+  if (variant == 5) GXSetViewport(0.f, 0.f, 32.f, 64.f, 0.f, 1.f);
+  quad(-2.f, {0, 255, 0, 128});
+  if (variant == 3) quad(-1.f, {0, 0, 255, 128});
+  GXSetScissor(0, 0, 64, 64);
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetZMode(true, GX_LEQUAL, true);
+  quad(variant == 1 ? -1.5f : -3.f, {255, 0, 0, static_cast<u8>(variant == 2 ? 64 : 255)});
+  if (variant == 6 || variant == 7 || variant == 9 || variant == 10) {
+    if (variant == 9) {
+      const float ortho[]{1.f, 1.f, 0.f, 1.f, 0.f, 0.f, -0.5f};
+      GXSetProjectionv(ortho);
+    }
+    GXSetZMode(variant != 7, variant == 9 ? GX_LEQUAL : variant == 10 ? GX_EQUAL : GX_ALWAYS,
+               variant == 6);
+    quad(variant == 10 ? -3.f : -1.f, {255, 255, 255, 255});
+  }
+  }
+  gx::fifo::drain();
+  if (variant == 8) {
+    gfx::push_draw_command(gfx::clear::DrawData{
+        .pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+        .color = {1., 1., 1., 1.}, .depth = 1.f});
+  }
+  auto target = gfx::new_render_texture(64, 64, GX_TF_RGBA8, "Alpha order regression");
+  gfx::resolve_pass(target, {0, 0, 64, 64}, false, false, false,
+                    {0.f, 0.f, 0.f, 1.f}, 1.f, GX_TF_RGBA8, nullptr, false,
+                    nullptr, false, 1.f, false, false, true);
+  guarded.fill(0xa5);
+  gfx::efb_ram::schedule(guarded.data() + 16, 16, 16, GX_TF_RGBA8, target);
+  require(gfx::efb_ram::prepare_downloads(), "Alpha-order readback preparation failed");
+  submit(true, true, false, variant == 20);
+  return Pixels(guarded.begin() + 16, guarded.begin() + 16 + 16 * 16 * 4);
+}
+
+void check_alpha_pixel(const Pixels& pixels, unsigned x, std::array<int, 3> rgb) {
+  const unsigned tile = (2 * 4 + x / 4) * 64;
+  const unsigned pair = (x % 4) * 2;
+  const std::array actual{pixels[tile + pair + 1], pixels[tile + 32 + pair], pixels[tile + 33 + pair]};
+  for (unsigned c = 0; c < 3; ++c) {
+    if (std::abs(static_cast<int>(actual[c]) - rgb[c]) > 2) {
+      std::fprintf(stderr, "alpha-order x=%u expected=%d,%d,%d actual=%u,%u,%u\n",
+                   x, rgb[0], rgb[1], rgb[2], actual[0], actual[1], actual[2]);
+      require(false, "Alpha-order pixel mismatch");
+    }
+  }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -244,6 +435,65 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     std::printf("Actual Aurora completed seeded startup queue (%u observed pending)\n", prewarmQueued);
+    for (const auto mode : {gx::CutoutMode::TwoPass, gx::CutoutMode::TwoPassAll}) {
+      check_alpha_pixel(run_alpha_order(mode), 4, {127, 128, 0});
+      check_alpha_pixel(run_alpha_order(mode, 1), 4, {255, 0, 0});
+      check_alpha_pixel(run_alpha_order(mode, 3), 4, {63, 64, 128});
+      for (unsigned variant : {4, 5}) {
+        const auto pixels = run_alpha_order(mode, variant);
+        check_alpha_pixel(pixels, 4, {127, 128, 0});
+        check_alpha_pixel(pixels, 12, {255, 0, 0});
+      }
+      for (unsigned variant : {6, 7, 8, 9, 10})
+        check_alpha_pixel(run_alpha_order(mode, variant), 4, {255, 255, 255});
+      for (const auto path : particlePaths) {
+        for (unsigned variant : {11, 12, 13, 14, 15, 16, 17, 18, 19, 20}) {
+          const auto pixels = run_alpha_order(mode, variant, path);
+          const auto left = variant == 12 || variant == 14 ? std::array{127, 128, 0} :
+                            variant == 13 ? std::array{95, 96, 192} :
+                            variant == 17 ? std::array{63, 64, 160} :
+                            variant == 18 ? std::array{127, 128, 128} : std::array{63, 64, 128};
+          const auto right = variant == 12 ? std::array{32, 160, 95} :
+                             variant == 13 ? std::array{64, 80, 207} :
+                             variant == 18 ? std::array{64, 192, 255} :
+                             variant >= 14 && variant <= 17 ? std::array{32, 64, 191} : std::array{16, 80, 175};
+          check_alpha_pixel(pixels, 4, left);
+          check_alpha_pixel(pixels, 12, right);
+        }
+        for (unsigned variant : {21, 22, 23, 24}) {
+          const auto pixels = run_alpha_order(mode, variant, path);
+          const auto left = variant == 22 ? std::array{95, 32, 128} :
+                            variant == 23 ? std::array{0, 127, 128} :
+                            variant == 24 ? std::array{127, 0, 128} : std::array{63, 64, 128};
+          const auto right = variant == 22 ? std::array{24, 56, 199} :
+                             variant == 23 ? std::array{0, 127, 128} :
+                             variant == 24 ? std::array{32, 32, 223} : std::array{16, 80, 175};
+          check_alpha_pixel(pixels, 4, left);
+          check_alpha_pixel(pixels, 12, right);
+          if (variant == 24) check_alpha_pixel(pixels, 8, {48, 38, 173});
+        }
+      }
+    }
+    check_alpha_pixel(run_alpha_order(gx::CutoutMode::TwoPassAll, 2), 4, {32, 128, 95});
+    for (const auto mode : {gx::CutoutMode::Game, gx::CutoutMode::Cut}) {
+      check_alpha_pixel(run_alpha_order(mode), 4, {255, 0, 0});
+      for (const auto path : particlePaths) {
+        const auto particles = run_alpha_order(mode, 11, path);
+        check_alpha_pixel(particles, 4, {63, 64, 128});
+        check_alpha_pixel(particles, 12, {32, 64, 191});
+        for (unsigned variant : {21, 22, 23, 24}) {
+          const auto pixels = run_alpha_order(mode, variant, path);
+          check_alpha_pixel(pixels, 4, variant == 22 ? std::array{95, 32, 128} :
+                                     variant == 23 ? std::array{0, 127, 128} :
+                                     variant == 24 ? std::array{127, 0, 128} : std::array{63, 64, 128});
+          check_alpha_pixel(pixels, 12, variant == 22 ? std::array{32, 48, 207} :
+                                      variant == 23 ? std::array{32, 95, 160} :
+                                      variant == 24 ? std::array{32, 32, 223} : std::array{32, 64, 191});
+        }
+      }
+    }
+    gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
+    std::puts("Actual Aurora late foliage, fringe/cloud blending, translucent order, viewport/scissor and barriers passed");
     const auto control = run(0);
     for (unsigned band = 0; band < 4; ++band) {
       const auto tile = band * 4 * 64;
