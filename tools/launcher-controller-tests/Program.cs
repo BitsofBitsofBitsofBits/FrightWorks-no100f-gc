@@ -96,6 +96,12 @@ static class LauncherControllerTests
         Check(input.Read(LauncherButtons.Up | LauncherButtons.Down, 1) == 0, "Opposing movement did not cancel.");
         Check(ControllerInput.FromSdl(0, 16000, -16000, 0) == 0, "Deadzone boundary.");
         Check(ControllerInput.FromSdl(3, 16001, -16001, 16001) == (LauncherButtons.Confirm | LauncherButtons.Back | LauncherButtons.Right | LauncherButtons.Up | LauncherButtons.ScrollDown), "SDL positional controls/axes.");
+        var stick = ControllerInput.SampleFromSdl(7, 0, 16001, 0, 0);
+        Check(stick.Id == 7 && stick.Buttons == LauncherButtons.Right && stick.CoarseHorizontal, "Left-stick source was not retained.");
+        Check(ControllerInput.SampleFromSdl(7, 0, short.MinValue, 0, 0).CoarseHorizontal, "Negative full stick lost coarse adjustment.");
+        foreach (short axis in new short[] { -16000, 0, 16000 })
+            Check(!ControllerInput.SampleFromSdl(7, 0, axis, 0, 0).CoarseHorizontal, "Neutral/deadzone axis enabled coarse adjustment.");
+        Check(!ControllerInput.SampleFromSdl(7, 1u << 14, 32767, 0, 0).CoarseHorizontal, "D-pad precision lost priority over the stick.");
         foreach (var kind in Enum.GetValues<Gamepads.Kind>())
         {
             string? expected = kind == Gamepads.Kind.Xbox ? "xbox_original" : kind == Gamepads.Kind.GameCube ? "gamecube" : null;
@@ -241,10 +247,35 @@ static class LauncherControllerTests
         var slider = new Slider { Minimum = 0, Maximum = 1, Value = 0.5, SmallChange = 0.25 };
         var number = new NumericUpDown { Minimum = 1, Maximum = 10, Value = 5, Increment = 2 };
         var toggle = new CheckBox { Content = "Synthetic checkbox" };
-        generic.Content = new StackPanel { Children = { slider, number, toggle } };
+        var textField = new TextBox { Text = "unchanged", MinWidth = 400 };
+        int activated = 0;
+        var narrow = new PlankButton("Synthetic action", (_, _) => activated++);
+        var left = new PlankButton("Left action", (_, _) => { });
+        var right = new PlankButton("Longer right action", (_, _) => { });
+        var row = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Children = { left, right } };
+        var stepped = new ControllerSlider(5) { Minimum = 0, Maximum = 100, Value = 50, SmallChange = 0.25 };
+        generic.Content = new StackPanel { Children = { textField, narrow, slider, number, toggle, row, stepped } };
         var shown = Dialogs.ShowModal(generic, w); Pump();
+        textField.Focus(NavigationMethod.Directional); Press(w, LauncherButtons.Down);
+        Check(narrow.IsFocused, "Down skipped a narrow button below a stretched text field.");
+        Press(w, LauncherButtons.Confirm);
+        Check(activated == 1, "Directional button selection did not activate exactly once.");
+        Press(w, LauncherButtons.Up);
+        Check(textField.IsFocused, "Up did not return from a narrow button to its text field.");
+        Press(w, LauncherButtons.Confirm);
+        Check(w.navigation.Modal != generic && Find<ControllerTextBox>(w.navigation.Modal!).Text == "unchanged",
+              "Directionally selected text field did not open controller text entry.");
+        Press(w, LauncherButtons.Back);
+        Check(w.navigation.Modal == generic && textField.IsFocused && textField.Text == "unchanged",
+              "Cancelling text entry did not restore the unchanged field.");
+        Press(w, LauncherButtons.Down); Press(w, LauncherButtons.Down);
+        Check(slider.IsFocused, "Down did not reach the slider after a narrow button.");
         slider.Focus(NavigationMethod.Directional); Press(w, LauncherButtons.Right);
         Check(slider.Value == 0.75, "Slider adjustment failed.");
+        w.navigation.Feed(generic, new[] { new ControllerSample(1, LauncherButtons.None) }, time += 20, false);
+        w.navigation.Feed(generic, new[] { new ControllerSample(1, LauncherButtons.Left, true) }, time += 20, false);
+        Pump();
+        Check(slider.Value == 0.5, "Coarse stick steps changed an ordinary slider.");
         number.Focus(NavigationMethod.Directional); Press(w, LauncherButtons.Left);
         Check(number.Value == 3, "Numeric adjustment failed.");
         number.Minimum = decimal.MinValue; number.Maximum = decimal.MaxValue; number.Value = decimal.MaxValue; number.Increment = 2;
@@ -258,6 +289,41 @@ static class LauncherControllerTests
         Check(toggle.IsChecked == true, "Held hotplug button activated a control.");
         Feed(w, LauncherButtons.None, id: 2); Feed(w, LauncherButtons.Confirm, id: 2);
         Check(toggle.IsChecked == false, "Reconnected neutral device did not arm.");
+        left.Focus(NavigationMethod.Directional); Press(w, LauncherButtons.Right);
+        Check(right.IsFocused, $"Horizontal movement did not reach the adjacent button; focused {generic.FocusManager?.GetFocusedElement()}.");
+        Press(w, LauncherButtons.Left);
+        Check(left.IsFocused, "Horizontal movement did not return to the adjacent button.");
+        void Samples(int elapsed, params ControllerSample[] samples)
+        {
+            w.navigation.Feed(generic, samples, time += elapsed, false);
+            Pump();
+        }
+        void Neutral() => Samples(20, new(1, LauncherButtons.None), new(2, LauncherButtons.None));
+        stepped.Focus(NavigationMethod.Directional); Neutral();
+        Samples(20, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 55, "Opt-in slider did not use its coarse step.");
+        Samples(399, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 55, "Coarse slider repeated before 400ms.");
+        Samples(1, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 60, "Coarse slider did not repeat at 400ms.");
+        Samples(99, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 60, "Coarse slider repeated before the next 100ms.");
+        Samples(1, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 65, "Coarse slider did not retain its step during repeat.");
+        Neutral(); Samples(20, new ControllerSample(1, LauncherButtons.Left));
+        Check(stepped.Value == 64.75, "D-pad did not retain the slider's precise increment.");
+        Neutral(); Samples(20, new ControllerSample(1, LauncherButtons.Right), new ControllerSample(2, LauncherButtons.Right, true));
+        Check(stepped.Value == 65, "Another controller's coarse metadata leaked into the winning precise action.");
+        Neutral(); Samples(20, new ControllerSample(1, LauncherButtons.None, true), new ControllerSample(2, LauncherButtons.Left));
+        Check(stepped.Value == 64.75, "An idle controller's coarse metadata leaked into another controller's action.");
+        stepped.Value = 99; Neutral(); Samples(20, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 100, "Coarse slider exceeded its upper bound.");
+        stepped.Value = 1; Neutral(); Samples(20, new ControllerSample(1, LauncherButtons.Left, true));
+        Check(stepped.Value == 0, "Coarse slider exceeded its lower bound.");
+        w.navigation.Feed(generic, new[] { new ControllerSample(1, LauncherButtons.Right, true) }, time += 20, true); Pump();
+        Check(stepped.Value == 0, "Coarse metadata bypassed game ownership.");
+        Samples(20, new ControllerSample(1, LauncherButtons.Right, true));
+        Check(stepped.Value == 0, "Coarse input did not require neutral after game ownership.");
         Press(w, LauncherButtons.Back); Finish(shown);
 
         var text = ControllerDialogs.Text(w, "Synthetic text entry", "A");

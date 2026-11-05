@@ -92,8 +92,8 @@ sealed class Gamepads : IDisposable
                             list.Add(new Pad(name, KindOf(api.GetGamepadTypeForID(id))));
                             uint buttons = 0;
                             for (int b = 0; b <= 14; b++) if (api.Button(handle, b)) buttons |= 1u << b;
-                            input.Add(new ControllerSample(id, ControllerInput.FromSdl(buttons,
-                                api.Axis(handle, 0), api.Axis(handle, 1), api.Axis(handle, 3))));
+                            input.Add(ControllerInput.SampleFromSdl(id, buttons,
+                                api.Axis(handle, 0), api.Axis(handle, 1), api.Axis(handle, 3)));
                         }
                     }
                     finally { api.Free(ids); }

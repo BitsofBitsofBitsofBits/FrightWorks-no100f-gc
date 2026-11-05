@@ -105,7 +105,11 @@ Test windows must pass their owned `DataPaths` and `enableServices: false`. That
 launching, updates and OS animation lookup; tests inject controller samples/foreground state rather than OS input.
 The controller suite checks neutral/repeat/deadzone gates, owned modal routing, menu accessibility, settings and
 same-value native selection intent, cancellation, browsing/text/folder creation, scrolling and persisted auto/manual
-layout policy. The layout suite deliberately provokes save/background/UI faults to check error routing; those expected
+layout policy. Generic navigation regressions cover narrow buttons beneath wide fields, horizontal button rows,
+ordinary slider precision and opt-in `ControllerSlider` coarse steps. Coarse steps retain the selected device's input
+source, give horizontal D-pad input precision priority, clamp to bounds and preserve repeat/ownership/neutral gates.
+The shared slider is only an opt-in control; this controller change does not add HDR settings or choose HDR increments.
+The layout suite deliberately provokes save/background/UI faults to check error routing; those expected
 errors appear on stderr even when the suite passes. Screenshots are synthetic headless evidence, not a hardware test.
 
 Physical verification needs a separate isolated runtime allocation: test held confirm across modal transitions,

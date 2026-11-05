@@ -8,7 +8,7 @@ enum LauncherButtons
     ScrollUp = 256, ScrollDown = 512,
 }
 
-readonly record struct ControllerSample(uint Id, LauncherButtons Buttons);
+readonly record struct ControllerSample(uint Id, LauncherButtons Buttons, bool CoarseHorizontal = false);
 
 // New devices and focus/modal/game transitions require neutral. Only movement repeats.
 sealed class ControllerInput
@@ -53,6 +53,10 @@ sealed class ControllerInput
     }
 
     static LauncherButtons First(LauncherButtons value) => (LauncherButtons)((int)value & -(int)value);
+
+    public static ControllerSample SampleFromSdl(uint id, uint buttons, short x, short y, short scrollY) =>
+        new(id, FromSdl(buttons, x, y, scrollY),
+            (x < -16000 || x > 16000) && (buttons & ((1u << 13) | (1u << 14))) == 0);
 
     public static LauncherButtons FromSdl(uint buttons, short x, short y, short scrollY)
     {

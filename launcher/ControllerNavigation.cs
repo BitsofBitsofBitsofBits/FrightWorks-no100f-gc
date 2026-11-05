@@ -73,19 +73,24 @@ sealed class ControllerNavigation : IDisposable
         var present = samples.Select(s => s.Id).ToHashSet();
         foreach (uint id in inputs.Keys.Where(id => !present.Contains(id)).ToArray()) inputs.Remove(id);
         LauncherButtons action = LauncherButtons.None;
+        bool coarseHorizontal = false;
         foreach (var sample in samples)
         {
             if (!inputs.TryGetValue(sample.Id, out var input)) inputs.Add(sample.Id, input = new ControllerInput());
             if (target == null) { input.Reset(); continue; }
             var next = input.Read(sample.Buttons, time);
-            if (action == LauncherButtons.None) action = next;
+            if (action == LauncherButtons.None && next != LauncherButtons.None)
+            {
+                action = next;
+                coarseHorizontal = sample.CoarseHorizontal;
+            }
         }
         if (target == null || action == LauncherButtons.None) return;
         Used = true;
-        Dispatch(target, action).Watch();
+        Dispatch(target, action, coarseHorizontal).Watch();
     }
 
-    async Task Dispatch(Window window, LauncherButtons action)
+    async Task Dispatch(Window window, LauncherButtons action, bool coarseHorizontal)
     {
         if (!dispatching.Add(window)) return;
         try
@@ -139,7 +144,8 @@ sealed class ControllerNavigation : IDisposable
             {
                 if (focused is Slider slider)
                 {
-                    slider.Value = Math.Clamp(slider.Value + direction * slider.SmallChange, slider.Minimum, slider.Maximum);
+                    double step = coarseHorizontal && slider is ControllerSlider coarse ? coarse.ControllerStep : slider.SmallChange;
+                    slider.Value = Math.Clamp(slider.Value + direction * step, slider.Minimum, slider.Maximum);
                     return;
                 }
                 if (focused is NumericUpDown number)
@@ -192,14 +198,25 @@ sealed class ControllerNavigation : IDisposable
                     if (center is Point origin)
                     {
                         double best = double.MaxValue;
+                        bool bestAligned = false;
                         for (int i = 0; i < targets.Count; i++)
                         {
                             var at = targets[i].TranslatePoint(new Point(targets[i].Bounds.Width / 2, targets[i].Bounds.Height / 2), window);
                             if (at is not Point point) continue;
                             double along = (vertical ? point.Y - origin.Y : point.X - origin.X) * direction;
-                            double across = Math.Abs(vertical ? point.X - origin.X : point.Y - origin.Y);
+                            // Narrow buttons share a form column with stretched fields despite different centers.
+                            double halfSpan = vertical
+                                ? (targets[index].Bounds.Width + targets[i].Bounds.Width) / 2
+                                : (targets[index].Bounds.Height + targets[i].Bounds.Height) / 2;
+                            double across = Math.Max(0, Math.Abs(vertical ? point.X - origin.X : point.Y - origin.Y) - halfSpan);
                             double score = along + 4 * across;
-                            if (along > 2 && score < best) { best = score; next = i; }
+                            bool aligned = across == 0;
+                            if (along > 2 && ((aligned && !bestAligned) || (aligned == bestAligned && score < best)))
+                            {
+                                best = score;
+                                bestAligned = aligned;
+                                next = i;
+                            }
                         }
                     }
                 }
