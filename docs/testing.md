@@ -92,6 +92,18 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
 
 ## 3. Unit tests
 
+The HDR launcher checks run with an existing .NET 10 SDK and an owned scratch directory:
+
+```powershell
+dotnet run --project tools\launcher-hdr-tests\LauncherHdrTests.csproj -c Release -- autotest\launcher-hdr
+```
+
+They use services-disabled portable fixtures and CPU-rendered Avalonia windows, not SDL/game/GPU input. Windows display
+metadata is synthetic; unsupported-platform gating, missing/partial settings, saved precision, slider endpoints,
+keyboard increments, modal ownership and save failures are covered. The opt-in controller slider metadata is checked
+independently; real stick-versus-D-pad dispatch is supplied by the separate controller navigation feature.
+Compilation/headless checks do not establish HDR hardware or Linux compositor support.
+
 The tests are CMake targets in `wiicompiled/runtime/CMakeLists.txt`; the game build doesn't build them. After a game
 build has created `wiicompiled\native-build`:
 

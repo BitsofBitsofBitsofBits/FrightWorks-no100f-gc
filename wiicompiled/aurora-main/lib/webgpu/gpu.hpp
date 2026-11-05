@@ -2,6 +2,7 @@
 
 #include <aurora/aurora.h>
 #include <aurora/math.hpp>
+#include <aurora/gfx.h>
 
 #include "wgpu.hpp"
 
@@ -57,6 +58,7 @@ extern TextureWithSampler g_depthBuffer;
 extern wgpu::RenderPipeline g_CopyPipeline;
 extern wgpu::RenderPipeline g_PresentPipeline;
 extern wgpu::BindGroup g_CopyBindGroup;
+extern wgpu::BindGroup g_HdrCalibrationBindGroup;
 extern wgpu::Instance g_instance;
 extern bool g_bcTexturesSupported;
 // Vertex fetch written for drivers that miscompile aurora's storage-buffer vertex pulling (Adreno:
@@ -82,6 +84,11 @@ bool refresh_surface(bool recreate = true);
 // NSMBW: V-Sync (Fifo) on or off; the change is applied by take_vsync_change at a frame boundary.
 // HDR output for the next device setup (startup only).
 void request_hdr(bool enabled, float paperWhiteNits, float peakNits) noexcept;
+bool set_hdr_brightness(float paperWhiteNits, float peakNits) noexcept;
+bool hdr_active() noexcept;
+void set_hdr_calibration(const AuroraHdrCalibration* calibration) noexcept;
+// Called under the presentation queue-submit lock, before submitting the HDR copy.
+void upload_hdr_calibration();
 void request_vsync(bool enabled) noexcept;
 bool vsync_enabled() noexcept;
 // Applies a pending V-Sync change to the surface configuration; true when the swapchain must be reconfigured.

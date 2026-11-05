@@ -24,6 +24,7 @@ sealed class MainWindow : Window
     internal readonly DataPaths paths;
     readonly string root, play, userData, configPath, modsDir, discDir;
     readonly string? shotDir;
+    readonly bool enableServices;
     internal readonly MansionScene scene;
     internal readonly Dictionary<string, Board> boards = new();
     readonly Stage stage;
@@ -43,11 +44,13 @@ sealed class MainWindow : Window
     internal ThemedCombo layoutBox = null!;
     readonly List<(PadMapping.Row Row, TextBlock Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
+    string hdrStatus = "Saved HDR settings are kept. Windows defaults are used only for settings not saved yet.";
     readonly DispatcherTimer padTimer = new() { Interval = TimeSpan.FromSeconds(1) };
 
-    public MainWindow(string? shotDir = null, DataPaths? dataPaths = null)
+    public MainWindow(string? shotDir = null, DataPaths? dataPaths = null, bool enableServices = true)
     {
         this.shotDir = shotDir;
+        this.enableServices = enableServices;
         paths = dataPaths ?? DataPaths.Find();
         (root, play, userData, configPath, modsDir, discDir) = (paths.Root, paths.Game, paths.UserData, paths.ConfigPath, paths.Mods, paths.Disc);
         gamepads = new Gamepads(play);
@@ -64,7 +67,7 @@ sealed class MainWindow : Window
         Background = Brush(BoardBottom);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
 
-        scene = new MansionScene(shotDir == null && MansionScene.AnimationsEnabled(), shotDir == null ? Environment.TickCount : 1);
+        scene = new MansionScene(enableServices && shotDir == null && MansionScene.AnimationsEnabled(), shotDir == null ? Environment.TickCount : 1);
         scene.SignClicked += id => OnSign(id).Watch();
         stage = new Stage(scene);
         Content = stage;
@@ -85,6 +88,7 @@ sealed class MainWindow : Window
         Opened += (_, _) =>
         {
             if (shotDir != null) { Dispatcher.UIThread.Post(() => TakeShots(shotDir), DispatcherPriority.Background); return; }
+            if (!enableServices) return;
             gamepads.Start();
             padTimer.Start();
             if (updater.CanCheck && updater.CheckAtStart) CheckForUpdates(manual: false).Watch();
@@ -350,9 +354,7 @@ sealed class MainWindow : Window
         Row("HD textures", "texture_replacements", new[] { ("On", "true"), ("Off (original textures)", "false") }, "true");
         Row("Anti-aliasing", "msaa", new[] { ("Off", "1"), ("2x MSAA", "2"), ("4x MSAA", "4"), ("8x MSAA", "8") }, "1");
         Row("Intro movies", "skip_intro", new[] { ("Play them", "false"), ("Skip them", "true") }, "false");
-        Row("HDR", "hdr", new[] { ("Off", "false"), (OperatingSystem.IsWindows() ? "On (needs HDR on in Windows)" : "On (needs HDR on in your desktop)", "true") }, "false");
-        Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");
-        Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
+        table.Add(FieldLabel("HDR"), new PlankButton("Adjust HDR", (_, _) => OpenHdr().Watch()));
         body.Children.Add(table);
         body.Children.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
                                (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor and frame interpolation settings too, and more (sound, controls); "
@@ -373,6 +375,40 @@ sealed class MainWindow : Window
         body.Children.Add(table);
         body.Children.Add(Note("Draws extra frames between the game's own for smoother motion. Experimental: you might see visual " +
                                "glitches. At 120 or 180 FPS the resolution goes up to 4x (1920p)."));
+    }
+
+    internal HdrWindow CreateHdrWindow() => new(configPath, hdrStatus, this);
+
+    async Task OpenHdr()
+    {
+        var window = CreateHdrWindow();
+        await Dialogs.ShowModal(window, this);
+    }
+
+    // Import must finish before this can create Config.toml; construction stays read-only.
+    internal Task InitializeHdrDefaults() => InitializeHdrDefaults(OperatingSystem.IsWindows(),
+        () => WindowsHdr.Read(HdrSettings.TargetDisplay(new GameConfig(configPath))));
+
+    // Headless fixtures supply platform state and metadata without querying a real display.
+    internal async Task InitializeHdrDefaults(bool windows, Func<WindowsHdr.Snapshot> readDefaults)
+    {
+        if (!windows)
+        {
+            hdrStatus = "Windows HDR defaults are unavailable on this platform. Saved targets are kept.";
+            return;
+        }
+        var config = new GameConfig(configPath);
+        if (!HdrSettings.NeedsDefaults(config)) return;
+        var defaults = readDefaults();
+        config = new GameConfig(configPath);
+        HdrSettings.InitializeMissing(config, defaults);
+        hdrStatus = defaults.Status + " Saved adjustments are kept.";
+        try { config.Save(); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            hdrStatus = "Couldn't save initial HDR defaults: " + e.Message;
+            await Dialogs.Message(this, hdrStatus);
+        }
     }
 
     void BuildControls(StackPanel body)
@@ -921,6 +957,7 @@ sealed class MainWindow : Window
 
     async Task Launch()
     {
+        if (!enableServices) throw new InvalidOperationException("Game launch is disabled in this test fixture.");
         var exe = Path.Combine(play, GameExe);
         if (!File.Exists(exe)) { await Dialogs.Message(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher."); return; }
         // One game at a time: two would share the saves and settings.
@@ -1047,6 +1084,11 @@ sealed class MainWindow : Window
 
     internal async Task RefreshGamepads()
     {
+        if (!enableServices)
+        {
+            padStatus.Text = "Controller services are disabled in this test fixture.";
+            return;
+        }
         var pads = gamepads.Connected;
         padStatus.Text = !gamepads.Available ? (OperatingSystem.IsWindows() ? "Controller detection is not available (SDL3.dll missing from the game folder)."
                                                                             : "Controller detection is not available (SDL3 isn't installed: libSDL3.so.0).")

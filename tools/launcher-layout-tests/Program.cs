@@ -126,7 +126,7 @@ static class LauncherLayoutTests
     {
         CheckMonitorLabels();
 
-        var window = new MainWindow(null, new DataPaths(fixture, game)) { Title = "Launcher layout regression checks" };
+        var window = new MainWindow(null, new DataPaths(fixture, game), enableServices: false) { Title = "Launcher layout regression checks" };
         window.Show();
         Pump();
         // Controller detection runs on its own thread; the Controls status line changes when it is first read.

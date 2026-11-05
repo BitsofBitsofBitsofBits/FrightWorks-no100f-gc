@@ -1,9 +1,11 @@
 #include "gpu.hpp"
+#include "hdr_presentation.hpp"
 
 #include <array>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -60,6 +62,11 @@ static wgpu::BindGroupLayout g_CopyBindGroupLayout;
 wgpu::RenderPipeline g_CopyPipeline;
 wgpu::RenderPipeline g_PresentPipeline;  // final copy onto the swapchain: g_CopyPipeline, or the HDR one
 wgpu::BindGroup g_CopyBindGroup;
+wgpu::BindGroup g_HdrCalibrationBindGroup;
+static wgpu::BindGroupLayout g_HdrCalibrationLayout;
+static wgpu::Buffer g_HdrCalibrationBuffer;
+static std::mutex g_hdrCalibrationMutex;
+static AuroraHdrCalibration g_hdrCalibration{};
 static bool g_presentSourceOverrideActive = false;
 static wgpu::BindGroup g_presentSourceOverrideBindGroup;
 static wgpu::Texture g_presentSourceOverrideTexture;
@@ -220,10 +227,10 @@ RenderTargetSize clamp_frame_buffer_size(uint32_t width, uint32_t height) noexce
 // wait (Immediate, else Mailbox). On, the runtime runs the game's VI clock at a whole fraction of the
 // display's refresh (runtime/src/hle/vi.cpp), so presents land one per k vblanks and never queue up.
 std::atomic<bool> g_vsyncEnabled{false};
-// HDR output: read when the device is set up (aurora_set_hdr before aurora_initialize).
+// HDR output is startup-only; brightness is read at each presentation under g_hdrCalibrationMutex.
 std::atomic<bool> g_hdrRequested{false};
-std::atomic<float> g_hdrPaperWhiteNits{200.f};
-std::atomic<float> g_hdrPeakNits{1000.f};
+static float g_hdrPaperWhiteNits = 200.f;
+static float g_hdrPeakNits = 1000.f;
 bool g_hdrActive = false;
 std::atomic<int> g_vsyncRequest{-1};
 
@@ -463,8 +470,25 @@ static TextureWithSampler create_depth_texture(uint32_t width, uint32_t height) 
   };
 }
 
-wgpu::RenderPipeline create_copy_pipeline(wgpu::TextureFormat format, const std::string& fragmentTail) {
-  const std::string code = R"""(
+wgpu::RenderPipeline create_copy_pipeline(wgpu::TextureFormat format, const std::string& fragmentTail,
+                                         bool calibration = false) {
+  const std::string code = (calibration ? R"""(
+struct HdrCalibration {
+    paperRect: vec4<f32>,
+    peakRect: vec4<f32>,
+    parameters: vec4<f32>,
+    picture: vec4<f32>,
+};
+@group(1) @binding(0) var<uniform> hdrCalibration: HdrCalibration;
+
+fn calibration_patch(uv: vec2<f32>, rect: vec4<f32>, nits: f32, contrast: f32) -> vec4<f32> {
+    let local = (uv - rect.xy) / (rect.zw - rect.xy);
+    let cell = vec2<u32>(floor(local * vec2(8.0, 4.0)));
+    let bright = ((cell.x + cell.y) & 1u) == 0u;
+    let luminance = nits * select(contrast, 1.0, bright);
+    return vec4(vec3(luminance / 80.0), 1.0);
+}
+)""" : std::string()) + R"""(
 @group(0) @binding(0)
 var efb_sampler: sampler;
 @group(0) @binding(1)
@@ -570,9 +594,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
   if (!g_CopyBindGroupLayout) {  // shared by every copy pipeline, so one bind group fits all
     g_CopyBindGroupLayout = g_device.CreateBindGroupLayout(&bindGroupLayoutDescriptor);
   }
+  const std::array layouts{g_CopyBindGroupLayout, g_HdrCalibrationLayout};
   const wgpu::PipelineLayoutDescriptor layoutDescriptor{
-      .bindGroupLayoutCount = 1,
-      .bindGroupLayouts = &g_CopyBindGroupLayout,
+      .bindGroupLayoutCount = calibration ? 2u : 1u,
+      .bindGroupLayouts = layouts.data(),
   };
   auto pipelineLayout = g_device.CreatePipelineLayout(&layoutDescriptor);
   const wgpu::RenderPipelineDescriptor pipelineDescriptor{
@@ -1010,6 +1035,9 @@ bool initialize(AuroraBackend auroraBackend) {
   g_CopyPipeline = create_copy_pipeline(g_graphicsConfig.surfaceConfiguration.format, "return vec4(color.rgb, 1.0);");
   g_PresentPipeline = g_CopyPipeline;
   g_hdrActive = false;
+  g_HdrCalibrationBindGroup = {};
+  g_HdrCalibrationLayout = {};
+  g_HdrCalibrationBuffer = {};
   if (g_hdrRequested.load(std::memory_order_acquire)) {
     bool fp16 = false;
     for (size_t i = 0; i < g_surfaceCapabilities.formatCount; ++i) {
@@ -1020,13 +1048,51 @@ bool initialize(AuroraBackend auroraBackend) {
       // which Windows reads as scRGB (linear, 1.0 = 80 nits). The game's gamma-2.2 picture is
       // linearised, placed at paper white, and the brightest tones are stretched toward the peak.
       // shortcut: no SurfaceColorManagement chain (DXGI's FP16 default is already scRGB); add it for Vulkan/Metal HDR.
-      const float paper = std::max(g_hdrPaperWhiteNits.load(), 80.f);
-      const float peak = std::max(g_hdrPeakNits.load(), paper);
-      const std::string tail = "    let sdr = pow(max(color.rgb, vec3(0.0)), vec3(2.2));\n"
-                               "    let lum = dot(sdr, vec3(0.2126, 0.7152, 0.0722));\n"
-                               "    let boost = 1.0 + " + std::to_string(peak / paper - 1.f) + " * pow(lum, 4.0);\n"
-                               "    return vec4(sdr * boost * " + std::to_string(paper / 80.f) + ", 1.0);";
-      g_PresentPipeline = create_copy_pipeline(wgpu::TextureFormat::RGBA16Float, tail);
+      float paper, peak;
+      {
+        std::lock_guard lock(g_hdrCalibrationMutex);
+        paper = g_hdrPaperWhiteNits;
+        peak = std::max(g_hdrPeakNits, paper);
+      }
+      const wgpu::BindGroupLayoutEntry calibrationEntry{
+          .binding = 0,
+          .visibility = wgpu::ShaderStage::Fragment,
+          .buffer = {.type = wgpu::BufferBindingType::Uniform, .minBindingSize = sizeof(HdrPresentationUniform)},
+      };
+      const wgpu::BindGroupLayoutDescriptor calibrationLayout{
+          .label = "HDR calibration layout", .entryCount = 1, .entries = &calibrationEntry,
+      };
+      g_HdrCalibrationLayout = g_device.CreateBindGroupLayout(&calibrationLayout);
+      const wgpu::BufferDescriptor calibrationBuffer{
+          .label = "HDR picture and calibration parameters",
+          .usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst,
+          .size = sizeof(HdrPresentationUniform),
+      };
+      g_HdrCalibrationBuffer = g_device.CreateBuffer(&calibrationBuffer);
+      const wgpu::BindGroupEntry calibrationBinding{
+          .binding = 0, .buffer = g_HdrCalibrationBuffer, .size = sizeof(HdrPresentationUniform),
+      };
+      const wgpu::BindGroupDescriptor calibrationGroup{
+          .label = "HDR calibration", .layout = g_HdrCalibrationLayout,
+          .entryCount = 1, .entries = &calibrationBinding,
+      };
+      g_HdrCalibrationBindGroup = g_device.CreateBindGroup(&calibrationGroup);
+      const std::string tail = R"""(
+    let uv = in.pos.xy * hdrCalibration.parameters.zw;
+    let paperRect = hdrCalibration.paperRect;
+    let peakRect = hdrCalibration.peakRect;
+    if (all(uv >= paperRect.xy) && all(uv < paperRect.zw)) {
+        return calibration_patch(uv, paperRect, hdrCalibration.parameters.x, 0.6);
+    }
+    if (all(uv >= peakRect.xy) && all(uv < peakRect.zw)) {
+        return calibration_patch(uv, peakRect, hdrCalibration.parameters.y, 0.9);
+    }
+    let sdr = pow(max(color.rgb, vec3(0.0)), vec3(2.2));
+    let lum = dot(sdr, vec3(0.2126, 0.7152, 0.0722));
+    let boost = 1.0 + hdrCalibration.picture.y * pow(lum, 4.0);
+    return vec4(sdr * boost * hdrCalibration.picture.x, 1.0);
+)""";
+      g_PresentPipeline = create_copy_pipeline(wgpu::TextureFormat::RGBA16Float, tail, true);
       g_hdrActive = true;
       Log.info("HDR output on: scRGB float16 swapchain, paper white {} nits, peak {} nits", paper, peak);
     } else {
@@ -1099,6 +1165,11 @@ void shutdown() {
   g_CopyPipeline = {};
   g_PresentPipeline = {};
   g_CopyBindGroup = {};
+  g_HdrCalibrationBindGroup = {};
+  g_HdrCalibrationLayout = {};
+  g_HdrCalibrationBuffer = {};
+  g_hdrActive = false;
+  set_hdr_calibration(nullptr);
   g_frameBuffer = {};
   g_frameBufferResolved = {};
   g_depthBuffer = {};
@@ -1154,8 +1225,57 @@ bool refresh_surface(bool recreate) {
 
 void request_hdr(bool enabled, float paperWhiteNits, float peakNits) noexcept {
   g_hdrRequested.store(enabled, std::memory_order_release);
-  g_hdrPaperWhiteNits.store(paperWhiteNits);
-  g_hdrPeakNits.store(peakNits);
+  set_hdr_brightness(paperWhiteNits, peakNits);
+}
+
+bool set_hdr_brightness(float paperWhiteNits, float peakNits) noexcept {
+  if (!valid_hdr_brightness(paperWhiteNits, peakNits)) {
+    Log.warn("Invalid HDR picture brightness: paper white {}, peak {}", paperWhiteNits, peakNits);
+    return false;
+  }
+  std::lock_guard lock(g_hdrCalibrationMutex);
+  g_hdrPaperWhiteNits = paperWhiteNits;
+  g_hdrPeakNits = peakNits;
+  return true;
+}
+
+bool hdr_active() noexcept { return g_hdrActive; }
+
+void set_hdr_calibration(const AuroraHdrCalibration* calibration) noexcept {
+  std::lock_guard lock(g_hdrCalibrationMutex);
+  if (calibration != nullptr) {
+    const auto validRect = [](const float* rect) {
+      return std::all_of(rect, rect + 4, [](float n) { return std::isfinite(n) && n >= 0.f && n <= 1.f; }) &&
+             rect[0] <= rect[2] && rect[1] <= rect[3];
+    };
+    const bool empty = calibration->paperRect[0] == calibration->paperRect[2] &&
+                       calibration->peakRect[0] == calibration->peakRect[2];
+    if (!validRect(calibration->paperRect) || !validRect(calibration->peakRect) ||
+        (!empty && (!std::isfinite(calibration->paperWhiteNits) || !std::isfinite(calibration->peakNits) ||
+                    calibration->paperWhiteNits < 80.f || calibration->paperWhiteNits > 1000.f ||
+                    calibration->peakNits < 80.f || calibration->peakNits > 10000.f))) {
+      Log.warn("Invalid HDR calibration patch parameters; disabling the preview");
+      g_hdrCalibration = {};
+      return;
+    }
+  }
+  g_hdrCalibration = calibration != nullptr ? *calibration : AuroraHdrCalibration{};
+}
+
+void upload_hdr_calibration() {
+  if (!g_hdrActive || !g_HdrCalibrationBuffer) return;
+  HdrPresentationUniform uniform;
+  {
+    std::lock_guard lock(g_hdrCalibrationMutex);
+    uniform = hdr_presentation_uniform(g_hdrPaperWhiteNits, g_hdrPeakNits,
+                                      g_graphicsConfig.surfaceConfiguration.width,
+                                      g_graphicsConfig.surfaceConfiguration.height);
+    std::copy_n(g_hdrCalibration.paperRect, 4, uniform.paperRect.begin());
+    std::copy_n(g_hdrCalibration.peakRect, 4, uniform.peakRect.begin());
+    uniform.parameters[0] = g_hdrCalibration.paperWhiteNits;
+    uniform.parameters[1] = g_hdrCalibration.peakNits;
+  }
+  g_queue.WriteBuffer(g_HdrCalibrationBuffer, 0, &uniform, sizeof(uniform));
 }
 
 void request_vsync(bool enabled) noexcept {
