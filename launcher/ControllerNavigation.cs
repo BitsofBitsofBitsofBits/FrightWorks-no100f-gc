@@ -134,7 +134,10 @@ sealed class ControllerNavigation : IDisposable
             int direction = action is LauncherButtons.Up or LauncherButtons.Left or LauncherButtons.Previous ? -1 : 1;
             if (action is LauncherButtons.Previous or LauncherButtons.Next)
             {
-                Move();
+                // A page with tabs: the bumpers switch tab. Anywhere else (dialogs, browsers, Mods, Extras) they keep moving
+                // to the previous/next control, which is also how a dialog's toolbar is reached.
+                var bar = window.GetVisualDescendants().OfType<TabBar>().FirstOrDefault(t => t.IsEffectivelyVisible);
+                if (bar != null) bar.Step(direction); else Move();
                 return;
             }
             if (focused is ListBox list && action is LauncherButtons.Up or LauncherButtons.Down)
@@ -279,7 +282,7 @@ sealed class ControllerNavigation : IDisposable
         if (target != null) Focus(target);
     }
 
-    static void Focus(Control control)
+    internal static void Focus(Control control)
     {
         control.Focus(NavigationMethod.Directional);
         control.BringIntoView();
@@ -302,5 +305,20 @@ sealed class ControllerList : ListBox
     {
         if (e.Key == Key.Enter) { Activate?.Invoke(); e.Handled = true; }
         else base.OnKeyDown(e);
+    }
+}
+
+// A row of tab buttons (the open one has Selected set). The bumpers step through it without wrapping: at either end they
+// do nothing. Mouse and keyboard use the buttons as before.
+sealed class TabBar : WrapPanel
+{
+    public bool Step(int direction)
+    {
+        var tabs = Children.OfType<PlankButton>().ToList();
+        int at = tabs.FindIndex(t => t.Selected), to = at + direction;
+        if (at < 0 || to < 0 || to >= tabs.Count) return false;
+        tabs[to].PerformClick();
+        ControllerNavigation.Focus(tabs[to]);  // the new tab's own button: D-pad Down goes on into its page
+        return true;
     }
 }

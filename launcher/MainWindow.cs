@@ -238,7 +238,7 @@ sealed class MainWindow : Window
     // ----- Settings: Display and Controls -----
     void BuildSettings(StackPanel body)
     {
-        var tabs = Row();
+        var tabs = new TabBar();
         var display = Column();
         var controls = Column();
         controls.IsVisible = false;

@@ -98,6 +98,9 @@ static class LauncherControllerTests
         Check(input.Read(LauncherButtons.Down, 401) == 0, "Movement repeated before 400ms.");
         Check(input.Read(LauncherButtons.Down, 402) == LauncherButtons.Down, "Movement did not repeat at 400ms.");
         Check(input.Read(LauncherButtons.Down, 501) == 0 && input.Read(LauncherButtons.Down, 502) == LauncherButtons.Down, "100ms repeat threshold.");
+        input.Reset(); input.Read(0, 0);
+        Check(input.Read(LauncherButtons.Next, 1) == LauncherButtons.Next && input.Read(LauncherButtons.Next, 500) == 0 &&
+              input.Read(LauncherButtons.Next, 3000) == 0, "A held bumper repeated (tabs would race).");
         input.Reset();
         input.Read(0, 0);
         Check(input.Read(LauncherButtons.Confirm, 1) == LauncherButtons.Confirm && input.Read(LauncherButtons.Confirm, 1000) == 0, "Confirm repeated.");
@@ -192,6 +195,15 @@ static class LauncherControllerTests
         controlsTab.Click -= origin;
         Check(origins.SequenceEqual(new[] { true, false }) && w.navigation.Used && !w.navigation.Activating,
               "Pad-started and mouse-started actions are not told apart.");
+        // The bumpers switch tabs where a page has them: one per press, no wrap, focus on the new tab's button.
+        Press(w, LauncherButtons.Previous);
+        Check(Button(w, "Display").Selected && !w.layoutBox.IsEffectivelyVisible && Button(w, "Display").IsFocused, "LB did not switch to the Display tab.");
+        Press(w, LauncherButtons.Previous);
+        Check(Button(w, "Display").Selected && !Button(w, "Controls").Selected, "LB on the first tab wrapped or left it.");
+        Press(w, LauncherButtons.Next);
+        Check(Button(w, "Controls").Selected && w.layoutBox.IsEffectivelyVisible && Button(w, "Controls").IsFocused, "RB did not switch to the Controls tab.");
+        Press(w, LauncherButtons.Next);
+        Check(Button(w, "Controls").Selected && !Button(w, "Display").Selected, "RB on the last tab wrapped or left it.");
         Shot(w, "Controls-focus");
 
         string before = File.ReadAllText(config);
@@ -389,6 +401,10 @@ static class LauncherControllerTests
         var list = Find<ControllerList>(modal);
         Check(list.ItemCount == 2, "Disc filter did not include folders/uppercase ISO and exclude other files.");
         Shot(modal, "File-browser");
+        // No tabs in a dialog: the bumpers still move to the next control (how its toolbar is reached).
+        Press(w, LauncherButtons.Next);
+        Check(modal.FocusManager?.GetFocusedElement() is PlankButton, "RB in a dialog without tabs did not move to the next control.");
+        list.Focus(NavigationMethod.Directional); Pump();
         Press(w, LauncherButtons.Down); Press(w, LauncherButtons.Confirm); Finish(file);
         Check(file.Result == Path.Combine(browser, "disc.ISO"), "Managed file browser returned wrong path.");
         var folder = ControllerDialogs.PickPath(w, "Synthetic folder browser", browser, true, viaController: true);

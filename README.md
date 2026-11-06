@@ -75,7 +75,8 @@ these keys in the corner. With more than one monitor, **Settings** > **Display**
 Video) picks the one fullscreen uses.
 
 **Launcher controller navigation.** D-pad or left stick moves focus, South confirms (Xbox A, PlayStation Cross,
-Nintendo B), East goes back, bumpers move to the previous/next control, and right-stick Y scrolls. Sliders and numeric
+Nintendo B), East goes back, the bumpers (LB/RB) switch tabs where a page has them (Settings: Display and Controls)
+and otherwise move to the previous/next control, and right-stick Y scrolls. Sliders and numeric
 fields use left/right. This works through Settings, Mods, Extras, owned questions, local file/folder browsers and
 on-screen text entry, independently of the game's bindings. Input is ignored while another window owns focus or the
 game owns the controllers; reconnecting and returning from a dialog/game require neutral first.
