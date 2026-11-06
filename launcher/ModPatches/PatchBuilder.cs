@@ -27,10 +27,12 @@ static class PatchBuilder
     const int ToolVersion = 1;  // bump when a build's bytes would change: updates rebuild
     const string StagingName = "mod-build";
 
-    // Added model and texture bytes per level, over all mods. An oversized model crashes the game instead of just not
-    // showing (2.47 MB in h002 did, 230 KB didn't). Cautious until the limits are measured.
+    // Added model and texture bytes per level, over all mods. Each hub's limit is no more than a size that ran there: drew,
+    // kept 60 fps and came back after a level change. That is what was tried, not the most that fits: h002 also ran with
+    // 1,554,672 bytes, h001 with 1,085,512, h003 with 267,756. Models come out of the OS heap at about 0.9 of their file size,
+    // and these hubs have about 1.85, 1.41 and 0.60 MB free. Other levels haven't been measured, so they get the smallest limit.
     const long DefaultBudget = 256 * 1024;
-    static readonly Dictionary<string, long> Budgets = new() { ["h001"] = 512 * 1024, ["h002"] = 512 * 1024 };
+    static readonly Dictionary<string, long> Budgets = new() { ["h001"] = 1024 * 1024, ["h002"] = 1024 * 1024, ["h003"] = 256 * 1024 };
 
     static readonly object Gate = new();
 
@@ -305,7 +307,7 @@ static class PatchBuilder
                 if (!hip.HasLayer(op.Layer)) throw new PatchException($"{patch.Level} has no place for a {op.Type}.");
 
             long budget = Budgets.GetValueOrDefault(patch.Level, DefaultBudget);
-            if (plan.Used + bytes > budget) throw new PatchException($"Skipped: too big for {patch.Level}. It would add {(plan.Used + bytes) / 1024} KB of models and textures there, and the limit is {budget / 1024} KB. An oversized model crashes the game.");
+            if (plan.Used + bytes > budget) throw new PatchException($"Skipped: too big for {patch.Level}. It would add {(plan.Used + bytes) / 1024} KB of models and textures there, and the limit is {budget / 1024} KB.");
             if (plan.Objects + objects > PatchRecipe.MaxObjectsPerLevel) throw new PatchException($"Skipped: too many objects for {patch.Level} (the limit is {PatchRecipe.MaxObjectsPerLevel}).");
 
             commits.Add(() =>

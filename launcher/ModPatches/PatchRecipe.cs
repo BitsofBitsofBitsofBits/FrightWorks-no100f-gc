@@ -228,10 +228,16 @@ static class ModFiles
 // Is this file shaped like what the game reads? Checks the file's structure, not every triangle, so a bad mesh can still
 // pass: unticking the mod always recovers from that. Models on the disc are plain little-endian RenderWare 3.1 with no
 // native data, and the largest has 12159 triangles; textures are a dictionary of GameCube native textures.
+//
+// A material with more than MaxMaterialVertices crashes the game: the draw's vertex count is 16 bits, so it wraps and the
+// rest of the vertices are run as commands (seen in h002: 68,460 vertices, the display list's count said 2,924). The
+// counts come from two places in a model, the geometry header and the per-material mesh list, and a file can make them
+// disagree, so both are read and the larger one counts.
 static class RwCheck
 {
     public const int MaxTriangles = 13000;
-    const uint Clump = 0x10, GeometryList = 0x1A, Geometry = 0x0F, Struct = 1, TextureDictionary = 0x16, TextureNative = 0x15;
+    public const int MaxMaterialVertices = 65535;
+    const uint Clump = 0x10, GeometryList = 0x1A, Geometry = 0x0F, Struct = 1, Extension = 3, MeshList = 0x50E, TextureDictionary = 0x16, TextureNative = 0x15;
 
     static IEnumerable<(uint Type, int Body, int Size, uint Version)> Sections(byte[] d, int start, int end, string file)
     {
@@ -250,24 +256,60 @@ static class RwCheck
 
     public static void Model(byte[] d, string file)
     {
-        var top = Sections(d, 0, d.Length, file).ToList();
-        if (top.Count == 0 || top[0].Type != Clump || top[0].Version != 0x310) throw new PatchException($"{file} isn't a model the game can read (it needs a RenderWare 3.1 clump).");
-        long triangles = 0;
+        // Only the clump and its geometry list are read: the disc's skinned models have an atomic after the list whose size
+        // runs 12 bytes past the clump, and stray bytes after the clump, and the game loads them.
+        var clump = Sections(d, 0, d.Length, file).FirstOrDefault();
+        if (clump.Type != Clump || clump.Version != 0x310) throw new PatchException($"{file} isn't a model the game can read (it needs a RenderWare 3.1 clump).");
+        long headerTriangles = 0, meshTriangles = 0;
         bool anyGeometry = false;
-        foreach (var part in Sections(d, top[0].Body, top[0].Body + top[0].Size, file))
+        foreach (var part in Sections(d, clump.Body, clump.Body + clump.Size, file))
         {
             if (part.Type != GeometryList) continue;
             foreach (var geometry in Sections(d, part.Body, part.Body + part.Size, file))
             {
                 if (geometry.Type != Geometry) continue;
-                var first = Sections(d, geometry.Body, geometry.Body + geometry.Size, file).FirstOrDefault();
+                var sections = Sections(d, geometry.Body, geometry.Body + geometry.Size, file).ToList();
+                var first = sections.FirstOrDefault();
                 if (first.Type != Struct || first.Size < 16) throw new PatchException($"{file} has a geometry with no header.");
-                triangles += BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(first.Body + 4));
+                headerTriangles += BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(first.Body + 4));
+                bool anyMeshList = false;
+                foreach (var extension in sections.Where(s => s.Type == Extension))
+                    foreach (var list in Sections(d, extension.Body, extension.Body + extension.Size, file).Where(s => s.Type == MeshList))
+                    {
+                        meshTriangles += MeshListTriangles(d, list.Body, list.Size, file);
+                        anyMeshList = true;
+                    }
+                if (!anyMeshList) throw new PatchException($"{file} has a geometry with no material mesh list.");
                 anyGeometry = true;
             }
+            break;
         }
         if (!anyGeometry) throw new PatchException($"{file} has no geometry.");
+        long triangles = Math.Max(headerTriangles, meshTriangles);
         if (triangles > MaxTriangles) throw new PatchException($"{file} has {triangles} triangles. The limit is {MaxTriangles}, just above the largest model in the game.");
+    }
+
+    // Flags (1 = triangle strip, 0 = triangle list), mesh count, total indices, then for each mesh its index count, its
+    // material and its indices (4 bytes each). Returns how many triangles a list's meshes draw. A strip's index count isn't
+    // a triangle count (it holds degenerate joins: a disc model has 19,672 by that sum, more than its header says), so
+    // strips are only held to the vertex limit, which is what crashes the game.
+    static long MeshListTriangles(byte[] d, int body, int size, string file)
+    {
+        if (size < 12) throw new PatchException($"{file} has a material mesh list that is cut short.");
+        uint flags = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(body));
+        uint meshes = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(body + 4));
+        long o = body + 12, end = (long)body + size, triangles = 0;
+        if (flags > 1) throw new PatchException($"{file} has a material mesh list of an unknown kind.");
+        for (uint i = 0; i < meshes; i++)
+        {
+            if (o + 8 > end) throw new PatchException($"{file} has a material mesh list that is cut short.");
+            uint indices = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan((int)o));
+            if (indices > MaxMaterialVertices) throw new PatchException($"{file} has a material with {indices} vertices. The game can draw at most {MaxMaterialVertices} with one material, and more crashes it.");
+            o += 8 + 4L * indices;
+            if (o > end) throw new PatchException($"{file} has a material mesh list that is cut short.");
+            if (flags == 0) triangles += indices / 3;
+        }
+        return triangles;
     }
 
     public static void Texture(byte[] d, string file)

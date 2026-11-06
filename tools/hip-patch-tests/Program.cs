@@ -157,6 +157,13 @@ static class Tests
             ("texture as a model", Fixtures.Texture("x"), true),
             ("model cut short", Fixtures.Model("x")[..40], true),
             ("model of too many triangles", Fixtures.Model("x", RwCheck.MaxTriangles + 1), true),
+            // The file can say one thing in its header and another in its mesh list: both are read from the bytes.
+            ("header says little, one material's vertices wrap the game's count", Fixtures.Model("x", 12, new uint[] { RwCheck.MaxMaterialVertices + 1 }), true),
+            ("header says little, the materials add up to too many triangles", Fixtures.Model("x", 12, new uint[] { 30000, 30000 }), true),
+            ("header says little, a strip's vertices wrap the game's count", Fixtures.Model("x", 12, new uint[] { RwCheck.MaxMaterialVertices + 1 }, strip: true), true),
+            ("header says too many, the mesh list says little", Fixtures.Model("x", RwCheck.MaxTriangles + 1, new uint[] { 36 }), true),
+            ("no mesh list", Fixtures.Model("x", noMeshList: true), true),
+            ("mesh list cut short", ShortMeshList(), true),
             ("model with a section size past the end", BadSize(Fixtures.Model("x")), true),
             ("empty texture", Array.Empty<byte>(), false),
             ("model as a texture", Fixtures.Model("x"), false),
@@ -170,7 +177,48 @@ static class Tests
             Check("asset refused: " + name, refused);
         }
         RwCheck.Model(Fixtures.Model("x", RwCheck.MaxTriangles), "at the limit");
+        RwCheck.Model(Fixtures.Model("x", RwCheck.MaxTriangles, new uint[] { 3000, RwCheck.MaxTriangles * 3 - 3000 }), "at the limit, two materials");
+        RwCheck.Model(Fixtures.Model("x", 12, new uint[] { 19538, 2000 }, strip: true), "strips as long as the disc's: their index counts aren't triangles");
+        RwCheck.Model(Fixtures.Model("x", 12, new uint[] { RwCheck.MaxMaterialVertices }, strip: true), "a strip at the vertex limit");
+        var trailing = Fixtures.Model("x");
+        BinaryPrimitives.WriteUInt32LittleEndian(trailing.AsSpan(4), BinaryPrimitives.ReadUInt32LittleEndian(trailing.AsSpan(4)) + 28);
+        var withAtomic = trailing[..^12].Concat(new byte[] { 0x14, 0, 0, 0, 40, 0, 0, 0, 0x10, 3, 0, 0 }).Concat(new byte[16]).Concat(trailing[^12..]).ToArray();
+        // Disc skinned models: the atomic after the geometry list claims 12 bytes more than the clump has.
+        RwCheck.Model(withAtomic, "an atomic after the geometry list running past the clump, as the disc's skinned models have");
+        RwCheck.Model(Fixtures.Model("x").Concat(new byte[] { 0x9E, 0xD1, 0x33, 0xBF, 0xFF, 0xFF, 0xFF, 0x3F, 4, 0, 0xF7, 0x18 }).ToArray(), "stray bytes after the clump, as the disc's skinned models have");
         RwCheck.Texture(Fixtures.Texture("x"), "fine");
+
+        // Through the whole build: the launcher reads the mod's model file, and the recipe has no say in it.
+        using (var s = new Sandbox())
+        {
+            s.Mod("wrap", null, Fixtures.Model("wrap", 12, new uint[] { RwCheck.MaxMaterialVertices + 1 }));
+            s.Mod("many", null, Fixtures.Model("many", RwCheck.MaxTriangles + 1));
+            s.Mod("fine");
+            var r = s.Ensure();
+            Check("cap: a material over the limit is refused, with the reason", r.Mods["wrap"].State == PatchState.Problem && r.Mods["wrap"].Text.Contains("vertices"), r.Mods["wrap"].Text);
+            Check("cap: a model over the limit is refused, with the reason", r.Mods["many"].State == PatchState.Problem && r.Mods["many"].Text.Contains("triangles"), r.Mods["many"].Text);
+            Check("cap: another mod is still built", r.Mods["fine"].State == PatchState.Ready, r.Mods["fine"].Text);
+            var hip = new HipFile(File.ReadAllBytes(s.OutputH002));
+            Check("cap: the refused models aren't in the level", hip.Find(HipFile.HashName("wrap")) == null && hip.Find(HipFile.HashName("many")) == null);
+        }
+        using (var s = new Sandbox())
+        {
+            var claims = s.Crate("liar").Replace("\"name\": \"liar\", \"file\": \"assets/m.modl\"", "\"name\": \"liar\", \"file\": \"assets/m.modl\", \"triangles\": 12");
+            Check("cap: the test recipe does state a count", claims.Contains("\"triangles\": 12"));
+            s.Mod("liar", claims, Fixtures.Model("liar"));
+            var r = s.Ensure();
+            Check("cap: a recipe can't state a triangle count", r.Mods["liar"].State == PatchState.Problem && r.Mods["liar"].Text.Contains("triangles"), r.Mods["liar"].Text);
+        }
+    }
+
+    static byte[] ShortMeshList()
+    {
+        var list = Fixtures.MeshList(new uint[] { 36 });
+        BinaryPrimitives.WriteUInt32LittleEndian(list.AsSpan(12), 1000);    // claims more indices than the section holds
+        var d = Fixtures.Model("x", 12, new uint[] { 36 });
+        int at = d.AsSpan().IndexOf(Fixtures.MeshList(new uint[] { 36 }));
+        list.CopyTo(d, at);
+        return d;
     }
 
     static byte[] BadSize(byte[] d)
@@ -352,7 +400,7 @@ static class Tests
 
         using (var s = new Sandbox())  // budget
         {
-            var big = Fixtures.Texture("big", 8, 8, 400 * 1024);
+            var big = Fixtures.Texture("big", 8, 8, 600 * 1024);
             string Recipe(string name) => $$"""
                 { "format": 1, "levels": { "h002": { "base_sha256": "{{s.H002Sha}}", "add": [ { "type": "RWTX", "name": "{{name}}.RW3", "file": "assets/t.rwtx" } ] } } }
                 """;
@@ -673,7 +721,7 @@ static class DiscModes
 {
     public static int RoundTrip(string disc)
     {
-        int same = 0, different = 0;
+        int same = 0, different = 0, modelsFine = 0, modelsRefused = 0, otherVersion = 0;
         var flags = new Dictionary<(string, uint), int>();
         foreach (var f in Levels(disc))
         {
@@ -682,15 +730,27 @@ static class DiscModes
             if (hip.Build().AsSpan().SequenceEqual(bytes)) same++;
             else { different++; Console.WriteLine("DIFFERENT " + f); }
             foreach (var a in hip.Assets)
+            {
                 if (a.TypeName is "MODL" or "RWTX" or "SIMP")
                 {
                     flags.TryGetValue((a.TypeName, a.Flags), out var n);
                     flags[(a.TypeName, a.Flags)] = n + 1;
                 }
+                if (a.TypeName != "MODL") continue;
+                // The check on a mod's model has to pass what the game itself ships, apart from the disc's few models of another RenderWare version: format 1 only takes 3.1.
+                try { RwCheck.Model(a.Data.ToArray(), a.Name); modelsFine++; }
+                catch (PatchException e) when (a.Data.Length >= 12 && BinaryPrimitives.ReadUInt32LittleEndian(a.Data.Span[8..]) != 0x310)
+                {
+                    otherVersion++;
+                    Console.WriteLine($"Another version, {BinaryPrimitives.ReadUInt32LittleEndian(a.Data.Span[8..]):X}: {Path.GetFileName(f)} {a.Id:X8} {e.Message}");
+                }
+                catch (PatchException e) { modelsRefused++; Console.WriteLine($"REFUSED {Path.GetFileName(f)} {a.Id:X8}: {e.Message}"); }
+            }
         }
         Console.WriteLine($"{same} levels rebuilt identically, {different} different");
+        Console.WriteLine($"{modelsFine} disc models pass the model check, {otherVersion} of another RenderWare version, {modelsRefused} refused");
         foreach (var f in flags.OrderBy(f => f.Key)) Console.WriteLine($"{f.Key.Item1} flags {f.Key.Item2:X}: {f.Value}");
-        return different == 0 ? 0 : 1;
+        return different == 0 && modelsRefused == 0 ? 0 : 1;
     }
 
     // Generated assets into every level that has the layers, for reference.py to repeat with hipedit.py.

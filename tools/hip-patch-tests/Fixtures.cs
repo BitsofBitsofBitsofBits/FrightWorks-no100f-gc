@@ -145,17 +145,37 @@ static class Fixtures
 
     static byte[] Join(params byte[][] parts) => parts.SelectMany(p => p).ToArray();
 
-    // Enough of a clump for the structure check: real sections, a geometry header with this triangle count. tag makes the bytes differ.
-    public static byte[] Model(string tag, uint triangles = 12)
+    // Enough of a clump for the structure check: real sections, a geometry header with this triangle count and a material
+    // mesh list. tag makes the bytes differ. meshIndices = each material's index count (default: one material drawing all
+    // the triangles), so a test can make the two disagree. strip = a triangle strip list instead of a triangle list.
+    public static byte[] Model(string tag, uint triangles = 12, uint[]? meshIndices = null, bool strip = false, bool noMeshList = false)
     {
         var header = new byte[16];
         BinaryPrimitives.WriteUInt32LittleEndian(header, 0x1003E);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), triangles);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), 24);
         BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(12), 1);
-        var geometry = Sec(0x0F, Join(Sec(1, header), Sec(2, Encoding.ASCII.GetBytes(tag + "\0\0\0\0"))));
+        var extension = noMeshList ? Array.Empty<byte>() : Sec(0x50E, MeshList(meshIndices ?? new[] { triangles * 3 }, strip));
+        var geometry = Sec(0x0F, Join(Sec(1, header), Sec(2, Encoding.ASCII.GetBytes(tag + "\0\0\0\0")), Sec(3, extension)));
         var list = Sec(0x1A, Join(Sec(1, new byte[4]), geometry));
         return Join(Sec(0x10, Join(Sec(1, new byte[4]), list)), Sec(3, Array.Empty<byte>()));
+    }
+
+    public static byte[] MeshList(uint[] meshIndices, bool strip = false)
+    {
+        long size = 12 + meshIndices.Sum(n => 8 + 4L * n);
+        var b = new byte[size];
+        BinaryPrimitives.WriteUInt32LittleEndian(b, strip ? 1u : 0u);
+        BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(4), (uint)meshIndices.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(8), (uint)meshIndices.Sum(n => (long)n));
+        int o = 12;
+        for (int i = 0; i < meshIndices.Length; i++)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(o), meshIndices[i]);
+            BinaryPrimitives.WriteUInt32LittleEndian(b.AsSpan(o + 4), (uint)i);
+            o += 8 + (int)meshIndices[i] * 4;
+        }
+        return b;
     }
 
     // A dictionary with one GameCube texture, 8x8.

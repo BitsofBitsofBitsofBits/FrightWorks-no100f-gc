@@ -46,7 +46,7 @@ refused, so a typing mistake is reported instead of being ignored.
 
 | Asset | What it has to be |
 | --- | --- |
-| `MODL` | A little-endian RenderWare 3.1 (0x310) clump with plain geometry, up to 13000 triangles (the largest model on the disc has 12159). |
+| `MODL` | A little-endian RenderWare 3.1 (0x310) clump with plain geometry and a material mesh list, up to 13000 triangles (the largest model on the disc has 12159). The launcher counts them from the file, in both the geometry header and the mesh list. |
 | `RWTX` | A RenderWare texture dictionary holding GameCube native textures. Its name must end in `.RW3`: materials find a texture by the hash of that name, so name it what your model's material asks for. |
 
 `objects` places things in the level:
@@ -73,8 +73,13 @@ Measured in hub level h002:
 - **Collision:** with `solid`, Scooby lands on it. It is one-sided: he isn't pushed out if he ends up inside.
 - **Saves:** an added object isn't in the save file. A save made with the mod loads without it and the other way round.
 - **Interpolation at 60 fps and above:** the object is handled like any other in the level.
-- **Memory:** an oversized model **crashes the game** instead of just not showing, so each level has a budget for added
-  bytes. The limits are in `launcher/ModPatches/PatchBuilder.cs`.
+- **Size of one material:** the game's draw count is 16 bits. A material with more than 65,535 vertices (21,845 triangles)
+  **crashes the game**, because the count wraps and the rest of the vertices are run as commands. The 13000 triangle limit
+  keeps a model well under this. To go past it, use more than one model.
+- **Memory:** models come out of the OS heap at about 0.9 of their file size, not out of the main heap. Each level has a
+  budget for added bytes, in `launcher/ModPatches/PatchBuilder.cs`. The hubs' budgets are sizes that ran there, not the
+  most that fits. Other levels haven't been measured and get the smallest budget. What happens when memory really runs out
+  hasn't been separated from the limit above: don't rely on it failing gently.
 
 ## When things go wrong
 
