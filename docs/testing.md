@@ -354,5 +354,5 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
 
 Claude Code looks for skills in `.claude/skills/`, which is git-ignored. Run `python tools/setup-agents.py` once in each
 checkout (`py -3 tools\setup-agents.py` on Windows) to link it to `.agents/skills/`: a junction on Windows, a symlink
-elsewhere. It is safe to run again and refuses to replace a real folder that has files in it. `worktree.ps1 new` runs it
-for new worktrees. An existing worktree runs it after it has merged or rebased onto a `main` that has `.agents/`.
+elsewhere. It is safe to run again and refuses to replace a real folder that has files in it. `worktree.ps1 new` and `open` run it
+for a worktree (skipped on a branch that has no `.agents/` yet); the main checkout runs it by hand once after it has pulled `.agents/`.

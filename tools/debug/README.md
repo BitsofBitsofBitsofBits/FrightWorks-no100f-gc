@@ -12,7 +12,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 
 | Path | What |
 | --- | --- |
-| `.agents\skills\` | the agent skills (tracked), with `.agents\REPO.md`, the shared rules. Claude Code looks in `.claude\skills\`: `tools\setup-agents.py` links that to `.agents\skills\` (local, git-ignored) |
+| `.agents\skills\` | the agent skills (tracked), with `.agents\REPO.md`, the shared rules. Claude Code looks in `.claude\skills\`: `tools\setup-agents.py` (run by `worktree.ps1 new` and `open`) links that to `.agents\skills\` (local, git-ignored) |
 | `tools\debug\` | these tools |
 | `tools\debug\local\` | git-ignored, machine-local: `user-setup\` (the user's Config.toml + controller files while a test runs; `manual-session.ps1 restore` puts them back), Dolphin disc copies, a downloaded ffmpeg, `kenney-input-prompts\` (the whole Kenney Input Prompts pack, CC0, from kenney.nl: pick new button art there and copy only the SVGs used into `tools\button-art\<family>\`) |
 | `autotest\` | git-ignored work data and output: shots (`autotest\manual\`), texture-hunt data (`autotest\texhunt\`), audio dumps, logs |

@@ -4,7 +4,7 @@ Rules and facts every agent working on this repo needs, whichever tool it runs i
 
 ## Using this file
 
-- **Read it before changing anything.** The skills in `.agents/skills/` go deeper: read the matching one first. Claude Code looks for skills in `.claude/skills/` (git-ignored): run `python tools/setup-agents.py` once per checkout to link it to `.agents/skills/` (`worktree.ps1 new` does that for new worktrees).
+- **Read it before changing anything.** The skills in `.agents/skills/` go deeper: read the matching one first. Claude Code looks for skills in `.claude/skills/` (git-ignored): run `python tools/setup-agents.py` once per checkout to link it to `.agents/skills/` (`worktree.ps1 new` and `open` do that for a worktree).
 - **Change it in the PR that makes the change true.** A new rule or fact ships in the same diff as the work behind it. Standalone corrections are fine as their own small PR.
 - **Rules and lasting facts only.** Who is working on what belongs in GitHub issues and PRs. Case histories belong in the skills. How to build and test belongs in `docs/testing.md`.
 - **It's public, and agents act on it.** No personal paths, machine details, credentials, logs or game data. Review edits to `.agents/` as carefully as code.
