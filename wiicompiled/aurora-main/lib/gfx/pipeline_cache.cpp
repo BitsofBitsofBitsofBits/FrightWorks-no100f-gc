@@ -1095,6 +1095,18 @@ static void load_pipeline_cache_entries(ShaderType type, uint32_t configVersion,
     if (config.msaaSamples != 1 && config.msaaSamples != webgpu::g_graphicsConfig.msaaSamples) {
       continue;
     }
+    // Pipelines built for the other motion-vector setting have a different target count than the passes will have
+    // (the setting as it starts; a change while playing builds the other kind as they are needed).
+    const bool motionVectors = motion_vectors_wanted();
+    if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
+      if ((config.shaderConfig.motionVectors != 0) != motionVectors) {
+        continue;
+      }
+    } else {
+      if ((config.motionVectors != 0) != motionVectors) {
+        continue;
+      }
+    }
     if constexpr (std::is_same_v<PipelineConfig, gx::PipelineConfig>) {
       if (!gx::valid_pipeline_config(config)) {
         Log.warn("Skipping invalid cached GX pipeline configuration");

@@ -77,6 +77,7 @@ wgpu::Buffer g_indexBuffer;
 wgpu::Buffer g_storageBuffer;
 uint32_t g_drawCallCount = 0;
 uint32_t g_mergedDrawCallCount = 0;
+bool motion_vectors_active() noexcept { return false; }
 } // namespace aurora::gfx
 
 namespace aurora::webgpu {
@@ -136,7 +137,7 @@ void evict_copy_texture(const void* dest) noexcept {
     }
   }
 }
-void set_display_copy_present_source() noexcept {}
+void set_display_copy_present_source(std::array<float, 4>) noexcept {}
 void shutdown() noexcept {}
 Vec2<uint32_t> logical_fb_size() noexcept { return s_logicalFbSize; }
 gfx::Viewport map_logical_viewport(const gfx::Viewport& logicalViewport) noexcept {

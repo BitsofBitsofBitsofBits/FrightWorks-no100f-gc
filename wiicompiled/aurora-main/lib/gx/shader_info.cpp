@@ -501,6 +501,19 @@ ShaderInfo build_shader_info(const ShaderConfig& config) noexcept {
     info.zFreeze = true;
     info.uniformSize += sizeof(Vec4<float>);
   }
+  // Motion vectors: last frame's viewport rect, projection and position matrices, last in the block. A
+  // draw whose block would outgrow the limit writes zero motion instead.
+  if (config.motionVectors && config.lineMode == 0) {
+    const u32 offset = (info.uniformSize + 15u) & ~15u;
+    // viewport, previous-position array (offset, valid), projection, position matrices
+    const u32 end = offset + sizeof(Vec4<float>) + sizeof(Vec4<u32>) + sizeof(Mat4x4<float>) +
+                    sizeof(Mat3x4<float>) * info.matrixLayout.postexCount;
+    if (gfx::align_uniform(end) <= MaxUniformSize) {
+      info.motionPrev = true;
+      info.motionPrevOffset = offset;
+      info.uniformSize = end;
+    }
+  }
   info.uniformSize = gfx::align_uniform(info.uniformSize);
   if (info.uniformSize > MaxUniformSize) {
     Log.fatal("Uniform size exceeds maximum: {} > {}", info.uniformSize, MaxUniformSize);
@@ -731,8 +744,29 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
     const auto& p = g_gxState.zFreezePlane;
     buf.append(flip ? Vec4<float>{-p.x(), -p.y(), -p.z(), 0.f} : Vec4<float>{p.x(), p.y(), p.z() + 1.f, 0.f});
   }
+  // Motion vectors: the render viewport, then "last frame's" projection and position matrices, staged as this
+  // frame's so the draw has no motion unless frame interpolation's pairing replaces them at seal.
+  uint8_t* motionPrevData = nullptr;
+  if (info.motionPrev) {
+    if (buf.size() < info.motionPrevOffset) {
+      buf.append_zeroes(info.motionPrevOffset - buf.size());
+    }
+    motionPrevData = buf.data() + buf.size();
+    const auto& vp = g_gxState.renderViewport;
+    buf.append(Vec4<float>{vp.left, vp.top, vp.width, vp.height});
+    // x: where last frame's copy of the POS array is, y: flags (bit 0 the copy is there, bit 1 the HUD); both set at
+    // seal (frame_interpolation.cpp).
+    buf.append(Vec4<u32>{0, 0, 0, 0});
+    buf.append(effectiveProj);
+    buf.append(staged.data() + positionOffset, sizeof(Mat3x4<float>) * layout.postexCount);
+  }
 
-  if (!perspective || frame_interpolation_fps() == 0) {
+  if (motionPrevData != nullptr) {
+    note_motion_draw(motionPrevData, perspective,
+                     g_gxState.projType == GX_ORTHOGRAPHIC && g_gxState.depthCompare && g_gxState.depthUpdate &&
+                         g_gxState.depthFunc == GX_ALWAYS);
+  }
+  if (!perspective || (frame_interpolation_fps() == 0 && motionPrevData == nullptr)) {
     g_gxState.stateDirty = false;
     return {
         .current = range,
@@ -749,10 +783,14 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
           .positionOffset = positionOffset,
           .normalOffset = normalOffset,
           // A compacted position region holds the current matrix at slot 0.
-          .currentMatrix = layout.absolutePosRegion
-                               ? std::min<size_t>(g_gxState.currentPnMtx, MaxPnMtx - 1)
-                               : 0,
+          .currentMatrix = layout.absolutePosRegion ? std::min<size_t>(g_gxState.currentPnMtx, MaxPnMtx - 1) : 0,
           .indexedMatrices = info.indexAttr.test(GX_VA_PNMTXIDX),
+          .motionPrevData = motionPrevData,
+          .posArrayData = motionPrevData != nullptr && (g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX8 ||
+                                                        g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX16)
+                              ? static_cast<const uint8_t*>(g_gxState.arrays[GX_VA_POS].data)
+                              : nullptr,
+          .posArraySize = g_gxState.arrays[GX_VA_POS].size,
       });
   g_gxState.stateDirty = false;
   return {
