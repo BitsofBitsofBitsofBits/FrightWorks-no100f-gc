@@ -31,7 +31,8 @@ sealed class Gamepads : IDisposable
 
     public void Start()
     {
-        if (thread != null || !Available) return;
+        // A thread still winding down after a timed-out Pause() counts as running: never two pollers.
+        if (thread is { IsAlive: true } || !Available) return;
         stop = false;
         thread = new Thread(Run) { IsBackground = true, Name = "Gamepads" };
         thread.Start();
@@ -41,13 +42,19 @@ sealed class Gamepads : IDisposable
     public void Pause()
     {
         stop = true;
-        // Do not start the game or another SDL worker until the handles have actually closed.
-        thread?.Join();
-        thread = null;
+        // Wait for the handles to close, but never hang the UI thread on a stalled SDL call: after 2 s the game
+        // starts anyway (Start() will not spawn a second poller while this one is alive).
+        if (thread == null || thread.Join(2000)) thread = null;
         lock (gate) { pads = Array.Empty<Pad>(); samples = Array.Empty<ControllerSample>(); }
     }
 
     public void Dispose() => Pause();
+
+    // SDL refuses a hint when the user's environment already sets it, even to the value wanted here. That is fine; only a
+    // different value is a real conflict (HIDAPI left on would let SDL talk to the pad).
+    static bool SetHint(Api api, string name, string wanted) => HintAccepted(api.SetHint(name, wanted), api.GetHint(name), wanted);
+
+    internal static bool HintAccepted(bool set, string? current, string wanted) => set || current == wanted;
 
     void Run()
     {
@@ -58,9 +65,10 @@ sealed class Gamepads : IDisposable
                         : !OperatingSystem.IsWindows() && NativeLibrary.TryLoad(LibraryName, out lib);
             if (!loaded) throw new InvalidOperationException($"{LibraryName} is missing or could not be loaded.");
             var api = new Api(lib);
-            if (!api.SetHint("SDL_JOYSTICK_HIDAPI", "0") || !api.SetHint("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1"))
+            if (!SetHint(api, "SDL_JOYSTICK_HIDAPI", "0") || !SetHint(api, "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1"))
                 throw new InvalidOperationException("SDL could not configure read-only launcher controller input.");
             var handles = new Dictionary<uint, IntPtr>();
+            var unreadable = new HashSet<uint>();  // listed, but SDL_OpenGamepad failed (busy, no permission): skipped
             try
             {
                 if (!api.Init(0x2000 /* SDL_INIT_GAMEPAD */)) throw new InvalidOperationException(api.Error());
@@ -79,17 +87,23 @@ sealed class Gamepads : IDisposable
                             uint id = (uint)Marshal.ReadInt32(ids, i * 4);
                             present.Add(id);
                             string name = Marshal.PtrToStringUTF8(api.GetGamepadNameForID(id)) ?? "Controller";
+                            var kind = KindOf(api.GetGamepadTypeForID(id));
                             if (!handles.TryGetValue(id, out var handle))
                             {
+                                if (unreadable.Contains(id)) { list.Add(new Pad(name, kind)); continue; }
                                 handle = api.Open(id);
                                 if (handle == IntPtr.Zero)
                                 {
                                     if (!api.IsGamepad(id)) { present.Remove(id); continue; } // Unplugged after enumeration.
-                                    throw new InvalidOperationException(api.Error());
+                                    // One pad that can't be opened must not take the others down with it.
+                                    unreadable.Add(id);
+                                    Console.Error.WriteLine($"Launcher controller input: {name} could not be opened: {api.Error()}");
+                                    list.Add(new Pad(name, kind));
+                                    continue;
                                 }
                                 handles.Add(id, handle);
                             }
-                            list.Add(new Pad(name, KindOf(api.GetGamepadTypeForID(id))));
+                            list.Add(new Pad(name, kind));
                             uint buttons = 0;
                             for (int b = 0; b <= 14; b++) if (api.Button(handle, b)) buttons |= 1u << b;
                             input.Add(ControllerInput.SampleFromSdl(id, buttons,
@@ -97,6 +111,7 @@ sealed class Gamepads : IDisposable
                         }
                     }
                     finally { api.Free(ids); }
+                    unreadable.RemoveWhere(id => !present.Contains(id));
                     foreach (uint id in handles.Keys.Where(id => !present.Contains(id)).ToArray())
                     {
                         api.Close(handles[id]);
@@ -150,6 +165,7 @@ sealed class Gamepads : IDisposable
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.U1)] delegate bool InitFn(uint flags);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.U1)]
         delegate bool SetHintFn([MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.LPUTF8Str)] string value);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr GetHintFn([MarshalAs(UnmanagedType.LPUTF8Str)] string name);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void VoidFn();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr GetGamepadsFn(out int count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr NameFn(uint id);
@@ -164,6 +180,7 @@ sealed class Gamepads : IDisposable
 
         public readonly Func<uint, bool> Init;
         public readonly Func<string, string, bool> SetHint;
+        public readonly Func<string, string?> GetHint;
         public readonly Action PumpEvents, Quit;
         readonly GetGamepadsFn getGamepads;
         public readonly Func<uint, IntPtr> GetGamepadNameForID;
@@ -181,6 +198,7 @@ sealed class Gamepads : IDisposable
             T F<T>(string name) where T : Delegate => Marshal.GetDelegateForFunctionPointer<T>(NativeLibrary.GetExport(lib, name));
             var init = F<InitFn>("SDL_Init"); Init = f => init(f);
             var hint = F<SetHintFn>("SDL_SetHint"); SetHint = (n, v) => hint(n, v);
+            var getHint = F<GetHintFn>("SDL_GetHint"); GetHint = n => Marshal.PtrToStringUTF8(getHint(n));
             var pump = F<VoidFn>("SDL_PumpEvents"); PumpEvents = () => pump();
             var quit = F<VoidFn>("SDL_Quit"); Quit = () => quit();
             getGamepads = F<GetGamepadsFn>("SDL_GetGamepads");

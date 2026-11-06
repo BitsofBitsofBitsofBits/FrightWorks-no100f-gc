@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Automation.Peers;
 using Avalonia.Automation.Provider;
 using Avalonia.Controls;
@@ -23,6 +24,8 @@ sealed class ControllerNavigation : IDisposable
     Window? context;
     readonly HashSet<Window> dispatching = new();
     public bool Used { get; private set; }
+    // True only while a pad Confirm is running a button's handler: actions started then (a file picker) were invoked by the pad.
+    internal bool Activating { get; private set; }
     internal Window? Modal => dialogs.LastOrDefault();
 
     public ControllerNavigation(MainWindow owner, Gamepads gamepads)
@@ -163,16 +166,25 @@ sealed class ControllerNavigation : IDisposable
             if (action != LauncherButtons.Confirm) { Move(); return; }
             switch (focused)
             {
-                case PlankButton plank: plank.PerformClick(); break;
+                case PlankButton plank:
+                    Activating = true;
+                    try { plank.PerformClick(); }
+                    finally { Activating = false; }
+                    break;
                 case RadioButton radio: radio.IsChecked = true; break;
                 case ToggleButton toggle: toggle.IsChecked = toggle.IsChecked != true; break;
                 case Button button:
-                    if (ControlAutomationPeer.CreatePeerForElement(button) is IInvokeProvider invoke) invoke.Invoke();
-                    else throw new NotSupportedException("The button does not expose an accessible invoke action.");
+                    Activating = true;
+                    try
+                    {
+                        if (ControlAutomationPeer.CreatePeerForElement(button) is IInvokeProvider invoke) invoke.Invoke();
+                        else throw new NotSupportedException("The button does not expose an accessible invoke action.");
+                    }
+                    finally { Activating = false; }
                     break;
                 case ComboBox combo:
                     combo.IsDropDownOpen = false;
-                    int? selected = await ControllerDialogs.Choose(window, combo.Items.Cast<object?>().ToArray(), combo.SelectedIndex);
+                    int? selected = await ControllerDialogs.Choose(window, combo.Items.Cast<object?>().ToArray(), combo.SelectedIndex, LabelFor(combo));
                     if (selected is int value)
                     {
                         if (combo is ThemedCombo themed) themed.CommitSelection(value);
@@ -224,6 +236,18 @@ sealed class ControllerNavigation : IDisposable
             }
         }
         finally { dispatching.Remove(window); }
+    }
+
+    // The setting's name for the popup: the label in the same form row, else its accessible name.
+    internal static string LabelFor(ComboBox combo)
+    {
+        if (combo.Parent is Grid grid)
+        {
+            int row = Grid.GetRow(combo), column = Grid.GetColumn(combo);
+            var label = grid.Children.OfType<TextBlock>().FirstOrDefault(t => Grid.GetRow(t) == row && Grid.GetColumn(t) < column);
+            if (label?.Text is { Length: > 0 } text) return text.TrimEnd(':', ' ');
+        }
+        return AutomationProperties.GetName(combo) is { Length: > 0 } name ? name : "Choose a setting";
     }
 
     internal static IEnumerable<Control> Targets(Control root)

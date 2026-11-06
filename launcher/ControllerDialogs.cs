@@ -10,16 +10,25 @@ namespace ScoobyReMasked;
 // Controller-originated flows use local themed browsers. Mouse/keyboard retain the native storage provider/portal.
 static class ControllerDialogs
 {
-    internal static async Task<int?> Choose(Window owner, object?[] items, int selected)
+    // A borderless popup: no operating-system title bar or frame, so it reads as the launcher's own dropdown. The themed
+    // edge keeps it visible on top of the launcher, and the setting's name is its heading. Still a modal owned window
+    // (centred on the launcher; Escape cancels, a click selects, a double click applies).
+    internal static async Task<int?> Choose(Window owner, object?[] items, int selected, string title = "Choose a setting")
     {
-        var dialog = Dialogs.Make("Choose a setting", owner);
-        var list = new ControllerList { ItemsSource = items, SelectedIndex = selected, Height = 280, MinWidth = 320,
+        var dialog = Dialogs.Make(title, owner);
+        dialog.WindowDecorations = WindowDecorations.None;
+        var list = new ControllerList { ItemsSource = items, SelectedIndex = selected, Height = Math.Clamp(items.Length * 30 + 6, 96, 280), MinWidth = 300,
                                        Background = Skin.Brush(Skin.Field), Foreground = Skin.Brush(Skin.Cream), BorderBrush = Skin.Brush(Skin.Purple) };
         int? answer = null;
         void Apply() { if (list.SelectedIndex >= 0) { answer = list.SelectedIndex; dialog.Close(); } }
         list.Activate = Apply;
-        dialog.Content = Body(list, new PlankButton("Apply", (_, _) => Apply(), true),
-                              new PlankButton("Cancel", (_, _) => dialog.Close()));
+        list.DoubleTapped += (_, _) => Apply();
+        var heading = Skin.Title(title);
+        heading.Margin = new Thickness(0, 0, 0, 8);
+        var body = Body(list, new PlankButton("Apply", (_, _) => Apply(), true),
+                        new PlankButton("Cancel", (_, _) => dialog.Close()));
+        body.Children.Insert(0, heading);
+        dialog.Content = new Border { BorderBrush = Skin.Brush(Skin.Purple), BorderThickness = new Thickness(3), Child = body };
         dialog.Opened += (_, _) => { list.Focus(NavigationMethod.Directional); list.ScrollIntoView(list.SelectedIndex); };
         await Dialogs.ShowModal(dialog, owner);
         return answer;
@@ -99,9 +108,11 @@ static class ControllerDialogs
         return body;
     }
 
-    public static async Task<string?> PickPath(Window owner, string title, string? start = null, bool folder = false)
+    // The themed browser when the pad started this action (decided at once, before any await), else the native picker or
+    // portal. `viaController` is for tests; callers leave it out.
+    public static async Task<string?> PickPath(Window owner, string title, string? start = null, bool folder = false, bool? viaController = null)
     {
-        if (ControllerNavigation.For(owner)?.Used == true) return await Browse(owner, title, start, folder);
+        if (viaController ?? ControllerNavigation.For(owner)?.Activating == true) return await Browse(owner, title, start, folder);
         if (folder)
         {
             var picked = await owner.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
@@ -153,7 +164,7 @@ static class ControllerDialogs
         tools.Children.Add(new PlankButton("Locations", async (_, _) =>
         {
             var roots = DriveInfo.GetDrives().Select(d => d.RootDirectory.FullName).ToArray();
-            int? choice = await Choose(dialog, roots.Cast<object?>().ToArray(), 0);
+            int? choice = await Choose(dialog, roots.Cast<object?>().ToArray(), 0, "Locations");
             if (choice is int index) await Load(roots[index]);
         }));
         tools.Children.Add(new PlankButton("Enter path", async (_, _) =>

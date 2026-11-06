@@ -84,6 +84,7 @@ sealed class MansionScene : Control
         rnd = new Random(seed);
         ClipToBounds = true;
         Focusable = true;
+        FocusAdorner = null;  // the focused sign is drawn in OnRender; the theme's focus rectangle would box it
         LoadLayout();
         foreach (var sign in signs)
         {
@@ -806,6 +807,7 @@ sealed class MansionScene : Control
             this.scene = scene;
             this.id = id;
             Focusable = true;
+            FocusAdorner = null;  // OnRender outlines the sign's own shape; the default box would cover its bounding rectangle
             IsHitTestVisible = false;
             AutomationProperties.SetName(this, char.ToUpperInvariant(id[0]) + id[1..]);
         }

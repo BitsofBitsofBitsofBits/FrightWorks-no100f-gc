@@ -108,6 +108,9 @@ static class LauncherControllerTests
             Check(ControllerLayout.Match(new[] { new Gamepads.Pad("synthetic", kind) }) == expected, "Reliable scheme matching: " + kind);
         }
         Check(ControllerLayout.Match(Array.Empty<Gamepads.Pad>()) == null, "No-device matching.");
+        Check(Gamepads.HintAccepted(true, null, "0") && Gamepads.HintAccepted(false, "0", "0") &&
+              !Gamepads.HintAccepted(false, "1", "0") && !Gamepads.HintAccepted(false, null, "1"),
+              "An SDL hint already set to the wanted value was treated as a failure, or a conflicting one as fine.");
         Check(ControllerLayout.Match(new[] { new Gamepads.Pad("Xbox", Gamepads.Kind.Xbox), new Gamepads.Pad("GC", Gamepads.Kind.GameCube) }) == null, "Conflicting scheme matching.");
         var c = new GameConfig(path);
         Check(ControllerLayout.ApplyDetected(c, new[] { new Gamepads.Pad("Xbox One Controller", Gamepads.Kind.Xbox) }), "Xbox One did not match existing Original Xbox scheme.");
@@ -158,6 +161,16 @@ static class LauncherControllerTests
         Shot(w, "Display-focus");
         Click(w, w, "Controls");
         Check(w.layoutBox.IsEffectivelyVisible, "Controls tab failed.");
+        // A picker is the themed browser only when the pad started that action, never because the pad was used earlier.
+        var controlsTab = Button(w, "Controls");
+        var origins = new List<bool>();
+        EventHandler origin = (_, _) => origins.Add(w.navigation.Activating);
+        controlsTab.Click += origin;
+        Click(w, w, "Controls");
+        controlsTab.PerformClick();  // what a mouse click runs
+        controlsTab.Click -= origin;
+        Check(origins.SequenceEqual(new[] { true, false }) && w.navigation.Used && !w.navigation.Activating,
+              "Pad-started and mouse-started actions are not told apart.");
         Shot(w, "Controls-focus");
 
         string before = File.ReadAllText(config);
@@ -165,6 +178,10 @@ static class LauncherControllerTests
         Feed(w, LauncherButtons.None); Feed(w, LauncherButtons.Confirm);
         var choice = w.navigation.Modal!;
         Check(choice != null, "Controller dropdown did not create a registered dialog.");
+        Check(choice!.WindowDecorations == WindowDecorations.None, "Dropdown popup kept the operating-system window frame.");
+        Check(choice.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Layout") && choice.Title == "Layout",
+              "Dropdown popup does not name its setting.");
+        Shot(choice, "Dropdown-popup");
         Feed(w, LauncherButtons.Confirm);
         Check(w.navigation.Modal == choice && choice!.IsVisible, "Held confirm accepted the new dialog.");
         Press(w, LauncherButtons.Down);
@@ -345,22 +362,22 @@ static class LauncherControllerTests
         Directory.CreateDirectory(Path.Combine(browser, "Child"));
         File.WriteAllText(Path.Combine(browser, "disc.ISO"), "synthetic non-game bytes");
         File.WriteAllText(Path.Combine(browser, "notes.txt"), "synthetic");
-        var file = ControllerDialogs.PickPath(w, "Synthetic file browser", browser);
+        var file = ControllerDialogs.PickPath(w, "Synthetic file browser", browser, false, viaController: true);
         modal = w.navigation.Modal!; Pump();
         var list = Find<ControllerList>(modal);
         Check(list.ItemCount == 2, "Disc filter did not include folders/uppercase ISO and exclude other files.");
         Shot(modal, "File-browser");
         Press(w, LauncherButtons.Down); Press(w, LauncherButtons.Confirm); Finish(file);
         Check(file.Result == Path.Combine(browser, "disc.ISO"), "Managed file browser returned wrong path.");
-        var folder = ControllerDialogs.PickPath(w, "Synthetic folder browser", browser, true);
+        var folder = ControllerDialogs.PickPath(w, "Synthetic folder browser", browser, true, viaController: true);
         modal = w.navigation.Modal!; Pump();
         Press(w, LauncherButtons.Confirm);
         Click(w, modal, "Use this folder"); Finish(folder);
         Check(folder.Result == Path.Combine(browser, "Child"), "Managed folder browser did not descend/select.");
-        file = ControllerDialogs.PickPath(w, "Synthetic cancelled browser", browser);
+        file = ControllerDialogs.PickPath(w, "Synthetic cancelled browser", browser, false, viaController: true);
         Pump(); Press(w, LauncherButtons.Back); Finish(file);
         Check(file.Result == null && File.ReadAllText(config).Contains("unknown = 42"), "Cancelled browser changed settings.");
-        folder = ControllerDialogs.PickPath(w, "Synthetic folder creation", browser, true); Pump();
+        folder = ControllerDialogs.PickPath(w, "Synthetic folder creation", browser, true, viaController: true); Pump();
         modal = w.navigation.Modal!;
         Click(w, modal, "New folder");
         var keyboard = w.navigation.Modal!;
@@ -368,7 +385,7 @@ static class LauncherControllerTests
         Check(Directory.Exists(Path.Combine(browser, "1")), "Controller folder creation failed.");
         Press(w, LauncherButtons.Back); Finish(folder);
         Check(folder.Result == null, "Cancelling the folder picker applied its path.");
-        file = ControllerDialogs.PickPath(w, "Synthetic unreadable file", browser); Pump();
+        file = ControllerDialogs.PickPath(w, "Synthetic unreadable file", browser, false, viaController: true); Pump();
         modal = w.navigation.Modal!;
         list = Find<ControllerList>(modal);
         list.SelectedIndex = list.ItemCount - 1;
@@ -416,6 +433,24 @@ static class LauncherControllerTests
         Check(File.ReadAllText(config) == before, "Unknown deliberate scheme was overwritten.");
         w.layoutBox.Focus(NavigationMethod.Directional); Press(w, LauncherButtons.Confirm); Press(w, LauncherButtons.Confirm);
         Check(File.ReadAllText(config) == before, "Explicit same-value custom scheme rewrote unrelated configuration.");
+        w.Close(); Pump(); Fault.Owner = null;
+
+        // The launcher comes back after the game exits, a clean quit (exit code 0) included.
+        w = new MainWindow(null, paths, false); w.Show(); Pump(); Fault.Owner = w;
+        w.WindowState = WindowState.Minimized; Pump();
+        Check(w.WindowState == WindowState.Minimized, "Headless window could not be minimized for the exit check.");
+        var standIn = OperatingSystem.IsWindows() ? new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c exit 0")
+                                                  : new System.Diagnostics.ProcessStartInfo("/bin/sh", "-c \"exit 0\"");
+        standIn.UseShellExecute = false;
+        standIn.CreateNoWindow = true;
+        using (var quick = System.Diagnostics.Process.Start(standIn)!)
+        {
+            quick.WaitForExit();
+            Check(quick.ExitCode == 0, "Stand-in game process did not exit with 0.");
+            var exited = typeof(MainWindow).GetMethod("GameExited", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            Finish((Task)exited.Invoke(w, new object[] { quick })!);
+        }
+        Check(w.WindowState == WindowState.Normal, "Launcher stayed minimized after a clean game exit.");
         w.Close(); Pump(); Fault.Owner = null;
     }
 }

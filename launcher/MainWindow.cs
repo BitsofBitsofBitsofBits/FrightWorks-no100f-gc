@@ -983,9 +983,13 @@ sealed class MainWindow : Window
         if (game == exited) game = null;
         UpdateControllerOwnership();
         RefreshDisc();
+        // Always back, after a clean quit too: the pad can't reach a minimized launcher (navigation ignores it).
+        if (IsVisible)
+        {
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+        }
         if (code == 0) return;
-        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-        Activate();
         var logs = Path.Combine(userData, "Logs");
         int pick = await Dialogs.Choose(this, "The game stopped", new[]
         {
