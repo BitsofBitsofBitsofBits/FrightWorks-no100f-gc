@@ -1403,6 +1403,8 @@ void DrawDiagnostics() {
 //   cutscene            "cutscene yes|no control yes|no": recorded cutscene playing (devmenu_press.txt skips it), player
 //                       has control (no during cutscenes and in-world camera pans)
 //   perf                draw calls of the last frame + present timing (fps, average/p95 frame time)
+//   mvview MODE [SCALE] motion vectors view: 0 off, 1 motion only, 2 over the picture; SCALE = pixels per frame for
+//                       full color (turns the motion vectors on while it shows)
 void PollCommandFile() {
     static uint32_t tick = 0;
     if (++tick % 30 != 0) return;
@@ -1538,6 +1540,17 @@ void PollCommandFile() {
                           st ? st->drawCallCount : 0u, st ? st->mergedDrawCallCount : 0u, t.framesPerSecond,
                           t.averageFrameTimeMs, t.p95FrameTimeMs, t.jitterMs);
             g_status = b;
+#ifdef AURORA_HAS_MOTION_VECTORS
+        } else if (cmd == "mvview") {
+            std::istringstream as(arg);
+            int mode = 0;
+            float scale = 0.0f;
+            if (as >> mode) {
+                as >> scale;
+                aurora_set_motion_vector_view(mode, scale);
+            }
+            g_status = "motion vectors view " + std::to_string(aurora_get_motion_vector_view());
+#endif
         } else if (cmd == "freecam") {
             SetFreecam(arg == "on");
         } else if (cmd == "cam") {
@@ -1630,6 +1643,24 @@ void DrawStatus() {
         ImGui::TextDisabled("%.1f %.1f %.1f  yaw %.0f pitch %.0f", g_cam.x, g_cam.y, g_cam.z,
                             g_cam.yaw * 180.0f / 3.14159265f, g_cam.pitch * 180.0f / 3.14159265f);
     }
+#ifdef AURORA_HAS_MOTION_VECTORS
+    {
+        // The motion vectors as color (they are made while this or motion blur needs them).
+        static const char* const kViews[] = {"Off", "Motion only", "Over the picture"};
+        int view = aurora_get_motion_vector_view();
+        float scale = aurora_get_motion_vector_view_scale();
+        ImGui::SetNextItemWidth(OverlayTheme::Px(160.0f));
+        if (ImGui::Combo("Motion vectors view", &view, kViews, 3)) aurora_set_motion_vector_view(view, 0.0f);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Grey (or the picture) = still; hue = direction the surface came from, saturation = speed.\n"
+                              "Red: from the right, green-yellow: from below, cyan: from the left, blue-purple: from above.");
+        if (view != 0) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(OverlayTheme::Px(120.0f));
+            if (ImGui::SliderFloat("px for full color", &scale, 1.0f, 64.0f, "%.0f")) aurora_set_motion_vector_view(view, scale);
+        }
+    }
+#endif
     bool recordAudio = RuntimeConfigFile::RecordAudio();
     if (OverlayTheme::Toggle("Record audio (F3 videos)", &recordAudio)) RuntimeConfigFile::SetRecordAudio(recordAudio);
     if (ImGui::IsItemHovered())

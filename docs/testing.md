@@ -114,7 +114,9 @@ One test: `cmake --build wiicompiled\native-build --target <name>`, then run `wi
 New pure logic (no SDL, no guest memory) belongs in a header with a test next to the existing ones.
 
 Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_TESTS=ON`), a ROM-free test of
-actual GPU pixels. Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
+actual GPU pixels.
+It starts with the motion vectors: none while nothing asks for them, zero for a still quad, the expected 8 pixels for one moved by its matrix, and the targets freed again when they are no longer wanted.
+Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
 Each transparency case explicitly clears its color and depth; the EFB otherwise persists between frames.
 With the enhanced two-pass cut-out modes, each render pass finishes solid geometry, then cut-out fringes, then
@@ -196,6 +198,11 @@ saved in `Play\UserData\devmenu_spots.txt`. Travel is one transfer at a time: as
 cutscene, it waits for normal play (**Cancel travel** drops it). **Skip** presses the game's own skip button for a
 recorded cutscene (A) or the title intro / attract demo (Start). More commands (scripted through `Play\devmenu.txt`) are in the
 `game-logic-debug` skill.
+
+**Motion vectors view** (F8, or `mvview MODE [SCALE]` in `Play\devmenu.txt`: 0 off, 1 motion only, 2 over the picture) shows where every surface was last frame, as color.
+Grey (or the picture) is still; the hue is the direction a surface came from and the saturation its speed, full at SCALE pixels per frame (16 by default).
+It turns the motion vectors on while it shows, like the **Motion blur** setting (`[video] motion_blur`, 0 to 100 percent), which uses them.
+Anything that should move but shows grey, or flashes from frame to frame, has lost its pairing with last frame's draw.
 
 **F3** (developer tools on) starts / stops a video of the game: `Videos\FrightWorks_<date>_<time>.mp4` beside the
 launcher (`Play\Videos` in a source build) and a `.txt` with the build, picture size, Scooby's position at the start and
