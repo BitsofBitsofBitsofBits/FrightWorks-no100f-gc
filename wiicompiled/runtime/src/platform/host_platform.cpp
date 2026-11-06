@@ -1,6 +1,7 @@
 #include "platform/host_platform.h"
 
 #include <cstdlib>
+#include <string>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -54,6 +55,21 @@ std::optional<std::filesystem::path> ExecutableDirectory() noexcept {
         return std::filesystem::path(directory);
     }
     return std::nullopt;
+#elif defined(__linux__)
+    // /proc/self/exe is a magic symlink to the running executable. readlink() does not NUL-terminate and
+    // truncates silently, so grow the buffer until the result no longer fills it (the Windows branch's strategy).
+    std::string buffer(256, '\0');
+    for (;;) {
+        const ssize_t length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
+        if (length < 0) {
+            return std::nullopt;
+        }
+        if (static_cast<size_t>(length) < buffer.size()) {
+            buffer.resize(static_cast<size_t>(length));
+            return std::filesystem::path(buffer).parent_path();
+        }
+        buffer.resize(buffer.size() * 2);
+    }
 #else
     return std::nullopt;
 #endif
