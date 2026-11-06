@@ -89,6 +89,15 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
   draft release as the zip: `gh release upload v<ver> dist\installer\FrightWorks-win-Setup.exe ...`. Installed games
   look for `releases.win.json` in the published (non-pre-release) releases, so every release from now on carries
   these files; a release without them isn't offered as an update. The zip's launcher reads the latest release's tag.
+- **Dawn on Linux** (2x and 8x MSAA): WebGPU allows only 1 and 4 samples, and stock Dawn aborts on 2 and 8 on Vulkan.
+  Linux (x86_64 and aarch64) therefore downloads the Dawn package FrightWorks builds and hosts: release
+  `v20260603.191052-msaa` on `FrightWorks/dawn-build`, URL and SHA-256 in
+  `wiicompiled/aurora-main/cmake/AuroraDawnProvider.cmake`. It is the same Dawn commit as the stock package plus a
+  patch (`FrightWorks/dawn`, branch `frightworks/v20260603.191052`, commit `dd7b19d`) that maps 2 and 8 to themselves
+  when the GPU's Vulkan limits support them and to 4 otherwise. The workflow that builds it is on `FrightWorks/dawn-build`,
+  branch `frightworks/build`. Other platforms, Windows included, use the stock package. When `AURORA_DAWN_VERSION`
+  changes: rebase the patch onto the new Dawn commit, build and publish a new package on our release, then update
+  the URL and hashes in the provider; until then Linux gets the stock package and 2x/8x abort again on Vulkan.
 
 ## 3. Unit tests
 
