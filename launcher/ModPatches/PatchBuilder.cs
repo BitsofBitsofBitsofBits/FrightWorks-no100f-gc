@@ -387,7 +387,7 @@ static class PatchBuilder
         using var stream = File.Create(path);
         using var w = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
         w.WriteStartObject();
-        w.WriteString("note", "Made by the FrightWorks launcher from your own game disc. Holds game data: don't share this folder.");
+        w.WriteString("note", "Made by the FrightWorks launcher from your own game disc. Holds game data, so it must not be shared.");
         w.WriteString("stamp", stamp);
         w.WriteStartArray("files");
         foreach (var f in files) w.WriteStringValue(f.Replace('\\', '/'));
