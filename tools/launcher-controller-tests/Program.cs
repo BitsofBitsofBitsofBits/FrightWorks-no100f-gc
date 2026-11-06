@@ -39,6 +39,15 @@ static class LauncherControllerTests
         Feed(w, buttons);
         Feed(w, LauncherButtons.None);
     }
+    // Rows of a popup list that are fully inside its viewport, and whether it scrolls.
+    static (int Visible, bool Scrolls, int Rows) PopupRows(Window popup)
+    {
+        var list = popup.GetVisualDescendants().OfType<ControllerList>().First();
+        var scroll = list.GetVisualDescendants().OfType<ScrollViewer>().First();
+        var rows = list.GetVisualDescendants().OfType<ListBoxItem>().ToList();
+        int visible = rows.Count(r => r.TranslatePoint(default, list) is Point top && top.Y >= -1 && top.Y + r.Bounds.Height <= scroll.Viewport.Height + 1);
+        return (visible, scroll.Extent.Height > scroll.Viewport.Height + 1, rows.Count);
+    }
     static T Find<T>(Window w) where T : Control => w.GetVisualDescendants().OfType<T>().First();
     static PlankButton Button(Window w, string name) => w.GetVisualDescendants().OfType<PlankButton>().First(b => b.Text == name);
     static void Click(MainWindow owner, Window window, string name)
@@ -159,6 +168,18 @@ static class LauncherControllerTests
         var targets = ControllerNavigation.Targets(w.boards["settings"]).ToList();
         Check(targets.Any(t => t is ThemedCombo) && targets.OfType<PlankButton>().Any(b => b.Text == "Controls"), "Display navigation surfaces missing.");
         Shot(w, "Display-focus");
+        // A popup shows every option when they fit and scrolls only beyond its cap (it once showed 2 of 3, 7 of 12).
+        var combos = targets.OfType<ThemedCombo>().Where(c => c.ItemCount >= 3).OrderBy(c => c.ItemCount).ToList();
+        Check(combos.Count > 0, "No dropdown with three or more options on the Display page.");
+        foreach (var combo in new[] { combos.First(), combos.Last() }.Distinct())
+        {
+            combo.Focus(NavigationMethod.Directional); Press(w, LauncherButtons.Confirm); Pump();
+            var manyPopup = w.navigation.Modal!;
+            var (visible, scrolls, realized) = PopupRows(manyPopup);
+            Check(visible == combo.ItemCount && !scrolls, $"A popup for {combo.ItemCount} options shows {visible} rows (scrolls: {scrolls}).");
+            Shot(manyPopup, $"Dropdown-popup-{combo.ItemCount}");
+            Press(w, LauncherButtons.Back);
+        }
         Click(w, w, "Controls");
         Check(w.layoutBox.IsEffectivelyVisible, "Controls tab failed.");
         // A picker is the themed browser only when the pad started that action, never because the pad was used earlier.
@@ -182,6 +203,7 @@ static class LauncherControllerTests
         Check(choice.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Layout") && choice.Title == "Layout",
               "Dropdown popup does not name its setting.");
         Shot(choice, "Dropdown-popup");
+        Check(PopupRows(choice).Visible == 2, "The two-option Layout popup does not show both options.");
         Feed(w, LauncherButtons.Confirm);
         Check(w.navigation.Modal == choice && choice!.IsVisible, "Held confirm accepted the new dialog.");
         Press(w, LauncherButtons.Down);

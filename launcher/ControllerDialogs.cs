@@ -17,7 +17,10 @@ static class ControllerDialogs
     {
         var dialog = Dialogs.Make(title, owner);
         dialog.WindowDecorations = WindowDecorations.None;
-        var list = new ControllerList { ItemsSource = items, SelectedIndex = selected, Height = Math.Clamp(items.Length * 30 + 6, 96, 280), MinWidth = 300,
+        // The list is as tall as its rows (they are not a fixed 30 px), up to a cap that leaves room for the window around it;
+        // longer lists scroll.
+        double cap = Math.Min(480, Math.Max(200, owner.Bounds.Height - 220));
+        var list = new ControllerList { ItemsSource = items, SelectedIndex = selected, MaxHeight = cap, MinWidth = 300,
                                        Background = Skin.Brush(Skin.Field), Foreground = Skin.Brush(Skin.Cream), BorderBrush = Skin.Brush(Skin.Purple) };
         int? answer = null;
         void Apply() { if (list.SelectedIndex >= 0) { answer = list.SelectedIndex; dialog.Close(); } }
