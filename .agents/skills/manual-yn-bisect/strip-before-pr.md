@@ -9,13 +9,13 @@ Diagnostics never ride along in a PR. Keep them reusable as patch files instead 
    git diff --output=tools/debug/patches/<name>.patch HEAD -- <files>   # byte-exact; don't use Out-File
    git apply --check tools/debug/patches/<name>.patch
    ```
-2. Fresh branch from upstream `main`, apply **only** the fix, rebuild, re-verify (human visual + smoke boots).
+2. Fresh branch from `origin/main`, apply **only** the fix, rebuild, re-verify: a human visual check if the bug is visible, and the smoke test in `.agents/REPO.md` (Testing; the script is not built yet, so boot `h001` and the changed level).
 3. Commit only the fix paths: `git commit -m "..." -- <fix files>`.
 4. Check overlap with open PRs: `gh pr view <n> --json files`, then
-   `git fetch upstream pull/<n>/head:refs/remotes/upstream/pr-<n>` and `git merge-tree --write-tree HEAD upstream/pr-<n>`.
+   `git fetch origin pull/<n>/head:refs/remotes/origin/pr-<n>` and `git merge-tree --write-tree HEAD origin/pr-<n>`.
 
 Existing patches in `tools/debug/patches/` (apply with `git apply`, remove with `git apply -R`). Base `e600261` (`main`)
-unless noted; if one stops applying after upstream moves, use `git apply -3`, fix conflicts and re-save it.
+unless noted; if one stops applying after `main` moves, use `git apply -3`, fix conflicts and re-save it.
 
 | Patch | Contents | Skill |
 | --- | --- | --- |
@@ -33,7 +33,7 @@ unless noted; if one stops applying after upstream moves, use `git apply -3`, fi
 
 - Bisect-only code (owner meta, skip/flat files, tracers, `NO100F_*` diagnostics, toast/Y/N unless the maintainer wants it)
 - Local ignore rules: they live in `.git/info/exclude`, not `.gitignore`
-- ISO / `Disc/` / `autotest/` / `Play/` / `AGENTS.md` / `tools/debug/` / `.claude/skills/` (the debug kit: committed on its own branch, never in a fix PR)
+- ISO / `Disc/` / `autotest/` / `Play/` / `AGENTS.md` / `tools/debug/` / `.agents/skills/` (the debug kit: committed on its own branch, never in a fix PR)
 
 ## Verify after strip
 
@@ -41,5 +41,5 @@ unless noted; if one stops applying after upstream moves, use `git apply -3`, fi
 Remove-Item Env:NO100F_* -ErrorAction SilentlyContinue
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate
 powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot <LEVEL>
-# human visual: bug gone; smoke e001 / h001 / i001
+# human visual if the bug is visible: bug gone. Then the smoke test (.agents/REPO.md, Testing)
 ```

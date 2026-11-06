@@ -21,6 +21,7 @@ Worktrees live beside the main checkout, in <its parent>\\FrightWorks-worktrees\
  - links (junctions on Windows, symlinks elsewhere) to the main checkout's big read-only inputs: Disc\\, texture_pack\\,
    toolchain\\, game\\, wiicompiled\\Dependencies and the folders in tools\\debug\\local (Dolphin copies, icon packs),
    never user-setup;
+ - .claude\\skills: a link to its own .agents\\skills (tools\\setup-agents.py, run by new and open; Claude Code looks there);
  - AGENTS.md: a link to the main checkout's (one set of rules); CLAUDE.md loads it and TASK.md, this task's own notes.
 Builds can run side by side. Game runs take turns (kit-common.ps1, game-run lock).
 
@@ -383,7 +384,21 @@ class Worktree:
             raise Fail('no worktree %s' % path)
         prompt = '' if (a.continue_ or a.name == 'main') else 'Read TASK.md and carry on with the task from its Status.'
         title = COORDINATOR if a.name == 'main' else a.name
+        self.link_skills(path, 'open')
         self.open_session(path, title, prompt, a.continue_)
+
+    def link_skills(self, path, verb):
+        """Run tools/setup-agents.py in the worktree: .claude/skills -> .agents/skills (Claude Code looks there). Not fatal:
+        a branch from before the move has no script, and a refusal (a real folder with files) is for a person to fix."""
+        setup = os.path.join(path, 'tools', 'setup-agents.py')
+        if not os.path.isfile(setup):
+            say('%s: no tools/setup-agents.py on this branch (from before the skills moved to .agents/skills); skills not linked' % verb)
+            return
+        r = subprocess.run([sys.executable, setup], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace')
+        for line in r.stdout.splitlines():
+            say('%s: %s' % (verb, line))
+        if r.returncode != 0:
+            say('%s: skills not linked; fix it, then run: python tools/setup-agents.py (in %s)' % (verb, path))
 
     def status(self, path):
         """(ok, [porcelain lines]) of a worktree, leaving out the links `new` made. Windows junctions to Disc and the like are
@@ -459,6 +474,10 @@ class Worktree:
             os.makedirs(os.path.dirname(link), exist_ok=True)
             make_dir_link(link, target)
             say('new: linked %s' % rel)
+
+        # The tracked skills are in .agents/skills; Claude Code looks in .claude/skills (git-ignored): link it to this
+        # worktree's own. Not fatal: a branch from before the move has no script, and the link can be made later.
+        self.link_skills(path, 'new')
 
         # Agent instructions: AGENTS.md = the main checkout's (local file, not in git); CLAUDE.md loads it + TASK.md.
         agents = os.path.join(self.main, 'AGENTS.md')
