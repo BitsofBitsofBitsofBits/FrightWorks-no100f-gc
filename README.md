@@ -157,6 +157,8 @@ On Linux the game doesn't record F3 videos or pick a fullscreen monitor yet, so 
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
 
+**Using an AI agent on this repo?** Have it read [`.agents/REPO.md`](.agents/REPO.md) first: it holds the repo's rules and how to test, and skills are in `.agents/skills/`.
+
 ## Credits
 
 - FrightWorks: Loneranger419

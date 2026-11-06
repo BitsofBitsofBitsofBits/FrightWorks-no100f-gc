@@ -582,20 +582,20 @@ TEST(TevTexcoordStateContract, DirectStageFeedsFollowingAddPrevInFixedPoint) {
   EXPECT_FALSE(aurora::gx::tev_stage_texture_dependency(config, 1).canSampleTexture);
   config.tevStages[1].texMapId = GX_TEXMAP1;
 
-  // No regular texture lookup occurs with zero texgens, but an enabled
-  // indirect stage still samples its texture at the literal zero coordinate.
+  // With zero texgens there is no texture coordinate, but GX still samples each stage's texture, at
+  // coordinate 0 (as Dolphin does; gx.hpp tev_stage_texture_dependency, shader.cpp samples at vec2i(0)),
+  // and an enabled indirect stage samples its texture at the literal zero coordinate too.
   config.numTexGens = 0;
   EXPECT_EQ(aurora::gx::tev_stage_texture_dependency(config, 1).texCoordId, -1);
-  EXPECT_FALSE(aurora::gx::tev_stage_texture_dependency(config, 1).canSampleTexture);
+  EXPECT_TRUE(aurora::gx::tev_stage_texture_dependency(config, 1).canSampleTexture);
   const auto zeroTexgenInfo = aurora::gx::build_shader_info(config);
   EXPECT_FALSE(zeroTexgenInfo.sampledTexCoords.any());
   EXPECT_TRUE(zeroTexgenInfo.sampledTextures.test(0));
-  EXPECT_FALSE(zeroTexgenInfo.sampledTextures.test(1));
-  // WGSL must likewise avoid producing a regular-texture UV expression for
-  // stage 1: tex1_size_bias is intentionally absent from this uniform layout.
+  EXPECT_TRUE(zeroTexgenInfo.sampledTextures.test(1));
+  // Stage 1's combiner reads its texture color, so the lookup at coordinate 0 happens (and the uniform
+  // layout carries tex1_size_bias for it).
   const auto zeroTexgenDependency = aurora::gx::tev_stage_texture_dependency(config, 1);
-  EXPECT_FALSE(aurora::gx::tev_texture_sample_enabled(zeroTexgenDependency,
-                                                      zeroTexgenDependency.combinerUsesTexture));
+  EXPECT_TRUE(aurora::gx::tev_texture_sample_enabled(zeroTexgenDependency, zeroTexgenDependency.combinerUsesTexture));
 
   // A standalone direct stage still uses the normalized fast path.
   config.numTexGens = 2;
@@ -4670,14 +4670,16 @@ TEST_F(GXFifoTest, CopyTexSameTargetDifferentShapeRetiresHistoricalCacheEntry) {
   ASSERT_TRUE(fullCopy.handle);
   const auto* fullHandle = fullCopy.handle.get();
 
+  // A box-filtered (halved) copy of a 304x228 area: its destination is 152x114, as the SDK expects. (A
+  // destination larger than what the copy writes is a patch into a bigger texture, keyed by the copied size.)
   GXSetTexCopySrc(0, 0, 304, 228);
-  GXSetTexCopyDst(304, 228, GX_TF_RGBA8, GX_TRUE);
+  GXSetTexCopyDst(152, 114, GX_TF_RGBA8, GX_TRUE);
   GXCopyTex(image.data(), GX_FALSE);
 
   const aurora::gx::GXState::CopyTextureKey halfKey{
       .dest = image.data(),
-      .width = 304,
-      .height = 228,
+      .width = 152,
+      .height = 114,
       .format = GX_TF_RGBA8,
   };
   const auto& halfCopy = gxState().copyTextureCache.at(halfKey);
@@ -4687,8 +4689,8 @@ TEST_F(GXFifoTest, CopyTexSameTargetDifferentShapeRetiresHistoricalCacheEntry) {
   EXPECT_EQ(gxState().copyTextureCache.size(), 1u);
   EXPECT_NE(halfCopy.handle.get(), fullHandle);
   EXPECT_EQ(gxState().copyTextures.at(image.data()).handle.get(), halfCopy.handle.get());
-  EXPECT_EQ(gxState().copyTextures.at(image.data()).width, 304u);
-  EXPECT_EQ(gxState().copyTextures.at(image.data()).height, 228u);
+  EXPECT_EQ(gxState().copyTextures.at(image.data()).width, 152u);
+  EXPECT_EQ(gxState().copyTextures.at(image.data()).height, 114u);
   EXPECT_EQ(gxState().copyTextures.at(image.data()).format, GX_TF_RGBA8);
 }
 

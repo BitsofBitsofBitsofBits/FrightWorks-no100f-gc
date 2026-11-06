@@ -39,9 +39,9 @@ wiicompiled/buildtools/artifacts/
 *.log.out
 texture_pack/
 
-# notes for development sessions, not part of the project
+# a person's own notes for development sessions, not part of the project (the shared ones are .agents/REPO.md)
 AGENTS.md
+/CLAUDE.md
 
-# Claude Code: only the shared skills are tracked
-/.claude/*
-!/.claude/skills/
+# Claude Code's local folder, never tracked: tools/setup-agents.py links .claude/skills to the tracked .agents/skills
+/.claude/
