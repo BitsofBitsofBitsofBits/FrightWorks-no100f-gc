@@ -265,6 +265,8 @@ useful:
 - **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>` (Linux:
   `launcher/publish/FrightWorks --shots <dir>`) draws every page to `<dir>\<Page>.png`. The window takes the size the
   window manager gives it; for fixed sizes use the layout regression below.
+- **Patch mods** (`docs/mod-patches.md`): `dotnet run --project tools\hip-patch-tests` builds levels from made-up data and
+  tries bad recipes, wrong discs, clashes, killed builds and hostile zips. Needs only dotnet; the disc modes are in that page.
 - **Isolated launcher layout regression** (Windows or Linux, .NET 10 SDK or newer):
   `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
   It runs the launcher's real window on Avalonia's headless platform (no screen needed, drawn with Skia like on
