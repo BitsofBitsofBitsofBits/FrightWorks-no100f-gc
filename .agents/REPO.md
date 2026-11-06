@@ -249,7 +249,8 @@ Never name a session `main`.
 
 **Rendering**
 - The EFB isn't cleared at frame start (#78).
-  The game's display copies never clear and its copy-clear colour is white, because the game clears with its own drawn quad.
+  The game's display copies never clear, because the game clears with its own drawn quad.
+  The copy-clear colour stays at GXInit's white, so a draw-less frame shows white (#78).
   Suspect a clear for any "white frame" bug.
 - Some meshes are skinned on the CPU (the manor curtains): the game rewrites their vertex arrays into a buffer pool every frame, so addresses say nothing about identity.
 - Frame interpolation (#92) pairs draws across frames by an exact identity (it hashes the POS array contents, not addresses), then a stable identity, then nearest distance (`frame_interpolation.cpp`, `command_processor.cpp`).
