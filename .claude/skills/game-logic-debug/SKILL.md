@@ -81,7 +81,9 @@ by one in this scene), Player tab (health/snacks and power-ups: unlock/lock all 
 `Play/devmenu.txt` (every 30 frames, then deleted; results in `Play/devmenu.log`; the file is left alone until in play with
 no scene/spot transfer pending, except diagnostic-only files below, `skip`, or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
 `save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `powerups [all|none|HEX]`, `powerup NAME on|off` (sd2.ini name without `eSPECIAL_`), `monsters [on|off]` (list / all),
-`monster N|NAME on|off`, `ents` (scene entity list), `textures`. These commands don't edit warp flags or save files.
+`monster N|NAME on|off`, `ents` (scene entity list), `textures`, `freecam on|off`, `cam X Y Z YAW PITCH` (free camera at
+this pose, degrees; pitch > 0 looks down), `camspin DEG` / `cammove DX DY DZ` (the free camera turns or moves this
+much every frame: steady motion for frame-to-frame checks; 0 stops). These commands don't edit warp flags or save files.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `cutscene` (`cutscene yes|no control yes|no`).
 
