@@ -1,10 +1,17 @@
 #include "platform/host_platform.h"
 
+#include <filesystem>
 #include <iostream>
 
 int main() {
-    if (!RuntimePlatform::ExecutableDirectory()) {
+    const auto executableDirectory = RuntimePlatform::ExecutableDirectory();
+    if (!executableDirectory) {
         std::cerr << "unable to resolve the current executable directory\n";
+        return 1;
+    }
+    std::error_code directoryError;
+    if (!executableDirectory->is_absolute() || !std::filesystem::is_directory(*executableDirectory, directoryError)) {
+        std::cerr << "executable directory is not an existing absolute directory: " << *executableDirectory << '\n';
         return 1;
     }
 
