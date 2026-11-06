@@ -21,6 +21,7 @@ Worktrees live beside the main checkout, in <its parent>\\FrightWorks-worktrees\
  - links (junctions on Windows, symlinks elsewhere) to the main checkout's big read-only inputs: Disc\\, texture_pack\\,
    toolchain\\, game\\, wiicompiled\\Dependencies and the folders in tools\\debug\\local (Dolphin copies, icon packs),
    never user-setup;
+ - .claude\\skills: a link to its own .agents\\skills (tools\\setup-agents.py, run by new; Claude Code looks there);
  - AGENTS.md: a link to the main checkout's (one set of rules); CLAUDE.md loads it and TASK.md, this task's own notes.
 Builds can run side by side. Game runs take turns (kit-common.ps1, game-run lock).
 
@@ -459,6 +460,18 @@ class Worktree:
             os.makedirs(os.path.dirname(link), exist_ok=True)
             make_dir_link(link, target)
             say('new: linked %s' % rel)
+
+        # The tracked skills are in .agents/skills; Claude Code looks in .claude/skills (git-ignored): link it to this
+        # worktree's own. Not fatal: a branch from before the move has no script, and the link can be made later.
+        setup = os.path.join(path, 'tools', 'setup-agents.py')
+        if os.path.isfile(setup):
+            r = subprocess.run([sys.executable, setup], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding='utf-8', errors='replace')
+            for line in r.stdout.splitlines():
+                say('new: ' + line)
+            if r.returncode != 0:
+                say('new: skills not linked; fix it, then run: python tools/setup-agents.py (in %s)' % path)
+        else:
+            say('new: no tools/setup-agents.py on this branch (from before the skills moved to .agents/skills); skipped')
 
         # Agent instructions: AGENTS.md = the main checkout's (local file, not in git); CLAUDE.md loads it + TASK.md.
         agents = os.path.join(self.main, 'AGENTS.md')

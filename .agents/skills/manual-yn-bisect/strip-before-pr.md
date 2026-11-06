@@ -33,7 +33,7 @@ unless noted; if one stops applying after upstream moves, use `git apply -3`, fi
 
 - Bisect-only code (owner meta, skip/flat files, tracers, `NO100F_*` diagnostics, toast/Y/N unless the maintainer wants it)
 - Local ignore rules: they live in `.git/info/exclude`, not `.gitignore`
-- ISO / `Disc/` / `autotest/` / `Play/` / `AGENTS.md` / `tools/debug/` / `.claude/skills/` (the debug kit: committed on its own branch, never in a fix PR)
+- ISO / `Disc/` / `autotest/` / `Play/` / `AGENTS.md` / `tools/debug/` / `.agents/skills/` (the debug kit: committed on its own branch, never in a fix PR)
 
 ## Verify after strip
 

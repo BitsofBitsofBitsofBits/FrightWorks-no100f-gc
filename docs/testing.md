@@ -237,7 +237,7 @@ rebuild it once the toolchain is there.
 
 `tools/debug/patches/` holds diagnostics that never go into a fix PR. Apply them with `play-patched.ps1 -Patch <name>`
 (or `git apply`, and `git apply -R` before committing). The table with what each one does is in
-[`.claude/skills/manual-yn-bisect/strip-before-pr.md`](../.claude/skills/manual-yn-bisect/strip-before-pr.md). The most
+[`.agents/skills/manual-yn-bisect/strip-before-pr.md`](../.agents/skills/manual-yn-bisect/strip-before-pr.md). The most
 useful:
 
 | Patch | What it adds |
@@ -344,9 +344,14 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   or a program running from it (leftover dotnet build servers it stops itself), and while its Claude session runs:
   close that tab first.
 
-## Claude Code skills
+## Agent skills
 
-`.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
+`.agents/skills/` has step-by-step guides for coding agents, readable by anyone (the shared rules for agents are in `.agents/REPO.md`): `hle-divergence-debug`
 (graphics and state bugs), `game-logic-debug` (60 fps, timing and gameplay bugs, dev menu, postool),
 `manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) `audio-debug` (crackle, clicks, fuzz) and `parallel-work`
 (worktrees and their sessions, run from the coordinator).
+
+Claude Code looks for skills in `.claude/skills/`, which is git-ignored. Run `python tools/setup-agents.py` once in each
+checkout (`py -3 tools\setup-agents.py` on Windows) to link it to `.agents/skills/`: a junction on Windows, a symlink
+elsewhere. It is safe to run again and refuses to replace a real folder that has files in it. `worktree.ps1 new` runs it
+for new worktrees. An existing worktree runs it after it has merged or rebased onto a `main` that has `.agents/`.

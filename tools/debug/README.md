@@ -1,18 +1,18 @@
 # Debug kit
 
-Tools and Claude Code skills for finding bugs in the FrightWorks static recomp. New here? Start with the walkthrough in
+Tools and agent skills for finding bugs in the FrightWorks static recomp. New here? Start with the walkthrough in
 [`docs/testing.md`](../../docs/testing.md); this page is the reference. Only things that helped in a real
 investigation (upstream PRs #8, #10–#15, #22, issue #24) or will help the next one. The build tools (`tools\build-no100f.ps1`,
 `shot-pid.ps1`, ...) live one folder up; nothing here contains game data.
 
 Until 2026-10-31 this kit was a separate repo (Scooby-Doo-Refrightened-debug) linked in with junctions. Its history was
-merged in with the paths rewritten, so `git log -- tools/debug .claude/skills` shows it.
+merged in with the paths rewritten, so `git log -- tools/debug .agents/skills .claude/skills` shows it.
 
 Layout (paths in the skills and scripts are written from the repo root):
 
 | Path | What |
 | --- | --- |
-| `.claude\skills\` | the Claude Code skills (tracked; the rest of `.claude\` is git-ignored) |
+| `.agents\skills\` | the agent skills (tracked), with `.agents\REPO.md`, the shared rules. Claude Code looks in `.claude\skills\`: `tools\setup-agents.py` links that to `.agents\skills\` (local, git-ignored) |
 | `tools\debug\` | these tools |
 | `tools\debug\local\` | git-ignored, machine-local: `user-setup\` (the user's Config.toml + controller files while a test runs; `manual-session.ps1 restore` puts them back), Dolphin disc copies, a downloaded ffmpeg, `kenney-input-prompts\` (the whole Kenney Input Prompts pack, CC0, from kenney.nl: pick new button art there and copy only the SVGs used into `tools\button-art\<family>\`) |
 | `autotest\` | git-ignored work data and output: shots (`autotest\manual\`), texture-hunt data (`autotest\texhunt\`), audio dumps, logs |
@@ -45,7 +45,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | `capture/` | `get-ffmpeg.ps1` + `ffbin.py` (find or fetch ffmpeg), `record.ps1` (video of the game window: ddagrab + topmost by default, `-Method gdigrab`), `flashcount.py` (one-frame flash counter), `triplet.py` |
 | `yn-bisect/` | `curtain-repro.ps1` scripted landing template, `curtain-ask.ps1` Y/N toast helper (need `yn-bisect-harness.patch`) |
 | `holiday-shots.ps1` | Screenshot loop for `[game] holiday` dates per hub (needs PR #13) |
-| `patches/` | Diagnostics kept out of PRs; table in `.claude\skills\manual-yn-bisect\strip-before-pr.md` |
+| `patches/` | Diagnostics kept out of PRs; table in `.agents\skills\manual-yn-bisect\strip-before-pr.md` |
 
 ### F8 progression diagnostics
 
