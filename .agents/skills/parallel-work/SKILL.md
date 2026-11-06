@@ -44,7 +44,8 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
    powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name sliders -Branch fix/f10-sound-sliders -Task "Fix #37: ..."
    ```
 
-   The goal goes into the worktree's `TASK.md` and the new session starts on it. Quote the goal; keep `;` out of it
+   The goal goes into the worktree's `TASK.md` and the new session starts on it. `new` also links the worktree's
+   `.claude/skills` to its `.agents/skills` (`tools/setup-agents.py`); an older worktree runs that script itself once its branch has `.agents/`. Quote the goal; keep `;` out of it
    (Windows Terminal splits its command line there).
 
    Optional: `-Model sonnet|opus|<full model ID>` and `-Effort low|medium|high|xhigh|max` pick the worker's model and
@@ -56,7 +57,8 @@ same either way.
 
 ## Check on, message, reopen
 
-- `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock.
+- `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock. Game runs take turns
+  today. Planned, not built yet: shared run slots in place of the one-at-a-time lock, a smoke test script, and the full sweep before a release (`.agents/REPO.md`, Testing).
 - ListAgents: which sessions are running. SendMessage to `<name>` to ask for a status or pass on a decision from the
   human; the answer arrives as a message. Don't report a worker's state you haven't heard back.
 - A closed tab: `worktree.ps1 open -Name <name>` starts a new session that picks the task up from `TASK.md` (so keep
@@ -72,8 +74,8 @@ same either way.
 
 1. Make sure its session is done: ListAgents, or ask it. Ask the human to close its tab (removing the folder under a
    running session breaks that session).
-2. Read its `TASK.md`. Fold what every agent should know into `AGENTS.md` (case histories go in the skills, via a kit
-   PR); `TASK.md` is deleted with the folder.
+2. Read its `TASK.md`. Fold what every agent should know into `AGENTS.md`, or into `.agents/REPO.md` when it is a public rule or fact
+   (that file changes in the PR that makes it true, not afterwards; case histories go in the skills, via a kit PR); `TASK.md` is deleted with the folder.
 3. `worktree.ps1 remove -Name <name>`. It refuses while there are uncommitted or untracked changes, a program running
    from the folder (it stops leftover dotnet build servers itself) or the worktree's Claude session (`-n <name>`). Never delete a worktree folder by hand.
 4. Update `main` (`git pull --ff-only`) and delete the merged local branch (`git branch -d <branch>`; GitHub already

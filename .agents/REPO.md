@@ -70,7 +70,7 @@ Keep game launches short and critical. Test code without launching the game wher
 
 The commands for the runtime tests (CTest) and the launcher layout tests are in `docs/testing.md`. The Translator tests are the xUnit project `wiicompiled/translator/tests/Translator.Tests` and Aurora's are its standalone build in `wiicompiled/aurora-main/tests`: neither has a documented command yet. Anything beyond this needs a stated reason.
 
-**Not built yet:** the smoke test script, shared run slots and the full sweep before a release. Until they exist, a smoke test means booting `h001` and the changed level with `manual-session` from a fresh build, checking the build ID, the level load and that the game stays up. Nothing runs these automatically: there is no CI, so the PR says what was run.
+**Not built yet:** the smoke test script, shared run slots (game runs take turns for now), the shared wait-until-playable routine (`texhunt\look.ps1` has its own), controller isolation for test runs and the full sweep before a release. Until they exist, a smoke test means booting `h001` and the changed level with `manual-session` from a fresh build, checking the build ID, the level load and that the game stays up. Nothing runs these automatically: there is no CI, so the PR says what was run.
 
 ## Working in parallel
 
