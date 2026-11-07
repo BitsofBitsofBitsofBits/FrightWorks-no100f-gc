@@ -27,6 +27,7 @@ unless noted; if one stops applying after `main` moves, use `git apply -3`, fix 
 | `devmenu` | F8 dev menu: go to any scene, saved spots, god mode, monsters off, `Play/devmenu.txt` commands. New `no100f_devmenu.*` + hooks in `settings_overlay.cpp`; also applies to `release/1.0.3-beta`. `tools/play-patched.ps1` applies it for one play session | `game-logic-debug` |
 | `audio-diagnostic` | `AX_DIAG_DIR` per-stage audio dumps, `AX_HEADROOM_DB` | `audio-debug` |
 | `real-date` | `NO100F_REAL_DATE=1` real clock for builds without PR #12 | — |
+| `pad-script` | `NO100F_PAD_SCRIPT` / `NO100F_PAD_SCRIPT_LIVE` scripted pad 1 (stick and buttons at set times, dev tools on or off). Adds `no100f_pad_script.h`; the format is at its top. Base `ee96a38` | `game-logic-debug` |
 | `yn-bisect-harness` | Toast + Y/N keys, `STICK_*` input script + `curtain-stick.txt`, GPU owner dump, event skip / flat-paint files, old curtain tracers and env skips | this skill |
 
 ## Never in a PR

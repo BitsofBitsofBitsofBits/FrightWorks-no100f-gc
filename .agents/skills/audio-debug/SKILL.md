@@ -44,7 +44,8 @@ Issue 14's cause: the game's end-of-track check kept a stale value between strea
 come back, take a save in `g001`, walk left to the warp gate and warp to the Mystery Machine (`h001`) with the map open
 within about 1.2 s of the music starting: the stream restarts every 1.02 s. Dev tools don't matter. Dev menu `scene` warps
 and slow play miss the window, so a clean run from them says nothing about this bug. Other stuck-sounding bugs may still
-exist: check the stream entry's flags before assuming this one.
+exist: check the stream entry's flags before assuming this one. `tools\debug\audio\issue14-route.txt` is that route as a
+pad script (`tools\debug\patches\pad-script.patch`, usage in `game-logic-debug`); it needs your own save.
 
 ## Game facts
 
