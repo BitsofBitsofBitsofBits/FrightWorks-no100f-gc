@@ -85,7 +85,8 @@ no scene/spot transfer pending, except diagnostic-only files below, `skip`, or, 
 this pose, degrees; pitch > 0 looks down), `camspin DEG` / `cammove DX DY DZ` (the free camera turns or moves this
 much every frame: steady motion for frame-to-frame checks; 0 stops). These commands don't edit warp flags or save files.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
-timing), `cutscene` (`cutscene yes|no control yes|no`).
+timing), `mvview MODE [SCALE]` (motion vectors view: 0 off, 1 motion only, 2 over the picture; SCALE = pixels per frame
+for full color), `cutscene` (`cutscene yes|no control yes|no`).
 
 **Player tab:** `player`, `health 1..5`, `snacks 0..99999` read/change live stats. Balance edits are separate from
 collection progression; 99999 is a conservative tool limit, not the game's cap. No kill/resurrection; pending

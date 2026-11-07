@@ -875,6 +875,9 @@ static void latch_motion_vectors() noexcept {
   g_motionVectorsActive.store(wanted, std::memory_order_relaxed);
   webgpu::create_motion_targets(wanted);
   g_offscreenCache.clear();
+  // The change is in the pass's attachments, not in any GX state: resolve the draws' pipelines again.
+  gx::g_gxState.stateDirty = true;
+  gx::g_gxState.pipelineStateGeneration = gx::next_gx_state_epoch();
 }
 
 const MotionTargets* sealed_motion_targets(const SealedFrame& frame) noexcept {

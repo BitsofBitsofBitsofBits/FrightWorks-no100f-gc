@@ -99,6 +99,7 @@ static std::atomic_bool g_initialized{false};
 //   validate   keep Dawn's validation and log its errors instead of aborting on them
 //   robust     keep Dawn's bounds checks on buffer and texture access
 //   nobc       do not enable BC texture compression
+//   nofloat32blend  do not enable float32-blendable (as on a GPU without it)
 //   nomono     do not use one Vulkan pipeline cache for all pipelines
 //   safefetch / nosafefetch   force the GPU compatibility vertex fetch on or off
 //   notex      every texture samples as grey (is it geometry or texturing?)
@@ -870,7 +871,7 @@ bool initialize(AuroraBackend auroraBackend) {
         requiredFeatures.push_back(feature);
       }
       // Motion vectors: alpha-blended surfaces own a pixel's depth only where they are mostly opaque (gx.cpp).
-      if (feature == wgpu::FeatureName::Float32Blendable) {
+      if (feature == wgpu::FeatureName::Float32Blendable && !gfx_flag("nofloat32blend")) {
         g_float32Blendable = true;
         requiredFeatures.push_back(feature);
       }

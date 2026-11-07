@@ -141,6 +141,8 @@ New pure logic (no SDL, no guest memory) belongs in a header with a test next to
 Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_TESTS=ON`), a ROM-free test of
 actual GPU pixels.
 It starts with the motion vectors: none while nothing asks for them, zero for a still quad, the expected 8 pixels for one moved by its matrix, and the targets freed again when they are no longer wanted.
+It then checks that a motion setting change resolves the pipeline again with no GX state written, that an alpha-blended surface owns its depth only where the GPU has `float32-blendable`, and that the blurred picture can be copied for a screenshot.
+CTest runs it three times: as is, with `AURORA_GFX_FLAGS=validate`, and with `AURORA_GFX_FLAGS=validate,nofloat32blend`, which hides that feature.
 Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
 Each transparency case explicitly clears its color and depth; the EFB otherwise persists between frames.

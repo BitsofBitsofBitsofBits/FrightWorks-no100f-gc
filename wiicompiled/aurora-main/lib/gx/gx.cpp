@@ -1962,7 +1962,7 @@ wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu:
       // without one it leaves the depth behind it).
       wgpu::ColorTargetState{
           .format = wgpu::TextureFormat::R32Float,
-          .blend = writesMotion && alphaOwned ? &motionSelect : nullptr,
+          .blend = writesMotion && alphaOwned && webgpu::g_float32Blendable ? &motionSelect : nullptr,
           .writeMask = writesMotion && (!alphaOwned || webgpu::g_float32Blendable) ? wgpu::ColorWriteMask::Red
                                                                                    : wgpu::ColorWriteMask::None,
       },

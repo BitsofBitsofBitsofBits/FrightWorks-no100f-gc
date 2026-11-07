@@ -95,7 +95,9 @@ void prepare(Pass& pass, const char* label, const char* fragmentWgsl, wgpu::Text
   if (!target.texture || target.size.width != width || target.size.height != height) {
     const wgpu::TextureDescriptor descriptor{
         .label = label,
-        .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding,
+        // CopySrc: the blur's and the view's targets become the present source, which screenshots and frame captures
+        // copy (aurora.cpp encode_frame_capture).
+        .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc,
         .size = {width, height, 1},
         .format = format,
     };
