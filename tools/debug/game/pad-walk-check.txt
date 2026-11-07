@@ -1,0 +1,9 @@
+# Pad script check: boot e001, then walk Scooby forward with the stick alone.
+# Format: top of wiicompiled/runtime/include/hle/no100f_pad_script.h (tools/debug/patches/pad-script.patch).
+waitplay E001
+wait 1000
+# A skips a first-visit cutscene, if one is playing. No stick yet.
+do 0 0 a 500 4000
+wait 2000
+do 0 127 - 0 3000
+wait 1000
