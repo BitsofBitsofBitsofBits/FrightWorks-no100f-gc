@@ -1125,7 +1125,8 @@ void write_motion_still(const PendingMotionUniform& task, const FrameTransformSn
   }
 }
 
-// Pairs one motion draw: its exact identity group, then the stable one, then the motion-only one. Claims the partner.
+// Pairs one motion draw: its exact identity group, then the stable one, then the motion-only one. A one-matrix draw
+// with an exact match takes the nearer of it and the nearest copy in the stable group. Claims the partner.
 size_t pair_motion_draw(size_t currentIndex, bool indexed) noexcept {
   const auto& entry = s_currentFrameTransforms[currentIndex];
   const auto search = [&](const auto& currentGroups, const auto& previousGroups, HashType key) {
@@ -1832,8 +1833,9 @@ uint32_t interpolated_frame_count() noexcept {
 
 // Motion vectors for draws whose uniforms are uploaded before the frame seals (a mid-frame split: the game reads
 // the EFB back, or staging ran full). The prefix renders now, so its draws are paired now, with a simpler rule than
-// the seal's global matcher: the exact identity group first, then the stable one; one-matrix draws take the
-// nearest unclaimed translation, skinned draws the same occurrence (else the first unclaimed) with a palette.
+// the seal's global matcher: pair_motion_draw for every draw. One-matrix draws take the nearest unclaimed translation
+// (of the exact group and the stable one, when there is an exact match), skinned draws the same occurrence (else the
+// first unclaimed) with a palette, from the exact group first, then the stable one.
 void resolve_pending_motion_uniforms_early() noexcept {
   if (s_pendingMotionUniforms.empty()) {
     return;
