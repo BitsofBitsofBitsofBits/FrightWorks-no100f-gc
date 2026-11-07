@@ -45,10 +45,14 @@ def check_png(data):
             break
     if not seen_iend or pos > len(data):
         return "PNG is truncated or damaged"
+    if pos != len(data):
+        return "PNG has %d extra bytes after its end (may hide the original image)" % (len(data) - pos)
     return None
 
 
 def check_jpeg(data):
+    # Limit: only the header segments before the start of scan are checked.
+    # Data after the scan (including after the end marker) is not inspected.
     pos = 2
     while pos + 4 <= len(data):
         if data[pos] != 0xFF:
@@ -256,6 +260,7 @@ def self_test():
             ("png with text chunk refused", ["--pr", "7", w("meta.png", _png(_chunk(b"tEXt", b"Author\0me")))], 1),
             ("identical re-upload ok", ["--pr", "7", w("good.png", good)], 0),
             ("same name, different bytes refused", ["--pr", "7", w("good.png", sub="other", data=_png(_chunk(b"gAMA", b"\0\0\xb1\x8f")))], 1),
+            ("png with trailing bytes refused", ["--pr", "7", w("tail.png", good + b"extra")], 1),
             ("jpeg with EXIF refused", ["--issue", "9", w("e.jpg", b"\xff\xd8\xff\xe1\x00\x08Exif\0\0\xff\xd9")], 1),
             ("plain jpeg dry-run ok", ["--issue", "9", "--dry-run", w("p.jpg", b"\xff\xd8\xff\xdb\x00\x04\0\0\xff\xda\x00\x02\xff\xd9")], 0),
         ]
