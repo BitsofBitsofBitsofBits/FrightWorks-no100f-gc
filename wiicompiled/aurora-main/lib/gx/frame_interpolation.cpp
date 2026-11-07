@@ -1036,28 +1036,37 @@ void estimate_motion_camera_deltas() {
         bestSupport = support;
         best = x;
       }
+      if (support * 2 > group.size()) {
+        break; // A majority agrees: this runs every frame, so stop looking.
+      }
     }
     MotionCameraDelta result{.viewport = candidates[a].viewport};
     if (best != SIZE_MAX && bestSupport >= kCameraDeltaMinAgreeing &&
         bestSupport * kCameraDeltaMinAgreeingOneIn >= group.size()) {
-      // The second vote (see kAffineRotationTightTolerance).
+      // The second vote (see kAffineRotationTightTolerance), among the candidates that agreed.
+      static std::vector<size_t> agreeing;
+      agreeing.clear();
+      for (const size_t x : group) {
+        if (affine_close(candidates[best].delta, candidates[x].delta)) {
+          agreeing.push_back(x);
+        }
+      }
       size_t winner = best;
       uint32_t winnerSupport = 0;
-      for (const size_t x : group) {
-        if (!affine_close(candidates[best].delta, candidates[x].delta)) {
-          continue;
-        }
+      for (const size_t x : agreeing) {
         uint32_t support = 0;
-        for (const size_t y : group) {
-          support += affine_close(candidates[best].delta, candidates[y].delta) &&
-                             affine_close(candidates[x].delta, candidates[y].delta, kAffineRotationTightTolerance,
-                                          kAffineTranslationTightTolerance, kAffineTranslationShareTightTolerance)
+        for (const size_t y : agreeing) {
+          support += affine_close(candidates[x].delta, candidates[y].delta, kAffineRotationTightTolerance,
+                                  kAffineTranslationTightTolerance, kAffineTranslationShareTightTolerance)
                          ? 1u
                          : 0u;
         }
         if (support > winnerSupport) {
           winnerSupport = support;
           winner = x;
+        }
+        if (support * 2 > agreeing.size()) {
+          break;
         }
       }
       if (affine_inverse(candidates[winner].delta, result.inverse)) {
