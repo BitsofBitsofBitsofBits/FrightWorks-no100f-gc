@@ -574,7 +574,10 @@ void draw_same_state_frame(bool settingChanged) {
 // depth test only), like the game's two-layer materials; the right quad as usual.
 // SplitBetween, SplitTail, SplitMidTail: as Basic, submitted in two parts by a full staging buffer: after a flush with
 // solid and see-through draws still to come; with the tail pending and nothing after it; in the middle of the tail.
-enum class StageScene { Basic, Crease, Layer, SplitBetween, SplitTail, SplitMidTail };
+// LateLayer: as Layer, then a late blended surface in front of it (alpha 0, writing depth, the place the game draws the
+// faded door and wall pieces in): it must stay after the second layer, or its depth hides the layer.
+// MergedLayers: two solid quads that merge into one draw, each drawn a second time see-through.
+enum class StageScene { Basic, Crease, Layer, SplitBetween, SplitTail, SplitMidTail, LateLayer, MergedLayers };
 void draw_stage_frame(StageScene scene = StageScene::Basic) {
   const bool crease = scene == StageScene::Crease;
   gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
@@ -609,11 +612,11 @@ void draw_stage_frame(StageScene scene = StageScene::Basic) {
   GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
   GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
   constexpr float z = -4.f;
-  const auto quad = [&](float left, float right, std::array<u8, 4> color) {
+  const auto quad = [&](float left, float right, std::array<u8, 4> color, float quadZ = z) {
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     for (const auto& xy :
          std::array<std::array<float, 2>, 4>{{{left, .5f}, {right, .5f}, {right, -.5f}, {left, -.5f}}}) {
-      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXPosition3f32(xy[0] * -quadZ, xy[1] * -quadZ, quadZ);
       GXColor4u8(color[0], color[1], color[2], color[3]);
     }
     GXEnd();
@@ -638,6 +641,16 @@ void draw_stage_frame(StageScene scene = StageScene::Basic) {
       GXColor4u8(0, 255, 0, 128);
     }
     GXEnd();
+  } else if (scene == StageScene::MergedLayers) {
+    quad(-.9f, -.5f, {255, 0, 0, 255});
+    quad(-.5f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanMatColor(GX_COLOR0A0, GXColor{0, 255, 0, 128});
+    quad(-.9f, -.5f, {255, 0, 0, 255});
+    quad(-.5f, -.1f, {255, 0, 0, 255});
+    GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    quad(.1f, .9f, {0, 255, 0, 128});
   } else if (scene == StageScene::SplitBetween) {
     quad(-.9f, -.1f, {255, 0, 0, 255});
     GXSetZMode(true, GX_LEQUAL, false);
@@ -665,11 +678,16 @@ void draw_stage_frame(StageScene scene = StageScene::Basic) {
   } else {
     quad(-.9f, -.1f, {255, 0, 0, 255});
     GXSetZMode(true, GX_LEQUAL, false);
-    if (scene == StageScene::Layer) {
+    if (scene == StageScene::Layer || scene == StageScene::LateLayer) {
       GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
       GXSetChanMatColor(GX_COLOR0A0, GXColor{0, 255, 0, 128});
       quad(-.9f, -.1f, {255, 0, 0, 255});
       GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    }
+    if (scene == StageScene::LateLayer) {
+      GXSetZMode(true, GX_LEQUAL, true);
+      quad(-.9f, -.1f, {0, 0, 0, 0}, -2.f);
+      GXSetZMode(true, GX_LEQUAL, false);
     }
     quad(.1f, .9f, {0, 255, 0, 128});
   }
@@ -897,6 +915,24 @@ int main(int argc, char** argv) {
       check_efb(48, 32, {0, 128, 0}, "whole frame after a split, see-through");
       gfx::scene_stage::set_view(0);
       std::printf("Actual Aurora scene stage: a frame submitted in parts has no stage, the next whole frame has it\n");
+    }
+    // A late blended surface in front of a second layer: the same picture with the stage in use as without, but for the
+    // tint on what is before the stage. Drawn too early, its depth hides the layer behind it (89, 0, 0).
+    {
+      settle_stage_frame(StageScene::LateLayer);
+      check_efb(16, 32, {127, 128, 0}, "second layer under a late surface, stage off");
+      gfx::scene_stage::set_view(1);
+      settle_stage_frame(StageScene::LateLayer);
+      check_efb(16, 32, {45, 70, 0}, "second layer under a late surface");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the stage, with a late surface");
+      // Second layers of solid draws that merged: each is recognised (G would stay 128 for the merged one).
+      settle_stage_frame(StageScene::MergedLayers);
+      require(gfx::g_stats.mergedDrawCallCount > 0, "The solid quads did not merge");
+      check_efb(10, 32, {45, 70, 0}, "second layer of the first merged quad");
+      check_efb(22, 32, {45, 70, 0}, "second layer of the next merged quad");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the stage, with merged layers");
+      gfx::scene_stage::set_view(0);
+      std::printf("Actual Aurora scene stage: second layers stay before a late surface, merged solids keep theirs\n");
     }
     // An alpha-blended surface moves like any other. It owns the depth only on a GPU that can blend the 32-bit float
     // target; elsewhere (AURORA_GFX_FLAGS=nofloat32blend hides the feature) it leaves the depth behind it.

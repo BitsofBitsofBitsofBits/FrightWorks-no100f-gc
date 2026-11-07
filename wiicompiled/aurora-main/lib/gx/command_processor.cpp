@@ -2844,6 +2844,19 @@ static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t verte
   return gfx::staging_has_space(demand);
 }
 
+// Whether a draw in the current state is part of the world as the two-pass cut-out modes order it.
+static bool ordered_world_state() noexcept {
+  const auto mode = cutout_mode();
+  return (mode == CutoutMode::TwoPass || mode == CutoutMode::TwoPassAll) && g_gxState.projType == GX_PERSPECTIVE &&
+         g_gxState.depthCompare && (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
+}
+
+// A surface as the scene stage's two-layer rule knows it: its geometry and position matrix.
+static HashType stage_surface(HashType geometrySignature) noexcept {
+  const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
+  return xxh3_hash_s(&matrix, sizeof(matrix), geometrySignature);
+}
+
 static std::vector<float> direct_billboard_depths(GXPrimitive prim, GXVtxFmt fmt,
                                                  const uint8_t* vertices, uint32_t vertexBytes) {
   const auto mode = cutout_mode();
@@ -3136,6 +3149,11 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
       lastDraw->vtxCount += vtxCount;
       lastDraw->indexCount += numIndices;
       ++gfx::g_mergedDrawCallCount;
+      // Merged into a solid draw (a see-through draw never takes more): it is a solid surface of its own, whose second
+      // layer has to be recognised like any other's.
+      if (g_gxState.depthUpdate && ordered_world_state() && gfx::scene_stage::wanted()) {
+        gfx::scene_stage::note_solid_surface(stage_surface(draw_geometry_signature(fmt, vertices, vtxCount, vtxSize)));
+      }
       // This primitive now renders through the draw we merged into, so its palette slots belong to that draw's interpolation snapshot as well.
       if (s_lastDrawRecordedInterpolation) UNLIKELY {
         extend_interpolation_draw(pn_mtx_mask(vertices, vtxCount, vtxSize));
@@ -3379,9 +3397,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   };
   const auto cutoutMode = cutout_mode();
   const bool enhancedCutouts = cutoutMode == CutoutMode::TwoPass || cutoutMode == CutoutMode::TwoPassAll;
-  const bool orderedWorld = enhancedCutouts && g_gxState.projType == GX_PERSPECTIVE &&
-                            g_gxState.depthCompare &&
-                            (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
+  const bool orderedWorld = ordered_world_state();
   // The game also draws blended surfaces after its particles with depth write on and no alpha test, such as the faded
   // door and wall pieces between the camera and the room at the start of i004. They keep that place in the tail: drawn
   // earlier, their depth would hide every translucent draw behind them, even at alpha 0.
@@ -3394,8 +3410,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   // in the see-through tail. Late blended surfaces (which write depth) stay in the tail.
   bool surfaceLayer = false;
   if (orderedWorld && geometrySignature != 0 && particleDepths.empty() && gfx::scene_stage::wanted()) {
-    const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
-    const HashType surface = xxh3_hash_s(&matrix, sizeof(matrix), geometrySignature);
+    const HashType surface = stage_surface(geometrySignature);
     if (!translucentWorld && g_gxState.depthUpdate) {
       gfx::scene_stage::note_solid_surface(surface);
     } else if (translucentWorld && !lateBlendedSurface) {
@@ -3409,7 +3424,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   // The game queues alpha-tested grass after particles. Finish that solid geometry and its
   // fringes before blending clouds over it; retain submission order within the translucent tail.
   if (surfaceLayer) {
-    gfx::push_deferred_draw_command(draw);
+    gfx::push_deferred_draw_command(draw, gfx::DeferredDrawKind::SurfaceLayer);
   } else if (translucentWorld) {
     if (!particleDepths.empty()) {
       const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
