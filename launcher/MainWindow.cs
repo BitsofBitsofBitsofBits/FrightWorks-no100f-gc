@@ -467,6 +467,10 @@ sealed class MainWindow : Window
         };
         void Fill()
         {
+            // The list is rebuilt after every tick: put the pad back on the same mod, or it would be left on nothing.
+            var keep = TopLevel.GetTopLevel(list)?.FocusManager?.GetFocusedElement() is CheckBox { Parent: { } p } focused && ReferenceEquals(p, list)
+                ? (focused.Content as TextBlock)?.Text : null;
+            CheckBox? refocus = null;
             list.Children.Clear();
             var dirs = Directory.Exists(modsDir) ? Directory.GetDirectories(modsDir).Where(ModPatches.ModPatchPanel.IsListed).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray() : Array.Empty<string>();
             if (dirs.Length == 0) { list.Children.Add(Note("No mods yet.")); return; }
@@ -486,8 +490,10 @@ sealed class MainWindow : Window
                     patches.Update(Fill).Watch();
                 };
                 list.Children.Add(box);
+                if (keep != null && Path.GetFileName(d) == keep) refocus = box;
                 if (patches.StatusText(d) is { } status) list.Children.Add(Note(status));
             }
+            if (refocus != null) Dispatcher.UIThread.Post(() => { refocus.Focus(NavigationMethod.Directional); refocus.BringIntoView(); }, DispatcherPriority.Loaded);
         }
         body.Children.Add(new LeftCap(480, frame));
         var row = Row();

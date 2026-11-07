@@ -276,6 +276,42 @@ static class LauncherControllerTests
         w.ShowBoard("mods"); Pump();
         Check(ControllerNavigation.Targets(w.boards["mods"]).OfType<PlankButton>().Any(), "Mods controls not navigable.");
         Shot(w, "Mods-focus");
+        // Mods page: the pad reaches a mod's checkbox and the three buttons, ticking keeps the pad on the same row after the
+        // list is rebuilt, and Add a mod goes through the themed browser (zip files and folders only) when the pad pressed it.
+        foreach (var name in new[] { "ModA", "ModB", "ModC" }) Directory.CreateDirectory(Path.Combine(paths.Mods, name, "files"));
+        var modsBoard = w.boards["mods"];
+        Click(w, w, "Refresh");
+        for (int i = 0; i < 100 && modsBoard.GetVisualDescendants().OfType<CheckBox>().Count() < 3; i++) { Pump(); Thread.Sleep(10); }
+        var modTargets = ControllerNavigation.Targets(modsBoard).ToList();
+        Check(modTargets.OfType<CheckBox>().Count() == 3, "Pad cannot reach the mods' checkboxes.");
+        foreach (var label in new[] { "Add a mod (zip)", "Open the mods folder", "Refresh" })
+            Check(modTargets.OfType<PlankButton>().Any(b => b.Text == label), "Pad cannot reach the Mods button " + label + ".");
+        var second = modTargets.OfType<CheckBox>().ElementAt(1);
+        second.Focus(NavigationMethod.Directional); Pump();
+        Press(w, LauncherButtons.Confirm);
+        for (int i = 0; i < 100 && second.IsChecked != false; i++) { Pump(); Thread.Sleep(10); }
+        Check(File.Exists(Path.Combine(paths.Mods, "ModB", "disabled")), "Controller did not untick the mod.");
+        for (int i = 0; i < 100; i++) { Pump(); Thread.Sleep(10); }  // the rebuild after the tick
+        var focusedBox = w.FocusManager?.GetFocusedElement() as CheckBox;
+        Check(focusedBox != null && modsBoard.GetVisualDescendants().Contains(focusedBox) &&
+              ((focusedBox.Content as TextBlock)?.Text == "ModB"), "Ticking a mod lost the pad's focus (list rebuilt under it).");
+        Press(w, LauncherButtons.Down);
+        Check((((w.FocusManager?.GetFocusedElement() as CheckBox)?.Content as TextBlock)?.Text) == "ModC", "Down did not move to the next mod after a tick.");
+        Press(w, LauncherButtons.Confirm); for (int i = 0; i < 100; i++) { Pump(); Thread.Sleep(10); }
+        Press(w, LauncherButtons.Up);
+        Check((((w.FocusManager?.GetFocusedElement() as CheckBox)?.Content as TextBlock)?.Text) == "ModB", "Up after a tick did not go back to the previous mod.");
+        string zips = Path.Combine(paths.Root, "zips");
+        Directory.CreateDirectory(Path.Combine(zips, "Sub"));
+        File.WriteAllText(Path.Combine(zips, "a.zip"), "x"); File.WriteAllText(Path.Combine(zips, "b.ISO"), "x"); File.WriteAllText(Path.Combine(zips, "c.txt"), "x");
+        var zipPick = ControllerDialogs.PickPath(w, "Synthetic zip browser", zips, false, viaController: true, extensions: new[] { ".zip" }, typeName: "Mod zip");
+        Pump(); var zipModal = w.navigation.Modal!;
+        Check(Find<ControllerList>(zipModal).ItemCount == 2, "Zip browser did not list only .zip files and folders.");
+        Press(w, LauncherButtons.Back); Finish(zipPick);
+        // The real button: pressed by the pad it opens the themed browser, not the OS picker.
+        Click(w, w, "Add a mod (zip)");
+        Check(w.navigation.Modal is { } zipDialog && zipDialog.GetVisualDescendants().OfType<ControllerList>().Any(), "Add a mod (zip) with the pad did not open the themed browser.");
+        Press(w, LauncherButtons.Back); Pump();
+        Check(w.navigation.Modal == null, "Backing out of the mod browser left a dialog open.");
         w.ShowBoard("extras"); Pump();
         Check(ControllerNavigation.Targets(w.boards["extras"]).OfType<PlankButton>().Count() > 3, "Extras controls not navigable.");
         Shot(w, "Extras-focus");

@@ -113,9 +113,13 @@ static class ControllerDialogs
 
     // The themed browser when the pad started this action (decided at once, before any await), else the native picker or
     // portal. `viaController` is for tests; callers leave it out.
-    public static async Task<string?> PickPath(Window owner, string title, string? start = null, bool folder = false, bool? viaController = null)
+    public static async Task<string?> PickPath(Window owner, string title, string? start = null, bool folder = false, bool? viaController = null,
+                                                  string[]? extensions = null, string? typeName = null)
     {
-        if (viaController ?? ControllerNavigation.For(owner)?.Activating == true) return await Browse(owner, title, start, folder);
+        // Disc images unless the caller names its own file type (e.g. ".zip"); extensions are lower case with the dot.
+        extensions ??= DiscExtensions;
+        typeName ??= "GameCube disc images (*.iso, *.gcm, *.ciso)";
+        if (viaController ?? ControllerNavigation.For(owner)?.Activating == true) return await Browse(owner, title, start, folder, extensions);
         if (folder)
         {
             var picked = await owner.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
@@ -129,7 +133,7 @@ static class ControllerDialogs
         {
             Title = title, AllowMultiple = false, FileTypeFilter = new[]
             {
-                new FilePickerFileType("GameCube disc images (*.iso, *.gcm, *.ciso)") { Patterns = new[] { "*.iso", "*.gcm", "*.ciso", "*.ISO", "*.GCM", "*.CISO" } },
+                new FilePickerFileType(typeName) { Patterns = extensions.SelectMany(e => new[] { "*" + e, "*" + e.ToUpperInvariant() }).ToArray() },
                 FilePickerFileTypes.All,
             },
         });
@@ -139,13 +143,16 @@ static class ControllerDialogs
             throw new IOException("The selected item has no local filesystem path. Choose a local folder or file.");
     }
 
+    static readonly string[] DiscExtensions = { ".iso", ".gcm", ".ciso" };
+
     sealed record Entry(string Path, bool Directory)
     {
         public override string ToString() => (Directory ? "[Folder] " : "") + System.IO.Path.GetFileName(Path);
     }
 
-    internal static async Task<string?> Browse(Window owner, string title, string? start, bool folder)
+    internal static async Task<string?> Browse(Window owner, string title, string? start, bool folder, string[]? extensions = null)
     {
+        extensions ??= DiscExtensions;
         var dialog = Dialogs.Make(title, owner);
         dialog.SizeToContent = SizeToContent.Manual;
         dialog.Width = Math.Min(720, owner.Bounds.Width - 30);
@@ -216,7 +223,7 @@ static class ControllerDialogs
                 var entries = Directory.EnumerateDirectories(full).OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
                     .Select(p => new Entry(p, true)).ToList();
                 if (!folder) entries.AddRange(Directory.EnumerateFiles(full)
-                    .Where(p => all || Path.GetExtension(p).ToLowerInvariant() is ".iso" or ".gcm" or ".ciso")
+                    .Where(p => all || extensions.Contains(Path.GetExtension(p).ToLowerInvariant()))
                     .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).Select(p => new Entry(p, false)));
                 current = full;
                 pathLabel.Text = current;
