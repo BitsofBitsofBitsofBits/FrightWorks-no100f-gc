@@ -485,6 +485,14 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
   draw(encoder, mode == 3 ? Kind::AoView : Kind::Apply, color, size, &depth, &g_aoTargets[0].view);
 }
 
+void release_unused_targets() noexcept {
+  if (g_aoTargets[0].texture && ambient_occlusion() <= 0.f && view() != 3) {
+    g_aoTargets = {};
+  }
+}
+
+bool holds_targets() noexcept { return static_cast<bool>(g_aoTargets[0].texture); }
+
 void shutdown() noexcept {
   g_pipelines = {};
   g_params = {};

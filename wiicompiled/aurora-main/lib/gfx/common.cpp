@@ -1617,6 +1617,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
       }
     }
   }
+  scene_stage::release_unused_targets();
   // The scene stage runs once per frame, before the last pass that asks for it (a frame can flush its see-through
   // tail more than once; the solid scene is finished at the last).
   u32 sceneStagePass = UINT32_MAX;

@@ -871,8 +871,10 @@ int main(int argc, char** argv) {
       settle();
       const int litCrease = read_efb(32, 35)[0];
       const int litWall = read_efb(32, 24)[0];
+      require(gfx::scene_stage::holds_targets(), "Ambient occlusion has no targets while on");
       gfx::scene_stage::set_ambient_occlusion(0.f);
       settle();
+      require(!gfx::scene_stage::holds_targets(), "Ambient occlusion targets kept after it was turned off");
       const int plainCrease = read_efb(32, 35)[0];
       require(litCrease < plainCrease - 10 && std::abs(litWall - read_efb(32, 24)[0]) <= 2,
               "Ambient occlusion: applying it does not darken only the crease");

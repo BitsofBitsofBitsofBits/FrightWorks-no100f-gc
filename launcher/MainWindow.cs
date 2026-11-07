@@ -395,8 +395,8 @@ sealed class MainWindow : Window
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Children.Add(table);
         body.Children.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
-                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation and motion blur settings too, and more (sound, controls); "
-                                              : "resolution, picture shape, window, frame interpolation and motion blur settings too, and more (sound, controls); ") +
+                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation, motion blur and ambient occlusion settings too, and more (sound, controls); "
+                                              : "resolution, picture shape, window, frame interpolation, motion blur and ambient occlusion settings too, and more (sound, controls); ") +
                                "F11 switches between fullscreen and a window, and F2 saves a screenshot." +
                                (MonitorChoice ? " Fullscreen monitor also applies when F11 goes fullscreen from a window." : "")));
 

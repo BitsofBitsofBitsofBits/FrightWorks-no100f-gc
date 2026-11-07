@@ -50,6 +50,11 @@ const Camera& camera() noexcept;
 void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color, const wgpu::TextureView& depth,
             wgpu::Extent3D size, uint32_t samples, const Camera& camera);
 
+// Frees the occlusion targets when nothing uses them any more (run where encode runs: it uses them there). Commands
+// already recorded keep their own references.
+void release_unused_targets() noexcept;
+bool holds_targets() noexcept;
+
 // Releases the stage's GPU objects (before the device goes).
 void shutdown() noexcept;
 } // namespace aurora::gfx::scene_stage

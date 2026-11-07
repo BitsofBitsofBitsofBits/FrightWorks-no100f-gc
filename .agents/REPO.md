@@ -294,6 +294,7 @@ Never name a session `main`.
 - Ambient occlusion (`[video] ambient_occlusion`, percent; F10 > Video > Picture and the launcher: Off, Low 35, Medium 65; any other value up to 100, set by hand, shows as its percentage) runs at the scene stage: at half resolution from the depth alone, blurred keeping edges, then multiplied into the solid scene's colour (never its alpha).
   Its tuning is at the top of `scene_stage.cpp`; the angle bias keeps the game's low-poly walls and rocks from darkening at every polygon edge.
   `ao PERCENT` in `devmenu.txt` sets it for one run without changing the setting.
+  Its targets exist only while it is on or the occlusion view is showing, and are freed at the next frame.
 - MSAA: on Linux (x86_64 and aarch64) the Vulkan 2x and 8x modes need the patched Dawn package that the build downloads from FrightWorks/dawn-build (release `v20260603.191052-msaa`).
   Other platforms, Windows included, use the stock package.
   Pipelines cached for another MSAA setting are skipped, not failed.
