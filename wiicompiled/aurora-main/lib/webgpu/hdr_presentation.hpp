@@ -18,6 +18,10 @@ struct alignas(16) HdrPresentationUniform {
 static_assert(sizeof(HdrPresentationUniform) == 64);
 static_assert(offsetof(HdrPresentationUniform, picture) == 48);
 
+// window::hdr_display_state(): -1 unknown, 0 HDR off, 1 HDR on. Only a display that reports HDR off keeps the SDR
+// picture at startup; unknown (not Windows, mirrored outputs, a failed query) proceeds as it always has.
+inline bool hdr_output_allowed(int displayState) noexcept { return displayState != 0; }
+
 inline bool valid_hdr_brightness(float paper, float peak) noexcept {
   return std::isfinite(paper) && std::isfinite(peak) &&
          paper >= 80.f && paper <= 1000.f && peak >= 80.f && peak <= 10000.f;

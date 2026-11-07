@@ -29,6 +29,10 @@ int main() {
           offsetof(HdrPresentationUniform, parameters) == 32 &&
           offsetof(HdrPresentationUniform, picture) == 48, "uniform field offsets match WGSL");
 
+    Check(!hdr_output_allowed(0), "a display that reports HDR off keeps the SDR picture");
+    Check(hdr_output_allowed(1), "a display that reports HDR on gets HDR output");
+    Check(hdr_output_allowed(-1), "an unknown display state (not Windows, mirrored, query failed) changes nothing");
+
     Check(valid_hdr_brightness(80.f, 80.f), "minimum brightness accepted");
     Check(valid_hdr_brightness(1000.f, 10000.f), "maximum brightness accepted");
     Check(valid_hdr_brightness(324.6f, 4035.8f), "fractional saved adjustments accepted");

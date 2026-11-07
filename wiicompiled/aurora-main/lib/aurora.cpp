@@ -2339,7 +2339,8 @@ bool aurora_set_hdr_brightness(float paperWhiteNits, float peakNits) {
   return aurora::webgpu::set_hdr_brightness(paperWhiteNits, peakNits);
 }
 AuroraHdrCalibrationStatus aurora_get_hdr_calibration_status() {
-  if (!aurora::webgpu::hdr_active()) return AURORA_HDR_CALIBRATION_OUTPUT_OFF;
+  if (!aurora::webgpu::hdr_active())
+    return aurora::webgpu::hdr_sdr_display() ? AURORA_HDR_CALIBRATION_STAYED_SDR : AURORA_HDR_CALIBRATION_OUTPUT_OFF;
   const auto backend = aurora::webgpu::g_backendType;
   if (backend != wgpu::BackendType::D3D11 && backend != wgpu::BackendType::D3D12)
     return AURORA_HDR_CALIBRATION_UNSUPPORTED_BACKEND;

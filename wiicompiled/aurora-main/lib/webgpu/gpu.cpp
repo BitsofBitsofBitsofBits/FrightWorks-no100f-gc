@@ -232,6 +232,8 @@ std::atomic<bool> g_hdrRequested{false};
 static float g_hdrPaperWhiteNits = 200.f;
 static float g_hdrPeakNits = 1000.f;
 bool g_hdrActive = false;
+// HDR was requested but the game's display reported HDR off at startup, so the SDR picture was kept.
+bool g_hdrSdrDisplay = false;
 std::atomic<int> g_vsyncRequest{-1};
 
 wgpu::PresentMode best_present_mode() {
@@ -470,9 +472,26 @@ static TextureWithSampler create_depth_texture(uint32_t width, uint32_t height) 
   };
 }
 
-wgpu::RenderPipeline create_copy_pipeline(wgpu::TextureFormat format, const std::string& fragmentTail,
-                                         bool calibration = false) {
-  const std::string code = (calibration ? R"""(
+const char* hdr_fragment_tail() {
+  return R"""(
+    let uv = in.pos.xy * hdrCalibration.parameters.zw;
+    let paperRect = hdrCalibration.paperRect;
+    let peakRect = hdrCalibration.peakRect;
+    if (all(uv >= paperRect.xy) && all(uv < paperRect.zw)) {
+        return calibration_patch(uv, paperRect, hdrCalibration.parameters.x, 0.6);
+    }
+    if (all(uv >= peakRect.xy) && all(uv < peakRect.zw)) {
+        return calibration_patch(uv, peakRect, hdrCalibration.parameters.y, 0.9);
+    }
+    let sdr = pow(max(color.rgb, vec3(0.0)), vec3(2.2));
+    let lum = dot(sdr, vec3(0.2126, 0.7152, 0.0722));
+    let boost = 1.0 + hdrCalibration.picture.y * pow(lum, 4.0);
+    return vec4(sdr * boost * hdrCalibration.picture.x, 1.0);
+)""";
+}
+
+std::string copy_shader_source(const std::string& fragmentTail, bool calibration) {
+  return (calibration ? R"""(
 struct HdrCalibration {
     paperRect: vec4<f32>,
     peakRect: vec4<f32>,
@@ -551,6 +570,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color = area_sample(in.uv * texSize, max(footprint, vec2(1.0)));
     }
 )""" + fragmentTail + "\n}\n";
+}
+
+wgpu::RenderPipeline create_copy_pipeline(wgpu::TextureFormat format, const std::string& fragmentTail,
+                                         bool calibration = false) {
+  const std::string code = copy_shader_source(fragmentTail, calibration);
   wgpu::ShaderSourceWGSL sourceDescriptor{};
   sourceDescriptor.code = code.c_str();
   const wgpu::ShaderModuleDescriptor moduleDescriptor{
@@ -1035,6 +1059,7 @@ bool initialize(AuroraBackend auroraBackend) {
   g_CopyPipeline = create_copy_pipeline(g_graphicsConfig.surfaceConfiguration.format, "return vec4(color.rgb, 1.0);");
   g_PresentPipeline = g_CopyPipeline;
   g_hdrActive = false;
+  g_hdrSdrDisplay = false;
   g_HdrCalibrationBindGroup = {};
   g_HdrCalibrationLayout = {};
   g_HdrCalibrationBuffer = {};
@@ -1043,7 +1068,12 @@ bool initialize(AuroraBackend auroraBackend) {
     for (size_t i = 0; i < g_surfaceCapabilities.formatCount; ++i) {
       fp16 |= g_surfaceCapabilities.formats[i] == wgpu::TextureFormat::RGBA16Float;
     }
-    if (fp16) {
+    // Decided once, here (HDR output is startup-only). Only a display that Windows says has HDR off keeps the SDR
+    // picture; "on" and "unknown" (not Windows, mirrored outputs, a failed query) behave as before.
+    if (fp16 && !hdr_output_allowed(window::hdr_display_state())) {
+      g_hdrSdrDisplay = true;
+      Log.warn("HDR is on in the settings but Windows HDR is off for the game's display; showing the standard picture until the game is restarted");
+    } else if (fp16) {
       // Everything still renders in the SDR format; only the final copy writes a float16 swapchain,
       // which Windows reads as scRGB (linear, 1.0 = 80 nits). The game's gamma-2.2 picture is
       // linearised, placed at paper white, and the brightest tones are stretched toward the peak.
@@ -1077,21 +1107,7 @@ bool initialize(AuroraBackend auroraBackend) {
           .entryCount = 1, .entries = &calibrationBinding,
       };
       g_HdrCalibrationBindGroup = g_device.CreateBindGroup(&calibrationGroup);
-      const std::string tail = R"""(
-    let uv = in.pos.xy * hdrCalibration.parameters.zw;
-    let paperRect = hdrCalibration.paperRect;
-    let peakRect = hdrCalibration.peakRect;
-    if (all(uv >= paperRect.xy) && all(uv < paperRect.zw)) {
-        return calibration_patch(uv, paperRect, hdrCalibration.parameters.x, 0.6);
-    }
-    if (all(uv >= peakRect.xy) && all(uv < peakRect.zw)) {
-        return calibration_patch(uv, peakRect, hdrCalibration.parameters.y, 0.9);
-    }
-    let sdr = pow(max(color.rgb, vec3(0.0)), vec3(2.2));
-    let lum = dot(sdr, vec3(0.2126, 0.7152, 0.0722));
-    let boost = 1.0 + hdrCalibration.picture.y * pow(lum, 4.0);
-    return vec4(sdr * boost * hdrCalibration.picture.x, 1.0);
-)""";
+      const std::string tail = hdr_fragment_tail();
       g_PresentPipeline = create_copy_pipeline(wgpu::TextureFormat::RGBA16Float, tail, true);
       g_hdrActive = true;
       Log.info("HDR output on: scRGB float16 swapchain, paper white {} nits, peak {} nits", paper, peak);
@@ -1240,6 +1256,8 @@ bool set_hdr_brightness(float paperWhiteNits, float peakNits) noexcept {
 }
 
 bool hdr_active() noexcept { return g_hdrActive; }
+
+bool hdr_sdr_display() noexcept { return g_hdrSdrDisplay; }
 
 void set_hdr_calibration(const AuroraHdrCalibration* calibration) noexcept {
   std::lock_guard lock(g_hdrCalibrationMutex);

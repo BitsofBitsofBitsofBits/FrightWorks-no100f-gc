@@ -2,6 +2,7 @@
 
 #include <aurora/aurora.h>
 #include <aurora/math.hpp>
+#include <string>
 #include <aurora/gfx.h>
 
 #include "wgpu.hpp"
@@ -86,6 +87,12 @@ bool refresh_surface(bool recreate = true);
 void request_hdr(bool enabled, float paperWhiteNits, float peakNits) noexcept;
 bool set_hdr_brightness(float paperWhiteNits, float peakNits) noexcept;
 bool hdr_active() noexcept;
+// HDR was requested but startup found Windows HDR off for the game's display (so hdr_active() is false).
+bool hdr_sdr_display() noexcept;
+// The present shader: the shared copy shader plus, for HDR, the calibration uniform and the HDR fragment tail.
+// Exposed so the renderer tests run the same text the game does.
+const char* hdr_fragment_tail();
+std::string copy_shader_source(const std::string& fragmentTail, bool calibration);
 void set_hdr_calibration(const AuroraHdrCalibration* calibration) noexcept;
 // Called under the presentation queue-submit lock, before submitting the HDR copy.
 void upload_hdr_calibration();

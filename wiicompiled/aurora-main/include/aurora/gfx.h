@@ -83,6 +83,8 @@ typedef enum AuroraHdrCalibrationStatus {
   AURORA_HDR_CALIBRATION_UNSUPPORTED_BACKEND,
   AURORA_HDR_CALIBRATION_DISPLAY_OFF,
   AURORA_HDR_CALIBRATION_DISPLAY_UNKNOWN,
+  // HDR is on in the settings, but startup found Windows HDR off for the display, so the game shows the SDR picture.
+  AURORA_HDR_CALIBRATION_STAYED_SDR,
 } AuroraHdrCalibrationStatus;
 typedef struct AuroraHdrCalibration {
   // Normalized client-area rectangles: left, top, right, bottom. Empty rectangles disable the patches.

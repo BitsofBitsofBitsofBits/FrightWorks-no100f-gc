@@ -1292,6 +1292,10 @@ void DrawHdrCalibration() {
         case AURORA_HDR_CALIBRATION_DISPLAY_UNKNOWN:
             Hint("HDR preview unavailable: the current display's HDR state could not be confirmed.");
             break;
+        case AURORA_HDR_CALIBRATION_STAYED_SDR:
+            Hint("HDR is on in the settings, but Windows HDR was off for the game's display when it started, so the game "
+                 "is showing the standard picture. Turn Windows HDR on and restart the game.");
+            break;
         }
         const float width = std::max(Px(140), ImGui::GetContentRegionAvail().x - Px(155));
         RowLabel("Paper white", Px(145), width);

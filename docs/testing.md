@@ -137,6 +137,10 @@ They use services-disabled portable fixtures and CPU-rendered Avalonia windows, 
 metadata is synthetic; unsupported-platform gating, missing/partial settings, saved precision, slider endpoints,
 keyboard increments, modal ownership and save failures are covered. The opt-in controller slider metadata is checked
 independently; stick-versus-D-pad dispatch is in the controller suite above.
+A query that throws is covered too: it ends like a returned failure and the launcher still starts.
+The native decision to stay SDR on a display that reports HDR off is `hdr_output_allowed` in `hdr_presentation_tests`;
+`gx_readback_tests` also runs the HDR present shader (the real WGSL, an RGBA16Float target, both calibration patches).
+The decision itself, made at device setup from the real display, shows only in the game log (an SDR PC logs "showing the standard picture" when `hdr = true`); the HDR-on side needs an HDR PC.
 Compilation/headless checks do not establish HDR hardware or Linux compositor support.
 
 The tests are CMake targets in `wiicompiled/runtime/CMakeLists.txt`; the game build doesn't build them. After a game
