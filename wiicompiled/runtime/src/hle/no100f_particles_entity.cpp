@@ -71,16 +71,15 @@ uint32_t RainbowBurstSystem(uint32_t emitter, uint32_t asset) {
     return group != 0 ? Memory::Read32(group + 0x20) : 0;
 }
 
-// Colours the particles emit just added to a system. New particles go on the head of its list (fn_80032728), and each
-// one's velocity (+0x20) is already its direction. Only red, green and blue change: alpha keeps fading as the game set
-// it, and the game gives a burst the same start and end colour, so the fade rates for these three (+0x40) are 0 and
-// the colour stays for the particle's whole life.
+// Colours the particles emit just added to a system, each its own colour. New particles go on the head of its list
+// (fn_80032728). Emit aims each one at random, so going through the colours in list order mixes them through the burst
+// like confetti, and takes no random numbers from the game. Only red, green and blue change: alpha keeps fading as the
+// game set it, and the game gives a burst the same start and end colour, so the fade rates for these three (+0x40) are
+// 0 and the colour stays for the particle's whole life.
 void ColorBurst(uint32_t system, uint32_t added) {
     uint32_t particle = Memory::Read32(system);
-    for (; added != 0 && particle != 0; --added, particle = Memory::Read32(particle)) {
-        const No100fRainbow::Rgb color = No100fRainbow::Color(No100fRainbow::BurstPosition(
-            Memory::ReadFloat32(particle + 0x20), Memory::ReadFloat32(particle + 0x24),
-            Memory::ReadFloat32(particle + 0x28)));
+    for (uint32_t i = 0; i < added && particle != 0; ++i, particle = Memory::Read32(particle)) {
+        const No100fRainbow::Rgb color = No100fRainbow::Color(i);
         Memory::Write8(particle + 0xC, color.r);
         Memory::Write8(particle + 0xD, color.g);
         Memory::Write8(particle + 0xE, color.b);
