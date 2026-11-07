@@ -66,10 +66,10 @@ inline CommandTime CommandTimeFps60(uint32_t type, float dt, float step) {
     case 6:   // speed kill: speed squared against limit * time. Half the speed needs a quarter of the 30 fps limit, and
               // half the frame time is exactly that.
         return {true, dt * kVelocityScaleFps60};
-    case 15:  // random kick to the velocity: a random walk, so half the size twice as often would be too strong
     case 27:  // pull to the player (warp, web): also multiplies velocity per call, which no share of dt can fix
         return {step > 0.0f, step * kVelocityScaleFps60};
     case 13:  // texture animation: one frame per call, its timer reset with no carry
+    case 15:  // random turn of the velocity: a random walk, so half the angle twice as often wanders too little
     case 21:  // spin: cuts angle + rate * time to a whole number
         return {step > 0.0f, step};
     default:

@@ -205,14 +205,14 @@ int main() {
             Require(CommandTimeFps60(13, dt, step).time == step, "texture animation gets the whole step");
             Require(CommandTimeFps60(21, dt, step).time == step, "spin gets the whole step");
             Require(CommandTimeFps60(27, dt, step).time == step * 0.5f, "warp gets half the step");
-            Require(CommandTimeFps60(15, dt, step).time == step * 0.5f, "random kick gets half the step");
+            Require(CommandTimeFps60(15, dt, step).time == step, "random turn gets the whole step");
 
-            // Command 15 is a random walk: how far velocity wanders goes with kicks a second * kick size squared.
-            // Velocity is half as large at 60 frames a second, so that must be a quarter of the 30 fps value.
-            const auto wander = [](float kicksPerSecond, float kick) { return kicksPerSecond * kick * kick; };
+            // Command 15 turns the velocity by a random angle up to rate * time: how far its direction wanders goes with
+            // turns a second * angle squared. Measured in i004: 0.71x as much at 60 fps without the table.
+            const auto wander = [](float turnsPerSecond, float angle) { return turnsPerSecond * angle * angle; };
             const float at30 = wander(30.0f, step);
-            Require(std::fabs(wander(30.0f, CommandTimeFps60(15, dt, step).time) / at30 - 0.25f) < 1e-4f, "kick matches");
-            Require(std::fabs(wander(60.0f, dt) / at30 - 0.5f) < 1e-4f, "without the table it wanders 2x too much");
+            Require(std::fabs(wander(30.0f, CommandTimeFps60(15, dt, step).time) / at30 - 1.0f) < 1e-4f, "turn matches");
+            Require(std::fabs(wander(60.0f, dt) / at30 - 0.5f) < 1e-4f, "without the table it wanders half as much");
             for (uint32_t type : {3u, 11u, 12u, 18u, 19u, 23u, 24u, 25u, 26u, 28u}) {
                 const CommandTime when = CommandTimeFps60(type, dt, step);
                 Require(when.run && when.time == dt, "other commands are unchanged");
