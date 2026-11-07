@@ -12,11 +12,15 @@
 // per 30 Hz step: not in the frame right after it emitted, unless that frame was a full 30 Hz step (slowdown). Calls in
 // the same frame all emit, as at 30 fps. Without fps60 this is the original code.
 //
+// Confetti fireworks ([game] holiday = "confetti"): firework bursts come through here too (fn_800ADAC0), so this is also
+// where each new burst particle gets its own colour. See ColorBurst.
+//
 // Native in full: an override's address is excluded from translation, so the original body cannot be called.
 #include <cstdint>
 #include <unordered_map>
 #include "abi_bridge.h"
 #include "memory.h"
+#include "hle/no100f_confetti.h"
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
 #include "runtime_config.h"
@@ -54,6 +58,32 @@ bool EmitThisFrame(uint32_t emitter) {
     if (frame - it->second == 1 && Memory::ReadFloat32(kFrameTime) < 0.75f / 30.0f) return false;
     it->second = frame;
     return true;
+}
+
+// The particle system of a firework burst emitter (PAREMIT_FIREWORKS1 and 2, asset IDs from boot.HIP) when confetti
+// fireworks are on, else 0. The game uses these two emitters for nothing else.
+uint32_t ConfettiBurstSystem(uint32_t emitter, uint32_t asset) {
+    static const bool confetti = RuntimeConfigFile::Holiday() == "confetti";
+    if (!confetti) return 0;
+    const uint32_t id = Memory::Read32(asset);
+    if (id != 0xC85CDF1Cu && id != 0xC85CDF1Du) return 0;
+    const uint32_t group = Memory::Read32(emitter + 0x48);
+    return group != 0 ? Memory::Read32(group + 0x20) : 0;
+}
+
+// Colours the particles emit just added to a system, each its own colour. New particles go on the head of its list
+// (fn_80032728). Emit aims each one at random, so going through the colours in list order mixes them through the burst
+// like confetti, and takes no random numbers from the game. Only red, green and blue change: alpha keeps fading as the
+// game set it, and the game gives a burst the same start and end colour, so the fade rates for these three (+0x40) are
+// 0 and the colour stays for the particle's whole life.
+void ColorBurst(uint32_t system, uint32_t added) {
+    uint32_t particle = Memory::Read32(system);
+    for (uint32_t i = 0; i < added && particle != 0; ++i, particle = Memory::Read32(particle)) {
+        const No100fConfetti::Rgb color = No100fConfetti::Color(i);
+        Memory::Write8(particle + 0xC, color.r);
+        Memory::Write8(particle + 0xD, color.g);
+        Memory::Write8(particle + 0xE, color.b);
+    }
 }
 }  // namespace
 
@@ -115,10 +145,13 @@ extern "C" void No100f_EmitWithOverrides(CpuContext* ctx) {
     }
     uint32_t result = 0;
     if (emit) {
+        const uint32_t burstSystem = ConfettiBurstSystem(emitter, asset);
+        const uint32_t countBefore = burstSystem != 0 ? Memory::Read32(burstSystem + 0x8) : 0;
         ctx->gpr[3] = emitter;
         ctx->fpr[1].d = dt;
         func_800C4B04(ctx);
         result = ctx->gpr[3];
+        if (burstSystem != 0) ColorBurst(burstSystem, Memory::Read32(burstSystem + 0x8) - countBefore);
     }
 
     if (restore) {
