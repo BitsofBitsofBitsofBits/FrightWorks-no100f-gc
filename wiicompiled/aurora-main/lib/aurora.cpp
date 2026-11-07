@@ -5,6 +5,7 @@
 #include "gfx/common.hpp"
 #include "gfx/texture_replacement.hpp"
 #include "gfx/efb_ram_copy.hpp"
+#include "gfx/motion_effects.hpp"
 #include "gx/fifo.hpp"
 #include "gx/shader_info.hpp"
 #include "imgui.hpp"
@@ -831,6 +832,7 @@ void complete_frame_capture(PendingFrameCapture& capture) {
   }
   capture.buffer.Unmap();
 }
+
 #endif
 
 // AuroraBackend is an anonymous C typedef enum, which magic_enum cannot
@@ -928,6 +930,10 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) {
   if (g_config.msaa == 0) {
     g_config.msaa = 1;
   }
+#ifdef AURORA_ENABLE_GX
+  // Before the graphics start, so the pipeline prewarm builds the kind the first frames use.
+  gfx::motion::set_blur(g_config.motionBlur);
+#endif
   if (g_config.maxTextureAnisotropy == 0) {
     g_config.maxTextureAnisotropy = 16;
   }
@@ -1836,6 +1842,20 @@ void seal_frame_locked(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx) {
   gfx::expire_bind_group_cache();
 }
 
+// Motion blur and the motion-vector view for presentation image `slot` of `count` + 1 (0-based; the frame's own image
+// is the last, slot = count). An interpolated image's motion reaches back to the last frame from its point in between,
+// (slot + 1) / (count + 1) of the way, so it is scaled up by the inverse: every image is blurred by a whole frame's
+// motion, as without frame interpolation (the setting means the same at any frame rate).
+webgpu::PresentSource encode_motion_effects(const wgpu::CommandEncoder& encoder, const gfx::SealedFrame& sealedFrame,
+                                            const webgpu::PresentSource& source, uint32_t slot, uint32_t count) {
+  const auto* motion = gfx::sealed_motion_targets(sealedFrame);
+  if (motion == nullptr) {
+    return source;
+  }
+  return gfx::motion::encode(encoder, source, *motion,
+                             static_cast<float>(count + 1) / static_cast<float>(std::min(slot, count) + 1));
+}
+
 // Phase 2: encode every presentation slot. Reads only `ctx` and the sealed passes, so it runs
 // without the renderer GPU mutex while the producer records the next frame.
 std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, SealedFrameContext& ctx) {
@@ -1884,7 +1904,10 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
       gfx::render(sealedFrame, encoder, static_cast<int32_t>(interpolatedFrame), false);
       auto image =
           acquire_presentation_image(interpolatedFrame, ctx.snapshotWidth, ctx.snapshotHeight);
-      encode_presentation_snapshot(encoder, ctx.presentSource, *image, true, ctx.metalfxEnabled);
+      encode_presentation_snapshot(
+          encoder,
+          encode_motion_effects(encoder, sealedFrame, ctx.presentSource, interpolatedFrame, ctx.interpolatedFrameCount),
+          *image, true, ctx.metalfxEnabled);
       presentationJobs.push_back({
           .image = std::move(image),
           .logicalFrame = ctx.logicalFrame,
@@ -1899,6 +1922,9 @@ std::vector<PresentationJob> encode_sealed_frame(gfx::SealedFrame& sealedFrame, 
   // A demanded CPU-visible EFB readback submits a prefix of the frame, so replaying the resumed
   // stream would mutate an already-rendered EFB. Render once, then duplicate into the slots.
   gfx::render(sealedFrame, encoder, -1, true);
+  // Also the images duplicated from this one (no replay).
+  ctx.presentSource = encode_motion_effects(encoder, sealedFrame, ctx.presentSource, ctx.interpolatedFrameCount,
+                                            ctx.interpolatedFrameCount);
   // The copy targets now hold this frame's resolves, so queue their readbacks on the same encoder;
   // completion is harvested in gfx::after_submit, never waited on here.
   gfx::efb_ram::encode_async_downloads(encoder);
@@ -2507,6 +2533,44 @@ uint32_t aurora_get_monitors(AuroraMonitor* monitors, uint32_t maxCount) {
   return aurora::window::get_monitors(monitors, maxCount);
 }
 void aurora_set_fullscreen_monitor(const char* id) { aurora::window::set_fullscreen_monitor(id); }
+void aurora_set_motion_blur(float shutter) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::motion::set_blur(shutter);
+#endif
+}
+float aurora_get_motion_blur() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::motion::blur();
+#else
+  return 0.f;
+#endif
+}
+bool aurora_motion_vectors_active() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::motion_vectors_active();
+#else
+  return false;
+#endif
+}
+void aurora_set_motion_vector_view(int mode, float scale) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::motion::set_view(mode, scale);
+#endif
+}
+int aurora_get_motion_vector_view() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::motion::view();
+#else
+  return 0;
+#endif
+}
+float aurora_get_motion_vector_view_scale() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::motion::view_scale();
+#else
+  return 16.f;
+#endif
+}
 void aurora_set_cutout_mode(int mode) {
 #ifdef AURORA_ENABLE_GX
   if (mode >= 0 && mode <= static_cast<int>(aurora::gx::CutoutMode::TwoPassAll))

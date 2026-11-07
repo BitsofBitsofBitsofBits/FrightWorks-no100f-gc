@@ -35,6 +35,7 @@ struct RuntimeUserConfig {
     std::optional<bool> widescreen;
     std::optional<bool> forceAspect169;
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
+    std::optional<int32_t> motionBlur;  // [video] motion_blur: strength in percent, 0 = off (MotionBlurShutter)
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
@@ -367,6 +368,8 @@ inline void EnsureConfigFile() {
               "frame_interpolation_fps = 0\n"
               "# true = 60 fps (the game times itself by the clock, so it keeps its speed)\n"
               "fps60 = false\n"
+              "# motion blur strength in percent: 0 = off, 10 = extra low, 20 = low, 30 = medium, 40 = high, 50 = extra high\n"
+              "motion_blur = 0\n"
               "# 0 = original 4:3, 1 = 16:9, 2 = fill the screen, 3 = cinematic 2.39:1\n"
               "aspect_mode = 3\n"
               "display_mode = \"borderless\"\n"
@@ -528,6 +531,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.forceAspect169 = FindConfigValue<bool>(document, "video", "force_16_9");
     if (auto value = FindConfigInt(document, "video", "aspect_mode"); value && *value >= 0 && *value <= 3) {
         config.aspectMode = *value;
+    }
+    if (auto value = FindConfigInt(document, "video", "motion_blur"); value && *value >= 0 && *value <= 100) {
+        config.motionBlur = *value;
     }
     if (auto value = FindConfigInt(document, "video", "gpu_compat"); value && *value >= 0 && *value <= 2) {
         config.gpuCompat = *value;
@@ -1054,6 +1060,30 @@ inline bool SetAspectMode(int32_t value) {
     return WriteSetting("video", "aspect_mode", std::to_string(value));
 }
 
+// Motion blur strength in percent, 0 = off. The menus offer the levels below; any other value from 0 to 100 works too.
+inline int32_t MotionBlur(int32_t fallback = 0) {
+    return Get().motionBlur.value_or(fallback);
+}
+
+struct MotionBlurLevel {
+    const char* name;
+    int32_t percent;
+};
+inline constexpr MotionBlurLevel kMotionBlurLevels[] = {
+    {"Off", 0}, {"Extra low", 10}, {"Low", 20}, {"Medium", 30}, {"High", 40}, {"Extra high", 50},
+};
+
+// How many frames of motion a strength smears each pixel over (aurora_set_motion_blur): 100% = four, 25% = one.
+// Stylised above about 12%: a real camera's shutter (half a frame or less) is hard to see at 60 fps.
+inline float MotionBlurShutter(int32_t percent) {
+    return static_cast<float>(std::clamp(percent, 0, 100)) / 25.0f;
+}
+
+inline bool SetMotionBlur(int32_t value) {
+    Mutable().motionBlur = value;
+    return WriteSetting("video", "motion_blur", std::to_string(value));
+}
+
 inline bool SetForceAspect169(bool value) {
     Mutable().forceAspect169 = value;
     return WriteSetting("video", "force_16_9", value ? "true" : "false");
@@ -1414,6 +1444,9 @@ inline void LogLoadedConfig() {
             }
             if (config.frameInterpolationFps) {
                 std::cout << " frame_interpolation_fps=" << *config.frameInterpolationFps;
+            }
+            if (config.motionBlur) {
+                std::cout << " motion_blur=" << *config.motionBlur;
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");

@@ -77,7 +77,16 @@ if (AURORA_ENABLE_GX)
       aurora::core aurora::gx aurora::pad aurora::vi aurora::mtx aurora::si
       dawn::dawncpp_headers absl::flat_hash_map absl::btree TracyClient)
     add_test(NAME gx_readback_tests COMMAND gx_readback_tests "${CMAKE_CURRENT_BINARY_DIR}/readback-cache")
-    set_tests_properties(gx_readback_tests PROPERTIES TIMEOUT 90)
+    set_tests_properties(gx_readback_tests PROPERTIES TIMEOUT 90 RESOURCE_LOCK gx_readback)
+    # Again with Dawn's validation, which a release build otherwise skips, and on a device without float32-blendable.
+    add_test(NAME gx_readback_tests_validate
+      COMMAND gx_readback_tests "${CMAKE_CURRENT_BINARY_DIR}/readback-cache-validate")
+    set_tests_properties(gx_readback_tests_validate PROPERTIES
+      TIMEOUT 90 RESOURCE_LOCK gx_readback ENVIRONMENT "AURORA_GFX_FLAGS=validate")
+    add_test(NAME gx_readback_tests_no_float32_blend
+      COMMAND gx_readback_tests "${CMAKE_CURRENT_BINARY_DIR}/readback-cache-no-float32-blend")
+    set_tests_properties(gx_readback_tests_no_float32_blend PROPERTIES
+      TIMEOUT 90 RESOURCE_LOCK gx_readback ENVIRONMENT "AURORA_GFX_FLAGS=validate,nofloat32blend")
   endif ()
 endif () # AURORA_ENABLE_GX
 

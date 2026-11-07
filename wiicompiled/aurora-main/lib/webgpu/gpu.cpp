@@ -1,6 +1,10 @@
 #include "gpu.hpp"
 #include "hdr_presentation.hpp"
 
+namespace aurora::gfx {
+bool motion_vectors_active() noexcept;
+}
+
 #include <array>
 #include <algorithm>
 #include <atomic>
@@ -54,6 +58,10 @@ wgpu::Surface g_surface;
 wgpu::BackendType g_backendType;
 GraphicsConfig g_graphicsConfig;
 TextureWithSampler g_frameBuffer;
+TextureWithSampler g_motionVectors;
+TextureWithSampler g_motionDepth;
+TextureWithSampler g_motionMark;
+bool g_float32Blendable = false;
 TextureWithSampler g_frameBufferResolved;
 TextureWithSampler g_depthBuffer;
 
@@ -72,6 +80,7 @@ static wgpu::BindGroup g_presentSourceOverrideBindGroup;
 static wgpu::Texture g_presentSourceOverrideTexture;
 static wgpu::Extent3D g_presentSourceOverrideSize{};
 static wgpu::TextureFormat g_presentSourceOverrideFormat = wgpu::TextureFormat::Undefined;
+static std::array<float, 4> g_presentSourceOverrideEfbRect{};
 
 static wgpu::Adapter g_adapter;
 wgpu::Instance g_instance;
@@ -97,6 +106,7 @@ static std::atomic_bool g_initialized{false};
 //   validate   keep Dawn's validation and log its errors instead of aborting on them
 //   robust     keep Dawn's bounds checks on buffer and texture access
 //   nobc       do not enable BC texture compression
+//   nofloat32blend  do not enable float32-blendable (as on a GPU without it)
 //   nomono     do not use one Vulkan pipeline cache for all pipelines
 //   safefetch / nosafefetch   force the GPU compatibility vertex fetch on or off
 //   notex      every texture samples as grey (is it geometry or texturing?)
@@ -350,6 +360,49 @@ TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool m
   };
 }
 
+TextureWithSampler create_motion_target(MotionTarget target, uint32_t width, uint32_t height, uint32_t samples) {
+  static constexpr struct {
+    const char* label;
+    wgpu::TextureFormat format;
+  } kTargets[] = {
+      {"Motion vectors", wgpu::TextureFormat::RG16Float},
+      {"Motion vector depth", wgpu::TextureFormat::R32Float},
+      {"Motion vector HUD mark", wgpu::TextureFormat::R8Unorm},
+  };
+  const auto& kind = kTargets[static_cast<size_t>(target)];
+  const wgpu::Extent3D size{.width = std::max(width, 1u), .height = std::max(height, 1u), .depthOrArrayLayers = 1};
+  const wgpu::TextureDescriptor descriptor{
+      .label = kind.label,
+      // Copied from only by the renderer tests, which read them back (multisampled textures cannot be copied).
+      .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+               (samples == 1 ? wgpu::TextureUsage::CopySrc : wgpu::TextureUsage::None),
+      .dimension = wgpu::TextureDimension::e2D,
+      .size = size,
+      .format = kind.format,
+      .mipLevelCount = 1,
+      .sampleCount = samples,
+  };
+  auto texture = g_device.CreateTexture(&descriptor);
+  auto view = texture.CreateView();
+  return {
+      .texture = std::move(texture),
+      .view = std::move(view),
+      .size = size,
+      .format = kind.format,
+  };
+}
+
+void create_motion_targets(bool enabled) {
+  const auto& size = g_frameBuffer.size;
+  const uint32_t samples = g_graphicsConfig.msaaSamples;
+  g_motionVectors =
+      enabled ? create_motion_target(MotionTarget::Motion, size.width, size.height, samples) : TextureWithSampler{};
+  g_motionDepth =
+      enabled ? create_motion_target(MotionTarget::Depth, size.width, size.height, samples) : TextureWithSampler{};
+  g_motionMark =
+      enabled ? create_motion_target(MotionTarget::Mark, size.width, size.height, samples) : TextureWithSampler{};
+}
+
 const TextureWithSampler& present_source() noexcept {
   return g_graphicsConfig.msaaSamples > 1 ? g_frameBufferResolved : g_frameBuffer;
 }
@@ -361,6 +414,7 @@ PresentSource current_present_source() noexcept {
         .texture = g_presentSourceOverrideTexture,
         .size = g_presentSourceOverrideSize,
         .format = g_presentSourceOverrideFormat,
+        .efbRect = g_presentSourceOverrideEfbRect,
     };
   }
 
@@ -373,7 +427,8 @@ PresentSource current_present_source() noexcept {
 }
 
 void set_present_source_override(wgpu::BindGroup bindGroup, wgpu::Texture texture, wgpu::Extent3D size,
-                                 wgpu::TextureFormat format) noexcept {
+                                 wgpu::TextureFormat format, std::array<float, 4> efbRect) noexcept {
+  g_presentSourceOverrideEfbRect = efbRect;
   g_presentSourceOverrideBindGroup = std::move(bindGroup);
   g_presentSourceOverrideTexture = std::move(texture);
   g_presentSourceOverrideSize = size;
@@ -387,6 +442,7 @@ void clear_present_source_override() noexcept {
   g_presentSourceOverrideTexture = {};
   g_presentSourceOverrideSize = {};
   g_presentSourceOverrideFormat = wgpu::TextureFormat::Undefined;
+  g_presentSourceOverrideEfbRect = {};
 }
 
 Viewport calculate_present_viewport_for_aspect(uint32_t surface_width, uint32_t surface_height,
@@ -863,6 +919,11 @@ bool initialize(AuroraBackend auroraBackend) {
         implicitDeviceSynchronizationSupported = true;
         requiredFeatures.push_back(feature);
       }
+      // Motion vectors: alpha-blended surfaces own a pixel's depth only where they are mostly opaque (gx.cpp).
+      if (feature == wgpu::FeatureName::Float32Blendable && !gfx_flag("nofloat32blend")) {
+        g_float32Blendable = true;
+        requiredFeatures.push_back(feature);
+      }
     }
     if (!implicitDeviceSynchronizationSupported) {
       Log.warn(
@@ -1189,6 +1250,9 @@ void shutdown() {
   g_frameBuffer = {};
   g_frameBufferResolved = {};
   g_depthBuffer = {};
+  g_motionVectors = {};
+  g_motionDepth = {};
+  g_motionMark = {};
   g_queue = {};
   g_surface = {};
   g_device = {};
@@ -1383,6 +1447,7 @@ void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, ui
   g_frameBuffer = create_render_texture(render_width, render_height, true);
   g_frameBufferResolved = create_render_texture(render_width, render_height, false);
   g_depthBuffer = create_depth_texture(render_width, render_height);
+  create_motion_targets(gfx::motion_vectors_active());
   g_CopyBindGroup = create_copy_bind_group(present_source());
   // The mapped viewport/scissor bake in the old target's scale (gx.cpp): re-map them now.
   if (window::g_onRenderTargetResized != nullptr) {

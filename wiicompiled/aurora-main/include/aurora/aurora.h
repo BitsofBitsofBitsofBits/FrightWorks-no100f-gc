@@ -142,6 +142,8 @@ typedef struct {
   const char* pipelineCachePath;
 
   AuroraGpuCompat gpuCompat;
+  // Motion blur at start (see aurora_set_motion_blur); 0 = off.
+  float motionBlur;
 } AuroraConfig;
 
 typedef enum {
@@ -225,6 +227,18 @@ void aurora_set_fullscreen_monitor(const char* id);
 #define AURORA_HAS_CUTOUT_MODE 1
 void aurora_set_cutout_mode(int mode);
 int aurora_get_cutout_mode();
+// Motion vectors: where every surface was last frame, per pixel, made while motion blur or the view needs them.
+// Motion blur: how many frames of motion each pixel is smeared over (0.5 = a film camera's 180-degree shutter, up to
+// 4), 0 = off; AuroraConfig::motionBlur at start. The view shows the vectors: 0 = off, 1 = motion
+// only, 2 = over a dimmed picture (grey or the picture = still, hue = direction, saturation = speed, full at `scale`
+// pixels per frame; 0 keeps the scale). Both take effect at the next frame.
+#define AURORA_HAS_MOTION_VECTORS 1
+void aurora_set_motion_blur(float shutter);
+float aurora_get_motion_blur();
+bool aurora_motion_vectors_active();
+void aurora_set_motion_vector_view(int mode, float scale);
+int aurora_get_motion_vector_view();
+float aurora_get_motion_vector_view_scale();
 
 typedef enum {
   AURORA_METALFX_DISABLED,

@@ -365,12 +365,25 @@ sealed class MainWindow : Window
         Row("Frame rate", "fps60", new[] { ("30 fps (original)", "false"), ("60 fps", "true") }, "false");
         Row("HD textures", "texture_replacements", new[] { ("On", "true"), ("Off (original textures)", "false") }, "true");
         Row("Anti-aliasing", "msaa", new[] { ("Off", "1"), ("2x MSAA", "2"), ("4x MSAA", "4"), ("8x MSAA", "8") }, "1");
+        {
+            // Strength in percent, as in F10 (runtime_config.h kMotionBlurLevels); a strength set by hand in Config.toml
+            // that is none of the levels is kept as its own entry.
+            var levels = new List<(string text, string raw)> {
+                ("Off", "0"), ("Extra low", "10"), ("Low", "20"), ("Medium", "30"), ("High", "40"), ("Extra high", "50") };
+            if (int.TryParse(cfg.Get("video", "motion_blur")?.Trim(), out int saved) && saved > 0 && saved <= 100 &&
+                !levels.Exists(l => l.raw == saved.ToString()))
+            {
+                levels.Add(($"{saved}%", saved.ToString()));
+                levels.Sort((a, b) => int.Parse(a.raw).CompareTo(int.Parse(b.raw)));
+            }
+            Row("Motion blur", "motion_blur", levels.ToArray(), "0");
+        }
         Row("Intro movies", "skip_intro", new[] { ("Play them", "false"), ("Skip them", "true") }, "false");
         table.Add(FieldLabel("HDR"), new PlankButton("Adjust HDR", (_, _) => OpenHdr().Watch()));
         body.Children.Add(table);
         body.Children.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
-                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor and frame interpolation settings too, and more (sound, controls); "
-                                              : "resolution, picture shape, window and frame interpolation settings too, and more (sound, controls); ") +
+                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation and motion blur settings too, and more (sound, controls); "
+                                              : "resolution, picture shape, window, frame interpolation and motion blur settings too, and more (sound, controls); ") +
                                "F11 switches between fullscreen and a window, and F2 saves a screenshot." +
                                (MonitorChoice ? " Fullscreen monitor also applies when F11 goes fullscreen from a window." : "")));
 

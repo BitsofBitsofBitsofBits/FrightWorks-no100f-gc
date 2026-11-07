@@ -155,12 +155,34 @@ ctest --test-dir wiicompiled\native-build --output-on-failure
 One test: `cmake --build wiicompiled\native-build --target <name>`, then run `wiicompiled\native-build\<name>.exe`.
 New pure logic (no SDL, no guest memory) belongs in a header with a test next to the existing ones.
 
+**Aurora tests (Windows).** They are Aurora's own build, configured from `wiicompiled/aurora-main` (not its `tests/` folder), and the game build doesn't make them.
+This command ran on Windows only. From the checkout root:
+
+```powershell
+cmake -S wiicompiled/aurora-main -B BUILDDIR -G Ninja -DCMAKE_BUILD_TYPE=Release -DAURORA_BUILD_GPU_TESTS=ON
+cmake --build BUILDDIR --parallel --target gx_fifo_tests gx_readback_tests
+# With a built Play folder and the toolchain CMake bin first on PATH, for this run only:
+ctest --test-dir BUILDDIR --output-on-failure --timeout 300
+```
+
+Configuring downloads googletest and Dawn.
+Add `-R gx_readback` to run the GPU test alone.
+Without `Play` on PATH, `gx_readback_tests` stops with a Windows "SDL3.dll not found" dialog.
+With only those two targets built, CTest also lists an `os_alloc_tests_NOT_BUILT` entry: it is a placeholder, and it counts as not run.
+
+
 Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_TESTS=ON`), a ROM-free test of
-actual GPU pixels. Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
+actual GPU pixels.
+It starts with the motion vectors: none while nothing asks for them, zero for a still quad, the expected 8 pixels for one moved by its matrix, and the targets freed again when they are no longer wanted.
+It then checks that a motion setting change resolves the pipeline again with no GX state written, that an alpha-blended surface owns its depth only where the GPU has `float32-blendable`, and that the blurred picture can be copied for a screenshot.
+CTest runs it three times: as is, with `AURORA_GFX_FLAGS=validate`, and with `AURORA_GFX_FLAGS=validate,nofloat32blend`, which hides that feature.
+Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
 Each transparency case explicitly clears its color and depth; the EFB otherwise persists between frames.
 With the enhanced two-pass cut-out modes, each render pass finishes solid geometry, then cut-out fringes, then
 depth-tested translucent world draws. Clears, overlays and non-monotonic depth passes flush that ordering.
+A blended, depth-writing draw with no alpha test that arrives after translucent draws joins them in submission order,
+so its depth can't hide the draws the game made before it; the cases cover it being invisible and writing depth.
 Original-game and single-cut modes retain the game's submission order; the test checks those controls too.
 This intentionally improves inherited foliage/particle ordering in the enhanced modes, rather than claiming a
 mismatch with console rendering. Compatible direct XYZ/RGBA/ST camera-facing triangle-pair particles are stably
@@ -239,6 +261,11 @@ saved in `Play\UserData\devmenu_spots.txt`. Travel is one transfer at a time: as
 cutscene, it waits for normal play (**Cancel travel** drops it). **Skip** presses the game's own skip button for a
 recorded cutscene (A) or the title intro / attract demo (Start). More commands (scripted through `Play\devmenu.txt`) are in the
 `game-logic-debug` skill.
+
+**Motion vectors view** (F8, or `mvview MODE [SCALE]` in `Play\devmenu.txt`: 0 off, 1 motion only, 2 over the picture) shows where every surface was last frame, as color.
+Grey (or the picture) is still; the hue is the direction a surface came from and the saturation its speed, full at SCALE pixels per frame (16 by default).
+It turns the motion vectors on while it shows, like the **Motion blur** setting (`[video] motion_blur`, 0 to 100 percent), which uses them.
+Anything that should move but shows grey, or flashes from frame to frame, has lost its pairing with last frame's draw.
 
 **F3** (developer tools on) starts / stops a video of the game: `Videos\FrightWorks_<date>_<time>.mp4` beside the
 launcher (`Play\Videos` in a source build) and a `.txt` with the build, picture size, Scooby's position at the start and

@@ -78,6 +78,7 @@ wgpu::Buffer g_indexBuffer;
 wgpu::Buffer g_storageBuffer;
 uint32_t g_drawCallCount = 0;
 uint32_t g_mergedDrawCallCount = 0;
+bool motion_vectors_active() noexcept { return false; }
 } // namespace aurora::gfx
 
 namespace aurora::webgpu {
@@ -152,7 +153,7 @@ void evict_copy_texture(const void* dest) noexcept {
     }
   }
 }
-void set_display_copy_present_source() noexcept {}
+void set_display_copy_present_source(std::array<float, 4>) noexcept {}
 void shutdown() noexcept {}
 Vec2<uint32_t> logical_fb_size() noexcept { return s_logicalFbSize; }
 gfx::Viewport map_logical_viewport(const gfx::Viewport& logicalViewport) noexcept {
@@ -390,6 +391,7 @@ void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind) {
   }
 }
 void flush_deferred_draws() {}
+bool has_pending_translucent_draws() noexcept { return false; }
 template <>
 gx::DrawData* get_last_draw_command() {
   return s_trackDrawCommands && s_lastGxDraw.has_value() ? &*s_lastGxDraw : nullptr;

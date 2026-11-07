@@ -345,6 +345,24 @@ void begin_offscreen(uint32_t width, uint32_t height);
 void end_offscreen();
 bool is_offscreen() noexcept;
 uint32_t get_sample_count() noexcept;
+// Motion vectors (for motion blur and the debug view): every render pass gets three more
+// targets: at location 1 (RG16F) where each pixel's surface was last frame minus where it is now, in render-target
+// pixels; at 2 (R32F) that surface's depth; at 3 (R8) the HUD mark. Written by GX draws that own their pixels (see
+// gx.cpp motion_owner); zero motion where nothing moved.
+// Requested from any thread; each new frame latches the request, so a frame is recorded and encoded with one setting.
+void request_motion_vectors(bool requested) noexcept;
+// What the next frame will latch.
+bool motion_vectors_wanted() noexcept;
+// This frame's setting (the recording thread's view).
+bool motion_vectors_active() noexcept;
+struct MotionTargets {
+  webgpu::TextureWithSampler motion;
+  webgpu::TextureWithSampler depth;
+  webgpu::TextureWithSampler mark;
+};
+class SealedFrame;
+// The EFB motion targets a sealed frame was drawn with; null if it had none.
+const MotionTargets* sealed_motion_targets(const SealedFrame& frame) noexcept;
 void clear_caches() noexcept;
 
 namespace tex_palette_conv {
@@ -394,6 +412,7 @@ enum class DeferredDrawKind : uint8_t { Cutout, Translucent };
 // a clear, overlay or render-pass boundary ends the deferred scene.
 void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind = DeferredDrawKind::Cutout);
 void flush_deferred_draws();
+bool has_pending_translucent_draws() noexcept;
 
 template <typename PipelineConfig>
 PipelineRef pipeline_ref(const PipelineConfig& config);

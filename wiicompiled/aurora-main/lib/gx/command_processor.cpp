@@ -2094,7 +2094,8 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
 static inline bool frame_interpolation_identity_needed() noexcept {
   // SPM draws its levels with an orthographic camera, so orthographic draws interpolate too (the
   // perspective-only gate was for NSMBW, whose orthographic draws are only HUD).
-  return frame_interpolation_active();
+  // Motion vectors pair draws across frames with the same machinery.
+  return frame_interpolation_active() || gfx::motion_vectors_active();
 }
 
 static uint32_t matrix_index_prefix_size(GXVtxFmt fmt) noexcept {
@@ -2834,6 +2835,11 @@ static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t verte
     if (g_gxState.vtxDesc[i] == GX_INDEX8 || g_gxState.vtxDesc[i] == GX_INDEX16)  // uploaded every draw
       demand[3] += gfx::staging_storage_bytes(g_gxState.arrays[i].size);
   }
+  if (g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX8 || g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX16) {
+    // Motion vectors: last frame's copy of a CPU-animated model's positions, uploaded with the uniforms.
+    if (const uint32_t history = motion_vertex_history_bytes(g_gxState.arrays[GX_VA_POS].size); history != 0)
+      demand[3] += gfx::staging_storage_bytes(history);
+  }
   return gfx::staging_has_space(demand);
 }
 
@@ -3374,7 +3380,13 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   const bool orderedWorld = enhancedCutouts && g_gxState.projType == GX_PERSPECTIVE &&
                             g_gxState.depthCompare &&
                             (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
-  const bool translucentWorld = orderedWorld && !g_gxState.depthUpdate;
+  // The game also draws blended surfaces after its particles with depth write on and no alpha test, such as the faded
+  // door and wall pieces between the camera and the room at the start of i004. They keep that place in the tail: drawn
+  // earlier, their depth would hide every translucent draw behind them, even at alpha 0.
+  const bool lateBlendedSurface = orderedWorld && g_gxState.depthUpdate && g_gxState.blendMode == GX_BM_BLEND &&
+                                  g_gxState.alphaCompare.comp0 == GX_ALWAYS &&
+                                  g_gxState.alphaCompare.comp1 == GX_ALWAYS && gfx::has_pending_translucent_draws();
+  const bool translucentWorld = orderedWorld && (!g_gxState.depthUpdate || lateBlendedSurface);
   if (!orderedWorld && (enhancedCutouts || !g_gxState.depthCompare ||
                         !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS)) {
     gfx::flush_deferred_draws();
