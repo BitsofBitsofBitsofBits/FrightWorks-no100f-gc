@@ -103,17 +103,22 @@ sealed class App : Application
         {
             int shots = Array.IndexOf(args, "--shots");
             bool selftest = args.Contains("--selftest");
+            var paths = DataPaths.Find();
             if (shots < 0 && !selftest)
             {
-                var paths = DataPaths.Find();
                 if (paths.Portable) paths.RemoveOldShippedCopies();
-                await DataImport.OfferAtStart(paths, MainWindow.AppTitle);
             }
-            var window = new MainWindow(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null);
+            var window = new MainWindow(shots >= 0 && shots + 1 < args.Length ? args[shots + 1] : null,
+                                        dataPaths: paths, enableServices: shots < 0 && !selftest);
             desktop.MainWindow = window;
             desktop.ShutdownMode = ShutdownMode.OnMainWindowClose;
             if (selftest) window.Opened += (_, _) => window.Close();
             window.Show();
+            if (shots < 0 && !selftest)
+            {
+                await DataImport.OfferAtStart(paths, MainWindow.AppTitle, window);
+                if (window.IsVisible) window.CompleteStartup();
+            }
         }
         catch (Exception e)
         {

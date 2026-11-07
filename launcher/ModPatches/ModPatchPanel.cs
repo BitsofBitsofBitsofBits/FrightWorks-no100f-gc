@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 
 namespace ScoobyReMasked.ModPatches;
@@ -49,12 +48,8 @@ sealed class ModPatchPanel
     // The Add mod button: choose a zip, check it, ask before replacing, install.
     public async Task AddFromZip(Action redraw)
     {
-        var picked = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "Choose a mod (.zip)", AllowMultiple = false,
-            FileTypeFilter = new[] { new FilePickerFileType("Mod zip") { Patterns = new[] { "*.zip" } } },
-        });
-        var path = picked.FirstOrDefault()?.TryGetLocalPath();
+        // Themed browser when the pad started this (decided inside PickPath before any await), native picker otherwise.
+        var path = await ControllerDialogs.PickPath(owner, "Choose a mod (.zip)", extensions: new[] { ".zip" }, typeName: "Mod zip");
         if (path == null) return;
         var (mods, cache) = (paths.Mods, CacheDir);
         ModZip.Prepared mod;

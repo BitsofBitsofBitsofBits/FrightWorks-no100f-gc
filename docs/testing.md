@@ -101,6 +101,31 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
 
 ## 3. Unit tests
 
+**Avalonia launcher (.NET 10).** Both suites use Avalonia's headless platform with CPU Skia drawing and disposable
+portable data. Windows and Linux use the same managed test projects; no disc/game is needed. Run with an existing
+.NET 10 SDK and an owned scratch directory:
+
+```powershell
+dotnet run --project tools\launcher-controller-tests\LauncherControllerTests.csproj -c Release -- autotest\launcher-controller
+dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout
+```
+
+Test windows must pass their owned `DataPaths` and `enableServices: false`. That skips SDL/controller polling, game
+launching, updates and OS animation lookup; tests inject controller samples/foreground state rather than OS input.
+The controller suite checks neutral/repeat/deadzone gates, bumper tab switching (and the old bumper focus move where there are no tabs), owned modal routing, menu accessibility, settings and
+same-value native selection intent, cancellation, browsing/text/folder creation, scrolling and persisted auto/manual
+layout policy. Generic navigation regressions cover narrow buttons beneath wide fields, horizontal button rows,
+ordinary slider precision and opt-in `ControllerSlider` coarse steps. Coarse steps retain the selected device's input
+source, give horizontal D-pad input precision priority, clamp to bounds and preserve repeat/ownership/neutral gates.
+The shared slider is only an opt-in control; this controller change does not add HDR settings or choose HDR increments.
+The layout suite deliberately provokes save/background/UI faults to check error routing; those expected
+errors appear on stderr even when the suite passes. Screenshots are synthetic headless evidence, not a hardware test.
+
+Physical verification needs a separate isolated runtime allocation: test held confirm across modal transitions,
+foreground loss/return, disconnect/reconnect, scheme matching/manual persistence and game launch/exit ownership.
+Repeat on Windows and Linux (including X11/Wayland and native storage portals as applicable); Windows headless results
+do not establish Linux hardware, SDL availability, native portal or compositor behavior.
+
 The tests are CMake targets in `wiicompiled/runtime/CMakeLists.txt`; the game build doesn't build them. After a game
 build has created `wiicompiled\native-build`:
 
