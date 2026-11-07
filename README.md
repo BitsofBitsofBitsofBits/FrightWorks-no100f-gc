@@ -8,7 +8,7 @@ FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-
 from which it split off on October 31, 2026. This repository is the GameCube version; ports of the other console versions
 may follow.
 
-[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1136-scooby-doo-night-of-100-frights/)
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1163-scooby-doo-night-of-100-frights/)
 
 > **Artists wanted:** the launcher needs new art in the style of the original show. [Details below](#wanted-an-artist-for-the-launcher).
 
