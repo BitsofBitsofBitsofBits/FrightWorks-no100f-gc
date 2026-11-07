@@ -280,6 +280,8 @@ Never name a session `main`.
 - Frame interpolation (#92) pairs draws across frames by an exact identity (it hashes the POS array contents, not addresses), then a stable identity, then nearest distance (`frame_interpolation.cpp`, `command_processor.cpp`).
   A pair moving more than 0.5 units in one frame with the camera still is a wrong pair.
   F3 recordings don't show interpolated frames.
+- Frame interpolation only runs at 60 fps: with `[video] fps60` off the game treats `frame_interpolation_fps` as 0 whatever the file says (`RuntimeConfigFile::FrameInterpolationFps`), and the launcher and F10 show the row as Off and locked.
+  `vi.cpp` would count every frame's 2-retrace wait as late, so it would do nothing. Motion blur doesn't depend on it. Changing the launcher's Frame rate saves it as 0.
 - Cut-outs: `[video] cutout_mode`, default two passes.
   Fringes are deferred and flushed before non-depth-writing and z-ALWAYS draws (#46).
 - The scene stage (`gfx/scene_stage.cpp`) is where effects on the solid scene go (ambient occlusion, lighting), before the see-through world draws and the HUD; effects on the final picture go at present, like motion blur.

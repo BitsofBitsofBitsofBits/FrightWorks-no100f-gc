@@ -284,8 +284,11 @@ sealed class MainWindow : Window
     // 8x into 4x at start.
     static bool AboveCap(string resolution) => SameValue(resolution, "6") || SameValue(resolution, "8");
 
-    // [video] frame_interpolation_fps as the game reads it: 0, 120 or 180 (240 from older versions = 180), else off.
-    static int InterpolationFps(GameConfig c) => c.Get("video", "frame_interpolation_fps")?.Trim() switch
+    static bool Fps60(GameConfig c) => c.Get("video", "fps60")?.Trim() == "true";
+
+    // [video] frame_interpolation_fps as the game reads it (RuntimeConfigFile::FrameInterpolationFps): 0, 120 or 180 (240
+    // from older versions = 180), else off, and always off at 30 fps.
+    static int InterpolationFps(GameConfig c) => !Fps60(c) ? 0 : c.Get("video", "frame_interpolation_fps")?.Trim() switch
     {
         "120" => 120, "180" or "240" => 180, _ => 0,
     };
@@ -297,7 +300,8 @@ sealed class MainWindow : Window
     {
         var cfg = new GameConfig(configPath);
         var table = new FormTable();
-        void Row(string label, string key, (string text, string raw)[] options, string fallback, Action<GameConfig>? changed = null)
+        bool filling = false;  // a box is being set from the config, not by the player
+        ThemedCombo Row(string label, string key, (string text, string raw)[] options, string fallback, Action<GameConfig>? changed = null)
         {
             var box = new ThemedCombo();
             foreach (var o in options) box.Items.Add(o.text);
@@ -306,13 +310,14 @@ sealed class MainWindow : Window
             box.SelectedIndex = index >= 0 ? index : Array.FindIndex(options, o => SameValue(o.raw, fallback));
             box.SelectedIndexChanged += (_, _) =>
             {
-                if (box.SelectedIndex < 0) return;
+                if (filling || box.SelectedIndex < 0) return;
                 var c = new GameConfig(configPath);
                 c.Set("video", key, options[box.SelectedIndex].raw);
                 changed?.Invoke(c);
                 c.Save();
             };
             table.Add(FieldLabel(label), box);
+            return box;
         }
         Row("Window", "display_mode", new[] { ("Borderless fullscreen", "\"borderless\""), ("Window", "\"windowed\""), ("Exclusive fullscreen", "\"exclusive\"") }, "borderless");
 
@@ -333,7 +338,6 @@ sealed class MainWindow : Window
         // Resolution: refilled when frame interpolation crosses 60 fps. A missing or unknown value is the game's 1080p.
         var resolutionBox = new ThemedCombo();
         var shownResolutions = Resolutions;
-        bool filling = false;
         void FillResolutions(GameConfig c)
         {
             bool capped = InterpolationFps(c) > 60;
@@ -361,7 +365,24 @@ sealed class MainWindow : Window
         // else fill the screen.
         string aspectFallback = cfg.Get("video", "force_16_9") == "true" ? "1" : cfg.Get("video", "widescreen") == "false" ? "0" : "2";
         Row("Picture shape", "aspect_mode", new[] { ("Original 4:3", "0"), ("Widescreen 16:9", "1"), ("Fill the screen", "2"), ("Cinematic 2.39:1", "3") }, aspectFallback);
-        Row("Frame rate", "fps60", new[] { ("30 fps (original)", "false"), ("60 fps", "true") }, "false");
+        // The Frame interpolation row below: Off and locked at 30 fps. Changing the frame rate saves it as off in both
+        // directions, so what comes back at 60 fps is the Off the player was just shown, not an old choice that would
+        // also drop the resolution to 4x.
+        (string text, string raw)[] interpolationModes = { ("Off", "0"), ("120 FPS", "120"), ("180 FPS", "180") };
+        ThemedCombo? interpolationBox = null;
+        void ShowInterpolation(GameConfig c)
+        {
+            filling = true;
+            interpolationBox!.SelectedIndex = Array.FindIndex(interpolationModes, m => m.raw == InterpolationFps(c).ToString());
+            filling = false;
+            interpolationBox.IsEnabled = Fps60(c);
+        }
+        Row("Frame rate", "fps60", new[] { ("30 fps (original)", "false"), ("60 fps", "true") }, "false", c =>
+        {
+            c.Set("video", "frame_interpolation_fps", "0");
+            FillResolutions(c);
+            ShowInterpolation(c);
+        });
         Row("HD textures", "texture_replacements", new[] { ("On", "true"), ("Off (original textures)", "false") }, "true");
         Row("Anti-aliasing", "msaa", new[] { ("Off", "1"), ("2x MSAA", "2"), ("4x MSAA", "4"), ("8x MSAA", "8") }, "1");
         {
@@ -405,15 +426,16 @@ sealed class MainWindow : Window
         // 4x, as F10 does.
         body.Children.Add(Title("Experimental"));
         table = new FormTable();  // Row adds to this one now
-        Row("Frame interpolation", "frame_interpolation_fps", new[] { ("Off", "0"), ("120 FPS", "120"), ("180 FPS", "180") },
+        interpolationBox = Row("Frame interpolation", "frame_interpolation_fps", interpolationModes,
             InterpolationFps(cfg).ToString(), c =>
             {
                 if (InterpolationFps(c) > 60 && AboveCap(c.Get("video", "resolution_multiplier") ?? "")) c.Set("video", "resolution_multiplier", "4");
                 FillResolutions(c);
             });
+        ShowInterpolation(cfg);
         body.Children.Add(table);
-        body.Children.Add(Note("Draws extra frames between the game's own for smoother motion. Experimental: you might see visual " +
-                               "glitches. At 120 or 180 FPS the resolution goes up to 4x (1920p)."));
+        body.Children.Add(Note("Draws extra frames between the game's own for smoother motion. Only works at 60 fps, so it stays " +
+                               "Off at 30 fps. Experimental: you might see visual glitches. At 120 or 180 FPS the resolution goes up to 4x (1920p)."));
     }
 
     void BuildControls(StackPanel body)

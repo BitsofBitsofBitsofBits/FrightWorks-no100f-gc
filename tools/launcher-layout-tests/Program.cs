@@ -65,6 +65,98 @@ static class LauncherLayoutTests
             "Main (2560x1440, main)", "VS248 (1920x1080, 1)", "VS248 (1920x1080, 2)", "G215HV (1920x1080)");
     }
 
+    // Frame interpolation is Off and locked at 30 fps, changeable at 60; changing the frame rate saves it as off. Leaves
+    // the config as it found it, and pictures of both states in the output folder.
+    static void CheckInterpolationLock(MainWindow window, string fixture, string game, string config, string output)
+    {
+        string? Saved(string key) => new GameConfig(config).Get("video", key);
+        ThemedCombo Box(MainWindow w, string item) => Descendants(w.boards["settings"]).OfType<ThemedCombo>().Single(c => c.Items.Contains(item));
+        void Open(MainWindow w)
+        {
+            w.ShowBoard("settings");
+            w.showControlsTab!(false);
+            Pump();
+        }
+        void Shot(MainWindow w, string name)
+        {
+            w.boards["settings"].Scroller.ScrollToEnd();  // the row and its note
+            Pump();
+            w.SaveShot(Path.Combine(output, name));
+        }
+        void Expect(MainWindow w, string state, bool enabled, string shown)
+        {
+            var box = Box(w, "120 FPS");
+            Check(box.IsEnabled == enabled, $"Frame interpolation, {state}: enabled = {box.IsEnabled}");
+            Check((string)box.SelectedItem! == shown, $"Frame interpolation, {state}: shows {box.SelectedItem}");
+        }
+        string before = File.ReadAllText(config);
+
+        Open(window);
+        var frameRate = Box(window, "60 fps");
+        var interpolation = Box(window, "120 FPS");
+        var resolution = Box(window, "4x (1920p)");
+        Check(Saved("fps60") == null && Saved("frame_interpolation_fps") == null, "The fixture starts with neither key");
+        Expect(window, "no frame rate saved", enabled: false, "Off");
+        Check(Saved("frame_interpolation_fps") == null, "Showing the locked row saved a value");
+        Shot(window, "interpolation-30fps.png");
+
+        frameRate.SelectedItem = "60 fps";
+        Pump();
+        Expect(window, "60 fps", enabled: true, "Off");
+        Check(Saved("fps60") == "true" && Saved("frame_interpolation_fps") == "0", "Going to 60 fps didn't save fps60 and interpolation off");
+        Shot(window, "interpolation-60fps.png");
+
+        interpolation.SelectedItem = "120 FPS";
+        Pump();
+        Check(Saved("frame_interpolation_fps") == "120", "120 FPS wasn't saved at 60 fps");
+        Check(!resolution.Items.Contains("8x (3840p)"), "120 FPS still offers 8x");
+        Shot(window, "interpolation-60fps-120.png");
+
+        frameRate.SelectedItem = "30 fps (original)";
+        Pump();
+        Expect(window, "back at 30 fps", enabled: false, "Off");
+        Check(Saved("fps60") == "false" && Saved("frame_interpolation_fps") == "0", "Going to 30 fps didn't save interpolation off");
+        Check(resolution.Items.Contains("8x (3840p)"), "Interpolation is off at 30 fps but 8x is still not offered");
+
+        frameRate.SelectedItem = "60 fps";
+        Pump();
+        Expect(window, "60 fps again", enabled: true, "Off");
+        Check(Saved("frame_interpolation_fps") == "0", "The old choice came back at 60 fps");
+
+        // Config.toml edited by hand (or left by an older version): asks for it at 30 fps. Shown off and not rewritten,
+        // the resolution stays what it says, and going to 60 fps gives the Off that was on show.
+        File.WriteAllText(config, "[video]\nfps60 = false\nframe_interpolation_fps = 120\nresolution_multiplier = 8\n");
+        var handEdited = new MainWindow(null, new DataPaths(fixture, game), enableServices: false);
+        handEdited.Show();
+        Pump();
+        Open(handEdited);
+        Expect(handEdited, "asked for at 30 fps by hand", enabled: false, "Off");
+        Check((string)Box(handEdited, "4x (1920p)").SelectedItem! == "8x (3840p)", "Resolution capped for an interpolation that is off");
+        Check(Saved("frame_interpolation_fps") == "120", "Opening the launcher rewrote the saved value");
+        Box(handEdited, "60 fps").SelectedItem = "60 fps";
+        Pump();
+        Expect(handEdited, "hand edit, then 60 fps", enabled: true, "Off");
+        Check(Saved("frame_interpolation_fps") == "0" && Saved("resolution_multiplier") == "8", "The hand-edited value came back at 60 fps");
+        handEdited.Close();
+        Pump();
+
+        // At 60 fps a saved choice still shows and can be changed, and caps the resolution as before.
+        File.WriteAllText(config, "[video]\nfps60 = true\nframe_interpolation_fps = 240\nresolution_multiplier = 8\n");
+        var chosen = new MainWindow(null, new DataPaths(fixture, game), enableServices: false);
+        chosen.Show();
+        Pump();
+        Open(chosen);
+        Expect(chosen, "saved at 60 fps", enabled: true, "180 FPS");
+        Check((string)Box(chosen, "4x (1920p)").SelectedItem! == "4x (1920p)", "Resolution not capped at 180 FPS");
+        chosen.Close();
+        Pump();
+
+        frameRate.SelectedItem = "30 fps (original)";  // this window's own boxes, as the file below says
+        File.WriteAllText(config, before);
+        window.CloseBoards();
+        Pump();
+    }
+
     // The control drawn on its own over a transparent bitmap: its four corners must stay see-through (a plank, not a box).
     static void CheckCorners(PlankButton button, string state, string output)
     {
@@ -306,6 +398,8 @@ static class LauncherLayoutTests
         Check(new GameConfig(config).Get("game", "holiday") == "auto", "Going back to today's date wasn't saved");
         window.CloseBoards();
         Pump();
+
+        CheckInterpolationLock(window, fixture, game, config, output);
 
         // ----- A Config.toml that can't be written: the launcher asks Continue or Quit, it doesn't close -----
         string beforeReadOnly = File.ReadAllText(config);
