@@ -1,8 +1,16 @@
 # FrightWorks: Night of 100 Frights - only sources, project files and scripts are tracked.
 # Game data (the user's own disc) and everything built or downloaded stays out.
-/Disc/
-/game/
-/toolchain/
+# The folders a worktree links to the main checkout (tools/debug/worktree.py) have no trailing slash: a rule ending
+# in / matches only a real folder, and git sees a Linux symlink as a file, so the links would show as new files.
+/Disc
+/game
+/toolchain
+# Disc images, anywhere (people keep theirs at the repo root to build from).
+*.iso
+*.gcm
+*.rvz
+*.ciso
+*.gcz
 /autotest/
 /build-logs/
 /dist/
@@ -16,7 +24,7 @@
 /wiicompiled/native-build/
 /wiicompiled/native-build-linux/
 /wiicompiled/build/
-/wiicompiled/Dependencies/
+/wiicompiled/Dependencies
 /wiicompiled/translator/**/bin/
 /wiicompiled/translator/**/obj/
 /wiicompiled/Launcher/**/bin/
@@ -41,7 +49,7 @@ __pycache__/
 wiicompiled/buildtools/artifacts/
 *.log
 *.log.out
-texture_pack/
+texture_pack
 
 # a person's own notes for development sessions, not part of the project (the shared ones are .agents/REPO.md)
 AGENTS.md
