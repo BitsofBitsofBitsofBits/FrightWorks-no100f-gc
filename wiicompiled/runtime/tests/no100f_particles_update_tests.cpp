@@ -219,6 +219,31 @@ int main() {
             }
         }
 
+        // Commands 4 and 20 change velocity by a force * time, as command 2 does. A model of each through the table against
+        // 30 fps: 20 with a steady wind, 4 with a push that weakens as the particle gets away.
+        for (uint32_t type : {4u, 20u}) {
+            const auto force = [type](float position) { return type == 20 ? 0.1f : 0.5f / (1.0f + position); };
+            float at30 = 0.0f, velocity = 0.0f;
+            for (int i = 0; i < 90; ++i) {
+                velocity += force(at30) * (1.0f / 30.0f);
+                at30 += velocity;
+            }
+            float through = 0.0f;
+            velocity = 0.0f;
+            RunTable(type, 3.0f, [&](bool run, float time) {
+                if (run) velocity += force(through) * time;
+                through += velocity;
+            });
+            Require(std::fabs(through / at30 - 1.0f) < 0.03f, "force on velocity matches 30 fps");
+            float raw = 0.0f;
+            velocity = 0.0f;
+            for (int i = 0; i < 180; ++i) {
+                velocity += force(raw) * (1.0f / 60.0f);
+                raw += velocity;
+            }
+            Require(raw / at30 > 1.15f, "without the table the force moves it too far");
+        }
+
         // Command 13: the steps of the disc's intervals match 30 fps through the table, and many don't without it.
         for (float interval : {0.0f, 0.01f, 0.03f, 0.04f, 0.05f, 0.06f, 0.1f, 0.3f}) {
             TextureAnimation animation{interval};
