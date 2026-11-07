@@ -37,12 +37,19 @@ constexpr float kAoNearFadeStart = 1.f;
 constexpr float kAoNearFadeEnd = 2.5f;
 // The longest sampling radius, as a share of the picture's height (close up, the radius covers a lot of screen).
 constexpr float kAoMaxRadiusOfHeight = 0.05f;
+// Cartoon ink outlines: line width as a share of the picture's height per level (Thin, Bold), how dark the ink is,
+// and the distances over which the lines fade out (far away they would crowd into clutter).
+constexpr float kInkWidthOfHeight[] = {1.f / 540.f, 1.f / 320.f};
+constexpr float kInkDarkness[] = {0.85f, 0.9f};
+constexpr float kInkFadeStart = 35.f;
+constexpr float kInkFadeEnd = 80.f;
 // The depth view's distance scale: a surface this far from the camera shows at 1/e brightness.
 constexpr float kDepthViewDistance = 8.f;
 
 std::atomic_int g_viewMode{0};
 std::unordered_set<HashType> g_solidSurfaces;
 std::atomic<float> g_aoStrength{0.f};
+std::atomic_int g_inkLevel{0};
 Camera g_camera;
 
 // Every pass's parameters.
@@ -55,8 +62,10 @@ struct Params {
   std::array<float, 4> ao;       // radius, intensity, bias, strength
   std::array<float, 4> ao2;      // angle bias, near fade start, near fade end, unused
   std::array<float, 4> misc; // view mode, longest radius share of height (depth view: its distance), fade start, end
+  std::array<float, 4> ink;  // line width (EFB pixels), darkness, creases (0 or 1), fade start
+  std::array<float, 4> ink2; // fade end, unused
 };
-static_assert(sizeof(Params) == 224);
+static_assert(sizeof(Params) == 256);
 
 constexpr const char* kStageWgsl = R"""(
 struct Params {
@@ -68,6 +77,8 @@ struct Params {
     ao: vec4f,
     ao2: vec4f,
     misc: vec4f,
+    ink: vec4f,
+    ink2: vec4f,
 };
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var depth_tex: EfbDepth;
@@ -239,6 +250,67 @@ fn fs_ao_view(@builtin(position) pos: vec4f) -> @location(0) vec4f {
     return vec4f(k, k, k, 1.0);
 }
 
+// Cartoon ink. A flat surface's inverse distance changes evenly across the picture (even seen at a grazing angle), so
+// a kink in it, along any of four directions, is a silhouette; only the nearer side inks, so the line sits on the
+// object. A pixel inks only when one side drops away, not both: in something thinner than two lines (grass, a stem, a
+// tail's tip) both do, and it keeps its colour instead of turning black. With creases on, a sharp turn of the surface
+// (more than about 60 degrees) inks too, against neighbours on the same surface only (no depth jump; the background
+// beside a silhouette does not ink): the game's low-poly models (tree crowns, hedges) turn less than that between
+// their polygons, so those stay clean.
+const INK_KINK_LOW = 0.06;
+const INK_KINK_HIGH = 0.18;
+const INK_CREASE_COS = 0.5;
+fn ink_at(p: vec2i) -> f32 {
+    let c4 = view_pos(p);
+    if (c4.w == 0.0) {
+        return 0.0;
+    }
+    let c = c4.xyz;
+    let dist = abs(c.z);
+    let r = max(1, i32(round(params.ink.x)));
+    var dirs = array(vec2i(1, 0), vec2i(0, 1), vec2i(1, 1), vec2i(1, -1));
+    var ink = 0.0;
+    for (var i = 0; i < 4; i++) {
+        let a4 = view_pos(p + dirs[i] * r);
+        let b4 = view_pos(p - dirs[i] * r);
+        // Nothing drawn counts as infinitely far.
+        let inv_a = select(0.0, 1.0 / abs(a4.z), a4.w > 0.0);
+        let inv_b = select(0.0, 1.0 / abs(b4.z), b4.w > 0.0);
+        let inv_c = 1.0 / dist;
+        let kink = abs(inv_a + inv_b - 2.0 * inv_c) / inv_c;
+        let one_side = (inv_a < inv_c * 0.98) != (inv_b < inv_c * 0.98);
+        ink = max(ink, select(0.0, smoothstep(INK_KINK_LOW, INK_KINK_HIGH, kink), one_side));
+    }
+    if (params.ink.z > 0.5 && ink < 1.0) {
+        let n = normal_at(p, c);
+        for (var i = 0; i < 4; i++) {
+            let q = p + dirs[i] * r;
+            let q4 = view_pos(q);
+            let jump = abs(1.0 / abs(q4.z) - 1.0 / dist) * dist;
+            if (q4.w == 0.0 || jump > INK_KINK_LOW) {
+                continue;
+            }
+            let turn = 1.0 - smoothstep(INK_CREASE_COS, INK_CREASE_COS + 0.15, dot(n, normal_at(q, q4.xyz)));
+            ink = max(ink, turn);
+        }
+    }
+    return ink * (1.0 - smoothstep(params.ink.w, params.ink2.x, dist));
+}
+
+// Multiplied into the solid scene.
+@fragment
+fn fs_ink(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+    let k = 1.0 - ink_at(vec2i(pos.xy)) * params.ink.y;
+    return vec4f(k, k, k, 1.0);
+}
+
+// Debug view: the lines alone, black on white.
+@fragment
+fn fs_ink_view(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+    let k = 1.0 - ink_at(vec2i(pos.xy));
+    return vec4f(k, k, k, 1.0);
+}
+
 @fragment
 fn fs_tint(@builtin(position) pos: vec4f) -> @location(0) vec4f {
     _ = params.misc;
@@ -256,7 +328,7 @@ fn fs_depth(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 }
 )""";
 
-enum class Kind { Occlusion, BlurH, BlurV, Apply, AoView, Tint, Depth, Count };
+enum class Kind { Occlusion, BlurH, BlurV, Apply, AoView, Tint, Depth, Ink, InkView, Count };
 
 struct Pipelines {
   uint32_t samples = 0;
@@ -315,6 +387,8 @@ void build_pipelines(wgpu::TextureFormat format, uint32_t samples) {
   p[static_cast<size_t>(Kind::AoView)] = make("fs_ao_view", true, false);
   p[static_cast<size_t>(Kind::Tint)] = make("fs_tint", true, true);
   p[static_cast<size_t>(Kind::Depth)] = make("fs_depth", true, false);
+  p[static_cast<size_t>(Kind::Ink)] = make("fs_ink", true, true);
+  p[static_cast<size_t>(Kind::InkView)] = make("fs_ink_view", true, false);
   g_pipelines.samples = samples;
   g_pipelines.format = format;
 }
@@ -432,8 +506,14 @@ Mat4x4<float> inverse(const Mat4x4<float>& matrix) {
 } // namespace
 
 bool wanted() noexcept {
-  return g_viewMode.load(std::memory_order_relaxed) != 0 || g_aoStrength.load(std::memory_order_relaxed) > 0.f;
+  return g_viewMode.load(std::memory_order_relaxed) != 0 || g_aoStrength.load(std::memory_order_relaxed) > 0.f ||
+         g_inkLevel.load(std::memory_order_relaxed) != 0;
 }
+
+void set_ink_outlines(int level) noexcept {
+  g_inkLevel.store(level >= 0 && level <= 2 ? level : 0, std::memory_order_relaxed);
+}
+int ink_outlines() noexcept { return g_inkLevel.load(std::memory_order_relaxed); }
 
 void begin_frame() noexcept { g_solidSurfaces.clear(); }
 void note_solid_surface(HashType surface) noexcept { g_solidSurfaces.insert(surface); }
@@ -444,7 +524,7 @@ void set_ambient_occlusion(float strength) noexcept {
 }
 float ambient_occlusion() noexcept { return g_aoStrength.load(std::memory_order_relaxed); }
 
-void set_view(int mode) noexcept { g_viewMode.store(mode >= 0 && mode <= 3 ? mode : 0, std::memory_order_relaxed); }
+void set_view(int mode) noexcept { g_viewMode.store(mode >= 0 && mode <= 4 ? mode : 0, std::memory_order_relaxed); }
 int view() noexcept { return g_viewMode.load(std::memory_order_relaxed); }
 
 void note_camera(const Mat4x4<float>& projection, const webgpu::Viewport& viewport) noexcept {
@@ -457,9 +537,12 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
             wgpu::Extent3D size, uint32_t samples, const Camera& camera) {
   const int mode = view();
   const float strength = ambient_occlusion();
-  if ((mode == 0 && strength <= 0.f) || !color || !depth || size.width == 0 || size.height == 0) {
+  const int ink = ink_outlines();
+  if ((mode == 0 && strength <= 0.f && ink == 0) || !color || !depth || size.width == 0 || size.height == 0) {
     return;
   }
+  // The view shows the Bold lines when the setting is off.
+  const int inkLevel = ink != 0 ? ink : 2;
   ZoneScoped;
   build_pipelines(webgpu::g_graphicsConfig.surfaceConfiguration.format, samples);
   if (!g_params) {
@@ -486,6 +569,9 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
       .ao2 = {kAoAngleBias, kAoNearFadeStart, kAoNearFadeEnd, 0.f},
       .misc = {static_cast<float>(mode), mode == 2 ? kDepthViewDistance : kAoMaxRadiusOfHeight, kAoFadeStart,
                kAoFadeEnd},
+      .ink = {std::max(1.f, static_cast<float>(size.height) * kInkWidthOfHeight[inkLevel - 1]),
+              kInkDarkness[inkLevel - 1], inkLevel == 2 ? 1.f : 0.f, kInkFadeStart},
+      .ink2 = {kInkFadeEnd, 0.f, 0.f, 0.f},
   };
   g_queue.WriteBuffer(g_params, 0, &params, sizeof(params));
   if (mode == 1) {
@@ -496,11 +582,23 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
     draw(encoder, Kind::Depth, color, size, &depth, nullptr);
     return;
   }
-  prepare_ao_targets(half.width, half.height);
-  draw(encoder, Kind::Occlusion, g_aoTargets[0].view, half, &depth, nullptr);
-  draw(encoder, Kind::BlurH, g_aoTargets[1].view, half, nullptr, &g_aoTargets[0].view);
-  draw(encoder, Kind::BlurV, g_aoTargets[0].view, half, nullptr, &g_aoTargets[1].view);
-  draw(encoder, mode == 3 ? Kind::AoView : Kind::Apply, color, size, &depth, &g_aoTargets[0].view);
+  if (mode == 4) {
+    draw(encoder, Kind::InkView, color, size, &depth, nullptr);
+    return;
+  }
+  if (strength > 0.f || mode == 3) {
+    prepare_ao_targets(half.width, half.height);
+    draw(encoder, Kind::Occlusion, g_aoTargets[0].view, half, &depth, nullptr);
+    draw(encoder, Kind::BlurH, g_aoTargets[1].view, half, nullptr, &g_aoTargets[0].view);
+    draw(encoder, Kind::BlurV, g_aoTargets[0].view, half, nullptr, &g_aoTargets[1].view);
+    draw(encoder, mode == 3 ? Kind::AoView : Kind::Apply, color, size, &depth, &g_aoTargets[0].view);
+    if (mode == 3) {
+      return;
+    }
+  }
+  if (ink != 0) {
+    draw(encoder, Kind::Ink, color, size, &depth, nullptr);
+  }
 }
 
 void shutdown() noexcept {

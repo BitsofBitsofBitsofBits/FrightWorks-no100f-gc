@@ -389,6 +389,7 @@ sealed class MainWindow : Window
             }
             Row("Ambient occlusion", "ambient_occlusion", levels.ToArray(), "0");
         }
+        Row("Ink outlines", "ink_outlines", new[] { ("Off", "0"), ("Thin", "1"), ("Bold", "2") }, "0");
         Row("Intro movies", "skip_intro", new[] { ("Play them", "false"), ("Skip them", "true") }, "false");
         Row("HDR", "hdr", new[] { ("Off", "false"), (OperatingSystem.IsWindows() ? "On (needs HDR on in Windows)" : "On (needs HDR on in your desktop)", "true") }, "false");
         Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");

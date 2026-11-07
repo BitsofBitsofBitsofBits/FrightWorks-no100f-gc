@@ -838,6 +838,37 @@ int main(int argc, char** argv) {
       gfx::scene_stage::set_view(0);
       std::printf("Actual Aurora scene stage: a solid surface's see-through second layer is drawn before the stage\n");
     }
+    // Ink outlines: the solid quad (columns 3 to 28, 4 units away) stands in front of nothing, so its silhouette inks
+    // on the quad's side (column 3, 85% dark at Thin: 255 x 0.15 = 38) and nowhere inside it (column 4 is a pixel in,
+    // the middle at 16). The outline view shows the line alone, black on white. Off, nothing changes.
+    {
+      const auto settle = [] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+          require(std::chrono::steady_clock::now() < deadline, "Ink outline pipelines were not built");
+          draw_stage_frame();
+          webgpu::g_instance.ProcessEvents();
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        draw_stage_frame();
+      };
+      gfx::scene_stage::set_ink_outlines(1);
+      settle();
+      check_efb(3, 32, {38, 0, 0}, "ink on the silhouette");
+      check_efb(4, 32, {255, 0, 0}, "no ink a pixel inside");
+      check_efb(16, 32, {255, 0, 0}, "no ink in the middle");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the ink");
+      gfx::scene_stage::set_view(4);
+      settle();
+      check_efb(3, 32, {0, 0, 0}, "outline view, line");
+      check_efb(16, 32, {255, 255, 255}, "outline view, inside");
+      gfx::scene_stage::set_view(0);
+      gfx::scene_stage::set_ink_outlines(0);
+      settle();
+      check_efb(3, 32, {255, 0, 0}, "ink off");
+      std::printf(
+          "Actual Aurora ink outlines: silhouette inked on the near side only, view black on white, off clean\n");
+    }
     // An alpha-blended surface moves like any other. It owns the depth only on a GPU that can blend the 32-bit float
     // target; elsewhere (AURORA_GFX_FLAGS=nofloat32blend hides the feature) it leaves the depth behind it.
     gfx::request_motion_vectors(true);

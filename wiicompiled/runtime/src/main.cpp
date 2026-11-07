@@ -1510,6 +1510,7 @@ int RuntimeMain(int argc, char** argv) {
         auroraConfig.msaa = RuntimeConfigFile::Msaa(1);
         auroraConfig.motionBlur = RuntimeConfigFile::MotionBlurShutter(RuntimeConfigFile::MotionBlur());
         auroraConfig.ambientOcclusion = static_cast<float>(std::clamp(RuntimeConfigFile::AmbientOcclusion(), 0, 100)) / 100.0f;
+        auroraConfig.inkOutlines = std::clamp(RuntimeConfigFile::InkOutlines(), 0, 2);
         // Dolphin-style custom textures. Aurora indexes <userPath>/texture_replacements
         // once during aurora_initialize, so both knobs only take effect on the next launch.
         // Dumps name each unmatched texture the way its replacement would have to be named,

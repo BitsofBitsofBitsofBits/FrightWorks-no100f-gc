@@ -1424,8 +1424,9 @@ void DrawDiagnostics() {
 //   mvview MODE [SCALE] motion vectors view: 0 off, 1 motion only, 2 over the picture; SCALE = pixels per frame for
 //                       full color (turns the motion vectors on while it shows)
 //   stageview MODE      scene stage view: 0 off, 1 tint (what is drawn before the stage is tinted blue), 2 depth,
-//                       3 the ambient occlusion alone
+//                       3 the ambient occlusion alone, 4 the ink outlines alone
 //   ao PERCENT          ambient occlusion strength for this run (0 off to 100; the setting is not changed)
+//   ink LEVEL           ink outlines for this run: 0 off, 1 thin, 2 bold (the setting is not changed)
 void PollCommandFile() {
     static uint32_t tick = 0;
     if (++tick % 30 != 0) return;
@@ -1580,6 +1581,11 @@ void PollCommandFile() {
             aurora_set_ambient_occlusion(static_cast<float>(std::atoi(arg.c_str())) / 100.0f);
             g_status = "ambient occlusion " + std::to_string(static_cast<int>(aurora_get_ambient_occlusion() * 100.0f + 0.5f)) + "%";
 #endif
+#ifdef AURORA_HAS_INK_OUTLINES
+        } else if (cmd == "ink") {
+            aurora_set_ink_outlines(std::atoi(arg.c_str()));
+            g_status = "ink outlines " + std::to_string(aurora_get_ink_outlines());
+#endif
         } else if (cmd == "freecam") {
             SetFreecam(arg == "on");
         } else if (cmd == "cam") {
@@ -1694,14 +1700,15 @@ void DrawStatus() {
 #ifdef AURORA_HAS_SCENE_STAGE
     {
         // Where the solid scene ends in each frame (effects on the solid scene, such as ambient occlusion, run there).
-        static const char* const kStageViews[] = {"Off", "Tint", "Depth", "Occlusion"};
+        static const char* const kStageViews[] = {"Off", "Tint", "Depth", "Occlusion", "Outlines"};
         int stage = aurora_get_scene_stage_view();
         ImGui::SetNextItemWidth(OverlayTheme::Px(160.0f));
-        if (ImGui::Combo("Scene stage view", &stage, kStageViews, 4)) aurora_set_scene_stage_view(stage);
+        if (ImGui::Combo("Scene stage view", &stage, kStageViews, 5)) aurora_set_scene_stage_view(stage);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Tint: everything drawn before the scene stage turns blue; fog, particles, glow and the HUD\n"
                               "drawn after it keep their colour. Depth: the solid scene's distance (near = white).\n"
-                              "Occlusion: the ambient occlusion alone (white = none), at full strength.");
+                              "Occlusion: the ambient occlusion alone (white = none), at full strength.\n"
+                              "Outlines: the ink outlines alone (Bold when they are off).");
     }
 #endif
 #ifdef AURORA_HAS_MOTION_VECTORS

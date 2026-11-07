@@ -1380,6 +1380,26 @@ void DrawVideoSettings() {
         Hint("Soft shade where surfaces meet: in corners, creases and under things.");
     }
 #endif
+#ifdef AURORA_HAS_INK_OUTLINES
+    {
+        const int level = std::clamp(RuntimeConfigFile::InkOutlines(), 0, 2);
+        RowLabel("Ink outlines", labelWidth, controlWidth);
+        if (ImGui::BeginCombo("##inkoutlines", RuntimeConfigFile::kInkOutlineLevels[level])) {
+            for (int i = 0; i < 3; ++i) {
+                const bool selected = i == level;
+                if (ImGui::Selectable(RuntimeConfigFile::kInkOutlineLevels[i], selected) && !selected) {
+                    aurora_set_ink_outlines(i);
+                    RuntimeConfigFile::SetInkOutlines(i);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        Hint("Cartoon lines around characters and objects. Bold also draws sharp edges inside them.");
+    }
+#endif
 
     SectionTitle("Smoothness");
     constexpr std::array<const char*, 3> kFrameInterpolationModes{
