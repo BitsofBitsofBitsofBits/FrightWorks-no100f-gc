@@ -1050,6 +1050,17 @@ bool motion_camera_cut(HashType viewport) noexcept {
   return delta != nullptr && delta->cut;
 }
 
+// Where a one-matrix draw would have been last frame if it stood still in the world (camera motion left out, see
+// above).
+Mat3x4<float> predicted_still(const FrameTransformSnapshot& current) noexcept {
+  Mat3x4<float> predicted = current.position;
+  if (const auto* delta = motion_camera_delta(current.viewportIdentity)) {
+    const Affine p = affine_mul(delta->inverse, to_affine(current.position));
+    std::memcpy(&predicted, p.data(), sizeof(predicted));
+  }
+  return predicted;
+}
+
 // Last frame's partner for a motion draw from one identity group, skipping claimed entries: a skinned draw takes
 // its own occurrence in the group (else the first free one) with a palette, a one-matrix draw the free one nearest
 // to where it would be if it stood still (camera motion left out, see above). SIZE_MAX if none.
@@ -1073,11 +1084,7 @@ size_t pick_motion_partner(const std::vector<size_t>& candidates, size_t ordinal
     }
     return SIZE_MAX;
   }
-  Mat3x4<float> predicted = current.position;
-  if (const auto* delta = motion_camera_delta(current.viewportIdentity)) {
-    const Affine p = affine_mul(delta->inverse, to_affine(current.position));
-    std::memcpy(&predicted, p.data(), sizeof(predicted));
-  }
+  const Mat3x4<float> predicted = predicted_still(current);
   size_t best = SIZE_MAX;
   float bestDistance = kMaximumTranslationPerFrame * kMaximumTranslationPerFrame;
   for (const size_t index : candidates) {
@@ -1118,7 +1125,8 @@ void write_motion_still(const PendingMotionUniform& task, const FrameTransformSn
   }
 }
 
-// Pairs one motion draw: its exact identity group, then the stable one, then the motion-only one. Claims the partner.
+// Pairs one motion draw: its exact identity group, then the stable one, then the motion-only one. A one-matrix draw
+// with an exact match takes the nearer of it and the nearest copy in the stable group. Claims the partner.
 size_t pair_motion_draw(size_t currentIndex, bool indexed) noexcept {
   const auto& entry = s_currentFrameTransforms[currentIndex];
   const auto search = [&](const auto& currentGroups, const auto& previousGroups, HashType key) {
@@ -1136,6 +1144,20 @@ size_t pair_motion_draw(size_t currentIndex, bool indexed) noexcept {
   size_t best = search(s_currentTransformIndices, s_previousTransformIndices, entry.identity.combined);
   if (best == SIZE_MAX) {
     best = search(s_currentStableTransformIndices, s_previousStableTransformIndices, stable_identity(entry.identity));
+  } else if (!indexed) {
+    // The exact identity hashes the positions, so a mesh the game animates on the CPU (the f001 fish paste: six barrels
+    // of it, out of step) gets a new one every frame, and it can equal last frame's shape of another copy of the mesh:
+    // the exact match is then a different copy (51 to 68 units away in f001), and the draw flashed full motion. For
+    // one-matrix draws the nearest copy of the mesh wins; for a mesh that is not animated that is the exact match.
+    const size_t nearest =
+        search(s_currentStableTransformIndices, s_previousStableTransformIndices, stable_identity(entry.identity));
+    if (nearest != SIZE_MAX && nearest != best) {
+      const auto predicted = predicted_still(entry.transform);
+      if (translation_delta_squared(s_previousFrameTransforms[nearest].transform.position, predicted) <
+          translation_delta_squared(s_previousFrameTransforms[best].transform.position, predicted)) {
+        best = nearest;
+      }
+    }
   }
   if (best == SIZE_MAX) {
     if (const auto it = s_previousMotionTransformIndices.find(motion_identity(entry.identity));
@@ -1811,8 +1833,9 @@ uint32_t interpolated_frame_count() noexcept {
 
 // Motion vectors for draws whose uniforms are uploaded before the frame seals (a mid-frame split: the game reads
 // the EFB back, or staging ran full). The prefix renders now, so its draws are paired now, with a simpler rule than
-// the seal's global matcher: the exact identity group first, then the stable one; one-matrix draws take the
-// nearest unclaimed translation, skinned draws the same occurrence (else the first unclaimed) with a palette.
+// the seal's global matcher: pair_motion_draw for every draw. One-matrix draws take the nearest unclaimed translation
+// (of the exact group and the stable one, when there is an exact match), skinned draws the same occurrence (else the
+// first unclaimed) with a palette, from the exact group first, then the stable one.
 void resolve_pending_motion_uniforms_early() noexcept {
   if (s_pendingMotionUniforms.empty()) {
     return;
@@ -1941,18 +1964,26 @@ void record_motion_vertex_history(size_t currentTransformIndex, const FrameInter
   if (layout.posArraySize == 0 || layout.posArraySize > kMaximumPosHistoryBytes) {
     return;
   }
-  const auto exactPrevious = s_previousTransformIndices.find(identity.combined);
-  const bool changed = exactPrevious == s_previousTransformIndices.end() || exactPrevious->second.empty();
   const auto stablePrevious = s_previousStableTransformIndices.find(stableIdentity);
-  if (!changed || stablePrevious == s_previousStableTransformIndices.end() || stablePrevious->second.empty()) {
-    return; // unchanged positions (no history needed) or a mesh last frame did not draw
+  if (stablePrevious == s_previousStableTransformIndices.end() || stablePrevious->second.empty()) {
+    return; // a mesh last frame did not draw
   }
-  // This draw's occurrence among this frame's draws of the same mesh (it was just added).
+  // This draw's occurrence among this frame's draws of the same mesh (it was just added), and its own draw last frame.
   const auto& currentGroup = s_currentStableTransformIndices[stableIdentity];
   const size_t ordinal = currentGroup.empty() ? 0 : currentGroup.size() - 1;
   const auto& candidates = stablePrevious->second;
-  if (ordinal < candidates.size()) {
-    const auto& previous = s_previousFrameTransforms[candidates[ordinal]];
+  const size_t own = ordinal < candidates.size() ? candidates[ordinal] : SIZE_MAX;
+  // Its positions are unchanged when its own draw last frame had the same exact identity. Any draw with that identity
+  // is not enough: copies of a mesh the game animates on the CPU, out of step, match each other's last-frame shape
+  // (the f001 fish paste), and the moving paste got no motion.
+  const auto exactPrevious = s_previousTransformIndices.find(identity.combined);
+  if (exactPrevious != s_previousTransformIndices.end() && !exactPrevious->second.empty() &&
+      (own == SIZE_MAX ||
+       std::find(exactPrevious->second.begin(), exactPrevious->second.end(), own) != exactPrevious->second.end())) {
+    return; // unchanged positions: no history needed
+  }
+  if (own != SIZE_MAX) {
+    const auto& previous = s_previousFrameTransforms[own];
     if (previous.posHistory && previous.posHistory->size() == layout.posArraySize) {
       const auto range = gfx::push_storage(previous.posHistory->data(), previous.posHistory->size());
       const std::array<uint32_t, 2> prevPos{static_cast<uint32_t>(range.offset), 1u};

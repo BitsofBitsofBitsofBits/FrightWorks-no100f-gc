@@ -726,6 +726,59 @@ void settle_stage_frame(StageScene scene) {
   draw_stage_frame(scene);
 }
 
+// Two copies of a mesh the game animates on the CPU (like the f001 fish paste), one step out of phase: each frame both
+// rewrite their positions (indexed, from their own arrays), copy 1 at x = -2 with its quad raised `step` x 0.5 units,
+// copy 2 at x = +2 a step further. In the next frame copy 1 has the shape copy 2 had: same positions, same identity.
+void draw_animated_copies(int step) {
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Animated copies frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+                                              .color = {0.f, 0.f, 0.f, 1.f},
+                                              .depth = gx::clear_depth_value()});
+  alignas(32) static std::array<uint8_t, 32768> fifo;
+  GXInit(fifo.data(), fifo.size());
+  gx::g_gxState.viewportPolicy = AURORA_VIEWPORT_NATIVE;
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetScissor(0, 0, 64, 64);
+  GXSetCullMode(GX_CULL_NONE);
+  GXSetColorUpdate(true);
+  GXSetAlphaUpdate(true);
+  GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_COPY);
+  GXSetZMode(true, GX_LEQUAL, true);
+  GXSetNumTexGens(0);
+  GXSetNumChans(1);
+  GXSetNumTevStages(1);
+  GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+  GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+  GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+  const float projection[]{0.f, 1.f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+  GXSetProjectionv(projection);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+  GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+  // Each copy's own array, rewritten every frame (aligned like the game's).
+  alignas(32) static std::array<std::array<float, 3>, 4> arrays[2];
+  constexpr float z = -4.f;
+  for (int copy = 0; copy < 2; ++copy) {
+    const float raise = static_cast<float>(step + copy) * .5f;
+    arrays[copy] = {{{-.8f, raise + .8f, z}, {.8f, raise + .8f, z}, {.8f, raise - .8f, z}, {-.8f, raise - .8f, z}}};
+    const float position[3][4]{{1.f, 0.f, 0.f, copy == 0 ? -2.f : 2.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+    GXLoadPosMtxImm(position, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXSetArray(GX_VA_POS, arrays[copy].data(), sizeof(arrays[copy]), sizeof(arrays[copy][0]), true);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (u8 index = 0; index < 4; ++index) {
+      GXPosition1x8(index);
+      GXColor4u8(255, 255, 255, 255);
+    }
+    GXEnd();
+  }
+  gx::fifo::drain();
+  submit(true, false, false, true);
+}
+
 void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
   const auto actual = read_motion(x, y);
   if (std::fabs(actual[0] - expected[0]) > 0.25f || std::fabs(actual[1] - expected[1]) > 0.25f) {
@@ -786,6 +839,24 @@ int main(int argc, char** argv) {
     draw_motion_frame(.25f);
     check_motion(36, 32, {-8.f, 0.f}, "moved");
     check_motion(4, 32, {0.f, 0.f}, "background");
+    // Copies of a CPU-animated mesh, out of phase: copy 1 now has the shape copy 2 had last frame. It pairs with its
+    // own draw, not copy 2's (which would read a 32-pixel jump), and gets its vertices' own motion: up 0.5 units, 4
+    // pixels.
+    for (int step = 0; step < 4; ++step)
+      draw_animated_copies(step); // pipelines built, history recorded
+    {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      while (gfx::queued_pipeline_count() != 0) {
+        require(std::chrono::steady_clock::now() < deadline, "Animated copies pipelines were not built");
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    draw_animated_copies(4);
+    draw_animated_copies(5);
+    // Copy 1 at x = -2 (NDC -0.5: column 16), raised 2.5 units (NDC 0.625: row 12).
+    check_motion(16, 12, {0.f, 4.f}, "animated copy");
+    std::printf("Actual Aurora motion vectors: a CPU-animated copy out of phase with another keeps its own motion\n");
     // A camera cut: when the whole picture moves more than a camera can in one frame (here 2.4 units, over the
     // 2-unit limit), the frame has no motion; 1 unit is still motion.
     settle_motion_pipelines(false, true);

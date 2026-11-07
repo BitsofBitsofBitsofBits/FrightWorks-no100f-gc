@@ -157,6 +157,7 @@ With only those two targets built, CTest also lists an `os_alloc_tests_NOT_BUILT
 Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_TESTS=ON`), a ROM-free test of
 actual GPU pixels.
 It starts with the motion vectors: none while nothing asks for them, zero for a still quad, the expected 8 pixels for one moved by its matrix, and the targets freed again when they are no longer wanted.
+Two copies of a mesh animated on the CPU, one step out of phase (each frame one has the shape the other had), each keep their own motion: neither pairs with the other copy.
 It then checks that a motion setting change resolves the pipeline again with no GX state written, that an alpha-blended surface owns its depth only where the GPU has `float32-blendable`, and that the blurred picture can be copied for a screenshot.
 Then the scene stage: with its tint view, a solid quad is tinted and a see-through world quad drawn after it is not; its depth view shows the solid quad's distance; with the view off nothing changes.
 Then ambient occlusion: a wall standing on a floor darkens just above the crease, the wall high up and the open floor don't shade themselves, and applied it darkens only the crease; turned off, its targets are freed.
