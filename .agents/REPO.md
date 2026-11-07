@@ -89,10 +89,14 @@ The goal is a clean remaster, not matching Dolphin: Dolphin and the disc's data 
 
 **Never commit**
 - A disc image, `Disc/`, or anything extracted or dumped from the game.
+- Saves or local builds.
 - The HD pack.
   A pack texture that needs fixing is edited by a script on every build (`tools/hd-pack-fixes.py`), with no pack image data in git.
   The Creeper frames in `tools/hd-pack-additions` are the only exception.
 - Root `AGENTS.md` or `CLAUDE.md`, logs, recordings, or personal paths.
+- One-off scripts and their output: they stay in the git-ignored `autotest/` folder.
+  Only curated tools go in the debug kit, with no game data, logs, recordings or personal paths.
+  Check `tools/debug/README.md` before adding a new tool.
 
 **Docs**
 - README is for players and builders only.
@@ -100,6 +104,8 @@ The goal is a clean remaster, not matching Dolphin: Dolphin and the disc's data 
 - Build tips go in `docs/testing.md` (keep it in step when tools change).
 - Player-visible fixes go in release notes.
 - A new F10 video setting with a lasting effect belongs in the launcher too.
+
+**No bypassing security warnings:** do not bypass antivirus or OS warnings, add exclusions or restore quarantined files.
 
 **No telemetry anywhere:** builds, tools, launcher, game, dependencies.
 Check new dependencies for it.
@@ -127,8 +133,8 @@ Test code without launching the game where that can work.
 
 The commands for the runtime tests (CTest) and the launcher layout tests are in `docs/testing.md`.
 The Translator tests are the xUnit project `wiicompiled/translator/tests/Translator.Tests`.
-Aurora's tests are its standalone build in `wiicompiled/aurora-main/tests`: `gx_fifo_tests`, and `gx_readback_tests` (GPU pixels) with `-DAURORA_BUILD_GPU_TESTS=ON`; both register with CTest.
-Neither of these two has a documented command yet.
+Aurora's tests are its standalone build: `gx_fifo_tests`, and `gx_readback_tests` (GPU pixels) with `-DAURORA_BUILD_GPU_TESTS=ON`; both register with CTest.
+The Windows command is in `docs/testing.md`.
 Anything beyond the table needs a stated reason.
 
 **Not built yet:** the smoke test script, shared run slots (game runs take turns for now), the shared wait-until-playable routine (`texhunt\look.ps1` has its own), controller isolation for test runs and the full sweep before a release.
@@ -136,8 +142,13 @@ Until they exist, a smoke test means booting `h001` and the changed level with `
 Nothing runs these automatically, so the PR says what was run.
 
 **Habits**
+- A build passing, tests passing and a real game run are different evidence.
+  Say which one you have, and do not claim more.
+- A test program that is missing, not built, not registered with CTest, or that could not load is not a pass.
+  Report it as not run.
 - Show a bug on unmodified `main` first, then show it gone with your change.
 - For renderer changes also run the Aurora tests, and run the game once with `AURORA_GFX_FLAGS=validate`: it keeps Dawn's validation and logs its errors instead of aborting on them.
+- Renderer changes must preserve colour space, transparency, depth and capture behaviour.
 - Wait on log lines or files, not fixed sleeps, where you can.
 - Close only the test game.
   On Linux use `pkill -x "FrightWorks Gam"`: the process name is cut to 15 characters, and `pkill -f` with the game's name also kills the calling shell.
@@ -147,6 +158,8 @@ Nothing runs these automatically, so the PR says what was run.
   Use a worktree (it has its own `Play/`) or a separate test folder.
   A test folder has links or copies of `Play/`'s assets, its own `UserData/Config.toml` (windowed, MSAA off, muted) and a boot mod.
   Copy the freshly built game into it.
+- Give automated game runs a time limit.
+  Afterwards, check that only the right process closed.
 - Leave the user's setup as found: `manual-session` `prepare`/`start` save `Config.toml` and the `*.controller` files, `stop`/`restore` put them back.
 - Rumble off (`[controller] rumble = false`), always.
   The game's default is on, so check before any launch.

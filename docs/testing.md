@@ -138,6 +138,22 @@ ctest --test-dir wiicompiled\native-build --output-on-failure
 One test: `cmake --build wiicompiled\native-build --target <name>`, then run `wiicompiled\native-build\<name>.exe`.
 New pure logic (no SDL, no guest memory) belongs in a header with a test next to the existing ones.
 
+**Aurora tests (Windows).** They are Aurora's own build, configured from `wiicompiled/aurora-main` (not its `tests/` folder), and the game build doesn't make them.
+This command ran on Windows only. From the checkout root:
+
+```powershell
+cmake -S wiicompiled/aurora-main -B BUILDDIR -G Ninja -DCMAKE_BUILD_TYPE=Release -DAURORA_BUILD_GPU_TESTS=ON
+cmake --build BUILDDIR --parallel --target gx_fifo_tests gx_readback_tests
+# With a built Play folder and the toolchain CMake bin first on PATH, for this run only:
+ctest --test-dir BUILDDIR --output-on-failure --timeout 300
+```
+
+Configuring downloads googletest and Dawn.
+Add `-R gx_readback` to run the GPU test alone.
+Without `Play` on PATH, `gx_readback_tests` stops with a Windows "SDL3.dll not found" dialog.
+With only those two targets built, CTest also lists an `os_alloc_tests_NOT_BUILT` entry: it is a placeholder, and it counts as not run.
+
+
 Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_TESTS=ON`), a ROM-free test of
 actual GPU pixels. Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
