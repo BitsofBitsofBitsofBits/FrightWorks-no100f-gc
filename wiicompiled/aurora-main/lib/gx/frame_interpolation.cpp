@@ -1,4 +1,4 @@
-﻿#include "frame_interpolation.hpp"
+#include "frame_interpolation.hpp"
 
 #include "../internal.hpp"
 #include "aurora/gfx.h"
@@ -22,6 +22,10 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+namespace aurora {
+extern std::atomic<uint64_t> g_presentScheduleBaseNanos; // aurora.cpp
+} // namespace aurora
 
 namespace aurora::gx {
 namespace detail {
@@ -1188,7 +1192,47 @@ void write_motion_partner(const PendingMotionUniform& task, const FrameTransform
   }
 }
 
+// The most a paired draw may move, per second of game time (world units). Pairing by mesh alone gave any leftover copy
+// any other as a partner: when one Scooby snack stops being drawn and another starts in the same frame, the in-between
+// frames drew a snack in mid-air between the two, 17 and 22 units from either (i001). Measured with the camera left out,
+// at 60 Hz, walking in e001 and i004 and standing in i001: real motion peaks at 0.54 units a frame (32 a second, a
+// collected snack flying up). Half of this game's pickups have a neighbour within 2 units, so this is kept low. Refusing
+// a real pair costs little: the draw shows its end position in the in-between frames.
+constexpr float kMaximumDrawSpeed = 60.0f;
+// The step when the game gives no present schedule: one retrace.
+constexpr float kDefaultFrameStepSeconds = 1.0f / 60.0f;
+// Anchor of the last sealed frame's schedule, for the time this frame covers. The game steps by measured time, and
+// with fps60 off it presents every second retrace, so a real move in one frame is twice as long.
+uint64_t s_lastSealedAnchorNanos = 0;
+
+// The time this frame covers, from the anchors of the present schedule.
+float seal_frame_step_seconds() noexcept {
+  const uint64_t anchor = g_presentScheduleBaseNanos.load(std::memory_order_acquire);
+  const uint64_t last = s_lastSealedAnchorNanos;
+  s_lastSealedAnchorNanos = anchor;
+  return last != 0 && anchor > last ? static_cast<float>(anchor - last) * 1.0e-9f : kDefaultFrameStepSeconds;
+}
+
+// Whether a one-matrix draw can be last frame's draw: it moved no further than maximumMove, either with the camera
+// (attached to it, like Scooby under a following camera: still in view space) or in the world (the camera left out).
+// A viewport with no camera estimate gets no verdict: nothing tells a moving camera from moving draws there.
+bool pair_move_plausible(const Mat3x4<float>& previous, const FrameTransformSnapshot& current,
+                         float maximumMoveSquared) noexcept {
+  if (translation_delta_squared(previous, current.position) <= maximumMoveSquared) {
+    return true;
+  }
+  const auto* delta = motion_camera_delta(current.viewportIdentity);
+  if (delta == nullptr) {
+    return true;
+  }
+  return translation_delta_squared(previous, predicted_still(current)) <= maximumMoveSquared;
+}
+
 void finalize_frame_interpolation() noexcept {
+  // Interpolation never pauses on match quality: an unmatched draw just renders its
+  // end-frame state, while a ratio gate flapped the whole output cadence instead.
+  const bool eligible = frame_interpolation_fps() != 0;
+  const float frameStepSeconds = eligible ? seal_frame_step_seconds() : kDefaultFrameStepSeconds;
   // A frame reported late seals without inserted slots, so the encode phase renders
   // the native frame only. Its transforms still seed the next frame's matching.
   if (s_dropInterpolationAtSeal.exchange(false, std::memory_order_acq_rel)) {
@@ -1255,6 +1299,20 @@ void finalize_frame_interpolation() noexcept {
            static_cast<uint64_t>(cz);
   };
 
+  // The camera's change, for the move check below and for motion vectors. Neither runs with both off.
+  if (eligible || !s_pendingMotionUniforms.empty()) {
+    estimate_motion_camera_deltas();
+  }
+  const float maximumDrawMove = kMaximumDrawSpeed * frameStepSeconds;
+  // Checked where pairs are made, so a refused pair leaves both draws free for a real partner, in this group or the
+  // stable one. Skinned draws have no one translation, and only interpolation needs the check.
+  const auto movePlausible = [&](size_t previousIndex, size_t currentIndex) noexcept {
+    const auto& previous = s_previousFrameTransforms[previousIndex].transform;
+    const auto& current = s_currentFrameTransforms[currentIndex].transform;
+    return !eligible || previous.indexedMatrices || current.indexedMatrices ||
+           pair_move_plausible(previous.position, current, maximumDrawMove * maximumDrawMove);
+  };
+
   const auto matchGroups =
       [&](const auto& currentGroups, const auto& previousGroups,
           bool allowOrderedFallback) {
@@ -1282,9 +1340,12 @@ void finalize_frame_interpolation() noexcept {
         continue;
       }
 
-      // A unique draw has no identity ambiguity. Keep the conservative
-      // interpolation fallback for malformed/non-finite matrices.
+      // One draw on each side still needs the move check: they can be two copies of a mesh, one leaving and one
+      // entering. Keep the conservative interpolation fallback for malformed/non-finite matrices.
       if (groupPreviousIndices.size() == 1 && groupCurrentIndices.size() == 1) {
+        if (!movePlausible(groupPreviousIndices.front(), groupCurrentIndices.front())) {
+          continue;
+        }
         currentToPrevious[groupCurrentIndices.front()] = groupPreviousIndices.front();
         previousMatched[groupPreviousIndices.front()] = 1;
         currentMatched[groupCurrentIndices.front()] = 1;
@@ -1300,6 +1361,9 @@ void finalize_frame_interpolation() noexcept {
             !(translation_delta_squared(previousEntry.transform.position,
                                         currentSnapshot.position) <=
               kMaximumTranslationPerFrame * kMaximumTranslationPerFrame)) {
+          return;
+        }
+        if (!movePlausible(previousIndex, currentIndex)) {
           return;
         }
         const float distance = snapshot_match_distance_squared(previousEntry, currentSnapshot);
@@ -1329,6 +1393,9 @@ void finalize_frame_interpolation() noexcept {
               !(translation_delta_squared(previousEntry.transform.position,
                                           currentEntry.transform.position) <=
                 kMaximumTranslationPerFrame * kMaximumTranslationPerFrame)) {
+            continue;
+          }
+          if (!movePlausible(groupPreviousIndices[i], groupCurrentIndices[i])) {
             continue;
           }
           currentToPrevious[groupCurrentIndices[i]] = groupPreviousIndices[i];
@@ -1445,10 +1512,6 @@ void finalize_frame_interpolation() noexcept {
   s_perspectiveMatches = static_cast<uint32_t>(std::count_if(
       currentToPrevious.begin(), currentToPrevious.end(),
       [](size_t previousIndex) { return previousIndex != SIZE_MAX; }));
-  // Interpolation never pauses on match quality: an unmatched draw just renders its
-  // end-frame state, while a ratio gate flapped the whole output cadence instead.
-  const bool eligible = frame_interpolation_fps() != 0;
-
   // Overlay observability: the live match ratio, and how often the scene sits in
   // low-match territory where inserted slots mostly duplicate draws.
   {
@@ -1727,9 +1790,6 @@ void finalize_frame_interpolation() noexcept {
     // with no partner keeps this frame's matrices: no motion. Before the interpolated copies below are made (they copy
     // the whole block), so an interpolated frame's motion also reaches back to last frame, and the HUD is flagged in
     // them too.
-    if (!s_pendingMotionUniforms.empty()) {
-      estimate_motion_camera_deltas();
-    }
     for (const auto& task : s_pendingMotionUniforms) {
       if (task.currentTransformIndex >= s_currentFrameTransforms.size()) {
         continue;

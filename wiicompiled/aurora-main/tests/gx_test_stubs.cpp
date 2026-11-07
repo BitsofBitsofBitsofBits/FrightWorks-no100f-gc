@@ -69,6 +69,10 @@ auto fmt::formatter<AuroraLogLevel>::format(AuroraLogLevel level, format_context
   return fmt::format_to(ctx.out(), "{}", static_cast<int>(level));
 }
 
+namespace aurora {
+std::atomic<uint64_t> g_presentScheduleBaseNanos{0};
+} // namespace aurora
+
 // --- GPU buffers (default-constructed, not used in tests) ---
 namespace aurora::gfx {
 AuroraStats g_stats;

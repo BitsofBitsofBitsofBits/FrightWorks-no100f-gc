@@ -480,6 +480,189 @@ TEST(FrameInterpolationContract, IndexedPaletteHistoryKeepsAbsoluteVertexSlots) 
   aurora::gfx::testing::reset_uniform_allocations();
 }
 
+namespace aurora {
+extern std::atomic<uint64_t> g_presentScheduleBaseNanos;
+} // namespace aurora
+
+namespace {
+// Records whole frames of one-matrix draws and reads back what their in-between frame shows.
+class InterpolationPairing {
+public:
+  static constexpr size_t positionOffset = sizeof(aurora::Mat4x4<float>);
+  static constexpr size_t normalOffset = positionOffset + aurora::gx::MaxPnMtx * sizeof(aurora::Mat3x4<float>);
+  static constexpr size_t uniformSize = normalOffset + aurora::gx::MaxPnMtx * sizeof(aurora::Mat3x4<float>);
+  struct Draw {
+    aurora::HashType combined = 0;
+    aurora::HashType pipeline = 0;
+    aurora::Mat3x4<float> position{};
+  };
+
+  InterpolationPairing() {
+    aurora::gx::set_frame_interpolation_fps(0);
+    aurora::gx::begin_frame_interpolation();
+    aurora::gx::set_frame_interpolation_fps(120);
+    aurora::g_presentScheduleBaseNanos.store(0);
+    aurora::gx::g_gxState.currentPnMtx = 0;
+  }
+  ~InterpolationPairing() {
+    aurora::gx::set_frame_interpolation_fps(0);
+    aurora::gx::begin_frame_interpolation();
+    aurora::gfx::testing::reset_uniform_allocations();
+    aurora::g_presentScheduleBaseNanos.store(0);
+  }
+
+  static aurora::Mat3x4<float> at(float x, float y, float z) {
+    return {{1.0f, 0.0f, 0.0f, x}, {0.0f, 1.0f, 0.0f, y}, {0.0f, 0.0f, 1.0f, z}};
+  }
+
+  // The translation each draw's in-between frame shows; the frame's own if it got no copy.
+  std::vector<std::array<float, 3>> frame(const std::vector<Draw>& draws, uint64_t anchorNanos = 0) {
+    aurora::gfx::testing::reset_uniform_allocations();
+    aurora::g_presentScheduleBaseNanos.store(anchorNanos);
+    std::vector<std::array<uint8_t, uniformSize>> sources(draws.size());
+    std::vector<aurora::gfx::Range> ranges(draws.size());
+    aurora::gx::begin_frame_interpolation();
+    for (size_t i = 0; i < draws.size(); ++i) {
+      aurora::gx::g_gxState.pnMtx[0].pos = draws[i].position;
+      aurora::gx::g_gxState.pnMtx[0].nrm = at(0.0f, 0.0f, 0.0f);
+      sources[i].fill(0);
+      std::memcpy(sources[i].data() + positionOffset, &draws[i].position, sizeof(draws[i].position));
+      const aurora::gx::FrameInterpolationDrawIdentity identity{
+          .combined = draws[i].combined,
+          .pipeline = draws[i].pipeline,
+          .texture = 1,
+      };
+      ranges[i] = aurora::gx::record_interpolation_draw(identity, aurora::Mat4x4<float>{}, 1,
+                                                        aurora::gx::InterpolatedUniformLayout{
+                                                            .sourceUniformData = sources[i].data(),
+                                                            .uniformSize = uniformSize,
+                                                            .positionOffset = positionOffset,
+                                                            .normalOffset = normalOffset,
+                                                            .currentMatrix = 0,
+                                                        })[0];
+    }
+    aurora::gx::finalize_frame_interpolation();
+    std::vector<std::array<float, 3>> shown;
+    for (size_t i = 0; i < draws.size(); ++i) {
+      aurora::Mat3x4<float> matrix = draws[i].position;
+      if (ranges[i].size != 0) {
+        std::memcpy(static_cast<void*>(&matrix),
+                    aurora::gfx::testing::uniform_allocation(ranges[i].offset).data() + positionOffset,
+                    sizeof(matrix));
+      }
+      shown.push_back({matrix.m0.w(), matrix.m1.w(), matrix.m2.w()});
+    }
+    return shown;
+  }
+
+  // Four unique world pieces sharing the camera's matrix: what the camera estimate reads.
+  static std::vector<Draw> world(const aurora::Mat3x4<float>& view) {
+    std::vector<Draw> draws;
+    for (aurora::HashType i = 0; i < 4; ++i) {
+      draws.push_back({.combined = 100 + i, .pipeline = 100 + i, .position = view});
+    }
+    return draws;
+  }
+};
+constexpr aurora::HashType kCopy = 7; // copies of one mesh: same identity
+constexpr aurora::HashType kOther = 8;
+
+void expect_translation(const std::array<float, 3>& shown, float x, float y, float z) {
+  EXPECT_NEAR(shown[0], x, 1e-3f);
+  EXPECT_NEAR(shown[1], y, 1e-3f);
+  EXPECT_NEAR(shown[2], z, 1e-3f);
+}
+} // namespace
+
+// One copy of a mesh stops being drawn and another starts in the same frame (Scooby snacks in i001, 17 units apart):
+// the in-between frame showed a copy halfway between them, where nothing is.
+TEST(FrameInterpolationContract, CopyLeavingAndCopyEnteringDoNotPair) {
+  InterpolationPairing test;
+  const auto view = InterpolationPairing::at(0.0f, 0.0f, 0.0f);
+  auto previous = InterpolationPairing::world(view);
+  auto current = previous;
+  const size_t copy = previous.size();
+  previous.push_back({kCopy, kCopy, InterpolationPairing::at(10.0f, 0.0f, -20.0f)});
+  current.push_back({kCopy, kCopy, InterpolationPairing::at(-10.0f, 5.0f, -30.0f)});
+  test.frame(previous);
+  expect_translation(test.frame(current)[copy], -10.0f, 5.0f, -30.0f);
+
+  // The same with other copies staying, so it reaches the nearest match and not the one-on-one path.
+  auto previousMany = InterpolationPairing::world(view);
+  auto currentMany = previousMany;
+  previousMany.push_back({kCopy, kCopy, InterpolationPairing::at(1.0f, 0.0f, -5.0f)});
+  currentMany.push_back({kCopy, kCopy, InterpolationPairing::at(1.0f, 0.0f, -5.0f)});
+  previousMany.push_back({kCopy, kCopy, InterpolationPairing::at(10.0f, 0.0f, -20.0f)});
+  currentMany.push_back({kCopy, kCopy, InterpolationPairing::at(-10.0f, 5.0f, -30.0f)});
+  test.frame(previousMany);
+  const auto shown = test.frame(currentMany);
+  expect_translation(shown[copy], 1.0f, 0.0f, -5.0f);
+  expect_translation(shown[copy + 1], -10.0f, 5.0f, -30.0f);
+}
+
+// A refused pair must not take a partner from a real one: the exact identity names a far copy (a CPU-animated mesh whose
+// shape equals another copy's last frame), and the draw's own previous self, under another exact identity, is near.
+TEST(FrameInterpolationContract, RefusedExactMatchLeavesTheDrawFreeForItsOwnPartner) {
+  InterpolationPairing test;
+  const auto view = InterpolationPairing::at(0.0f, 0.0f, 0.0f);
+  auto previous = InterpolationPairing::world(view);
+  auto current = previous;
+  const size_t draw = current.size();
+  previous.push_back({kCopy, kOther, InterpolationPairing::at(40.0f, 0.0f, -20.0f)}); // same shape, far away
+  previous.push_back({kCopy + 1, kOther, InterpolationPairing::at(2.0f, 0.0f, -5.0f)}); // its own last frame
+  current.push_back({kCopy, kOther, InterpolationPairing::at(2.5f, 0.0f, -5.0f)});
+  test.frame(previous);
+  expect_translation(test.frame(current)[draw], 2.25f, 0.0f, -5.0f);
+}
+
+// Real motion keeps interpolating, up to the speed limit, and the limit follows the frame's real step: with fps60 off
+// the game presents every second retrace and a real move in one frame is twice as long.
+TEST(FrameInterpolationContract, RealMotionInterpolatesAtTheFramesRealStep) {
+  constexpr uint64_t kRetraceNanos = 16'666'667;
+  const auto move = [](float distance, uint64_t step) {
+    InterpolationPairing test;
+    const auto view = InterpolationPairing::at(0.0f, 0.0f, 0.0f);
+    auto first = InterpolationPairing::world(view);
+    auto second = first;
+    first.push_back({kCopy, kCopy, InterpolationPairing::at(1.0f, 0.0f, -5.0f)});
+    second.push_back({kCopy, kCopy, InterpolationPairing::at(1.0f + distance, 0.0f, -5.0f)});
+    constexpr uint64_t kStart = 1'000'000'000;
+    test.frame(first, kStart);
+    return test.frame(second, kStart + step)[first.size() - 1][0];
+  };
+  EXPECT_NEAR(move(0.54f, kRetraceNanos), 1.27f, 1e-3f);        // a collected snack, fps60 on: midpoint
+  EXPECT_NEAR(move(1.5f, kRetraceNanos), 2.5f, 1e-3f);          // too far for one retrace: its end position
+  EXPECT_NEAR(move(1.08f, 2 * kRetraceNanos), 1.54f, 1e-3f);    // the same snack, fps60 off: midpoint
+  EXPECT_NEAR(move(1.5f, 2 * kRetraceNanos), 1.75f, 1e-3f);     // fine for two retraces
+  EXPECT_NEAR(move(3.0f, 2 * kRetraceNanos), 4.0f, 1e-3f);      // too far for two
+}
+
+// The check leaves the camera's motion out: everything standing in the world moves together in view space, however far.
+TEST(FrameInterpolationContract, CameraMotionIsNotDrawMotion) {
+  InterpolationPairing test;
+  const auto viewBefore = InterpolationPairing::at(10.0f, 0.0f, 0.0f);
+  const auto viewAfter = InterpolationPairing::at(13.0f, 0.0f, 0.0f); // the camera moved 3 units
+  auto previous = InterpolationPairing::world(viewBefore);
+  auto current = InterpolationPairing::world(viewAfter);
+  const size_t copy = previous.size();
+  previous.push_back({kCopy, kCopy, InterpolationPairing::at(21.0f, 0.0f, -5.0f)});
+  current.push_back({kCopy, kCopy, InterpolationPairing::at(24.0f, 0.0f, -5.0f)});
+  // Attached to the camera, like Scooby under a following camera: still in view space, not in the world.
+  previous.push_back({kOther, kOther, InterpolationPairing::at(0.0f, -1.0f, -3.0f)});
+  current.push_back({kOther, kOther, InterpolationPairing::at(0.1f, -1.0f, -3.0f)});
+  test.frame(previous);
+  const auto shown = test.frame(current);
+  expect_translation(shown[copy], 22.5f, 0.0f, -5.0f);
+  expect_translation(shown[copy + 1], 0.05f, -1.0f, -3.0f);
+}
+
+// With no camera estimate nothing tells a moving camera from a moving draw, so the check gives no verdict.
+TEST(FrameInterpolationContract, NoCameraEstimateRefusesNothing) {
+  InterpolationPairing test;
+  test.frame({{kCopy, kCopy, InterpolationPairing::at(0.0f, 0.0f, -10.0f)}});
+  expect_translation(test.frame({{kCopy, kCopy, InterpolationPairing::at(20.0f, 0.0f, -10.0f)}})[0], 10.0f, 0.0f, -10.0f);
+}
+
 TEST(FrameInterpolationContract, RepeatedDrawsMatchByTransformInsteadOfDrawOrder) {
   const aurora::Mat3x4<float> left{
       {1.0f, 0.0f, 0.0f, -500.0f},
