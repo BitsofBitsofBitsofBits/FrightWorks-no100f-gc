@@ -1,10 +1,10 @@
-#include "hle/no100f_rainbow.h"
+#include "hle/no100f_confetti.h"
 
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
-using namespace No100fRainbow;
+using namespace No100fConfetti;
 
 static void Require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
@@ -59,7 +59,7 @@ int main() {
         for (uint32_t i = 0; i < 64; ++i) Require(!Same(Color(i), Color(i + 1)), "two neighbours have the same colour");
         Require(Same(Color(0xFFFFFFFFu), kColors[0xFFFFFFFFu % kColorCount]), "a large index does not wrap");
 
-        std::cout << "no100f_rainbow_tests passed\n";
+        std::cout << "no100f_confetti_tests passed\n";
         return 0;
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';

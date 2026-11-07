@@ -1,10 +1,10 @@
-// NO100F rainbow colours: plain maths with no game state, so any effect can use them.
+// NO100F confetti colours: plain maths with no game state, so any effect can use them.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 
-namespace No100fRainbow {
+namespace No100fConfetti {
 
 struct Rgb {
     uint8_t r, g, b;
@@ -30,4 +30,4 @@ inline constexpr Rgb Color(uint32_t index) {
     return kColors[index % kColorCount];
 }
 
-}  // namespace No100fRainbow
+}  // namespace No100fConfetti

@@ -12,7 +12,7 @@
 // per 30 Hz step: not in the frame right after it emitted, unless that frame was a full 30 Hz step (slowdown). Calls in
 // the same frame all emit, as at 30 fps. Without fps60 this is the original code.
 //
-// Rainbow fireworks ([game] holiday = "rainbow"): firework bursts come through here too (fn_800ADAC0), so this is also
+// Confetti fireworks ([game] holiday = "confetti"): firework bursts come through here too (fn_800ADAC0), so this is also
 // where each new burst particle gets its own colour. See ColorBurst.
 //
 // Native in full: an override's address is excluded from translation, so the original body cannot be called.
@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include "abi_bridge.h"
 #include "memory.h"
-#include "hle/no100f_rainbow.h"
+#include "hle/no100f_confetti.h"
 #include "hle_stubs.h"
 #include "ppc_runtime.h"
 #include "runtime_config.h"
@@ -60,11 +60,11 @@ bool EmitThisFrame(uint32_t emitter) {
     return true;
 }
 
-// The particle system of a firework burst emitter (PAREMIT_FIREWORKS1 and 2, asset IDs from boot.HIP) when rainbow
+// The particle system of a firework burst emitter (PAREMIT_FIREWORKS1 and 2, asset IDs from boot.HIP) when confetti
 // fireworks are on, else 0. The game uses these two emitters for nothing else.
-uint32_t RainbowBurstSystem(uint32_t emitter, uint32_t asset) {
-    static const bool rainbow = RuntimeConfigFile::Holiday() == "rainbow";
-    if (!rainbow) return 0;
+uint32_t ConfettiBurstSystem(uint32_t emitter, uint32_t asset) {
+    static const bool confetti = RuntimeConfigFile::Holiday() == "confetti";
+    if (!confetti) return 0;
     const uint32_t id = Memory::Read32(asset);
     if (id != 0xC85CDF1Cu && id != 0xC85CDF1Du) return 0;
     const uint32_t group = Memory::Read32(emitter + 0x48);
@@ -79,7 +79,7 @@ uint32_t RainbowBurstSystem(uint32_t emitter, uint32_t asset) {
 void ColorBurst(uint32_t system, uint32_t added) {
     uint32_t particle = Memory::Read32(system);
     for (uint32_t i = 0; i < added && particle != 0; ++i, particle = Memory::Read32(particle)) {
-        const No100fRainbow::Rgb color = No100fRainbow::Color(i);
+        const No100fConfetti::Rgb color = No100fConfetti::Color(i);
         Memory::Write8(particle + 0xC, color.r);
         Memory::Write8(particle + 0xD, color.g);
         Memory::Write8(particle + 0xE, color.b);
@@ -145,7 +145,7 @@ extern "C" void No100f_EmitWithOverrides(CpuContext* ctx) {
     }
     uint32_t result = 0;
     if (emit) {
-        const uint32_t burstSystem = RainbowBurstSystem(emitter, asset);
+        const uint32_t burstSystem = ConfettiBurstSystem(emitter, asset);
         const uint32_t countBefore = burstSystem != 0 ? Memory::Read32(burstSystem + 0x8) : 0;
         ctx->gpr[3] = emitter;
         ctx->fpr[1].d = dt;

@@ -542,7 +542,7 @@ sealed class MainWindow : Window
         body.Children.Add(Title("Holidays"));
         body.Children.Add(HolidayBox());
         body.Children.Add(Note("Outside Mystic Manor and in the playground, the game celebrates holidays on their real dates. " +
-                               "Pick one to see it any day, turn them off, or choose rainbow fireworks."));
+                               "Pick one to see it any day, turn them off, or choose confetti fireworks."));
 
         body.Children.Add(Title("Developer tools"));
         body.Children.Add(DevToolsBox());
@@ -808,11 +808,11 @@ sealed class MainWindow : Window
     }
 
     // The hubs' holiday events ([game] holiday): the game checks the date when a hub loads. "auto" uses today's date,
-    // "off" none, "rainbow" fireworks with every colour in each burst, "MM-DD" pretends it is that day.
+    // "off" none, "confetti" fireworks with the colours mixed through each burst, "MM-DD" pretends it is that day.
     static readonly (string text, string value)[] Holidays =
     {
         ("By today's date", "auto"), ("Off", "off"), ("New Year's Day", "01-01"), ("St. Patrick's Day", "03-17"),
-        ("Fourth of July", "07-04"), ("Halloween", "10-31"), ("Christmas", "12-25"), ("Rainbow fireworks", "rainbow"),
+        ("Fourth of July", "07-04"), ("Halloween", "10-31"), ("Christmas", "12-25"), ("Confetti fireworks", "confetti"),
     };
 
     Control HolidayBox()
