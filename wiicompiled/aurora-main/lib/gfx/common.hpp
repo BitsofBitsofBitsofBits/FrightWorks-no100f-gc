@@ -233,7 +233,9 @@ inline constexpr bool UseTextureBuffer = false;
 inline constexpr uint64_t UniformBufferSize = 25165824;  // 24mb
 inline constexpr uint64_t VertexBufferSize = 3145728;    // 3mb
 inline constexpr uint64_t IndexBufferSize = 2097152;     // 2mb
-inline constexpr uint64_t StorageBufferSize = 8388608;   // 8mb
+// Every indexed draw uploads its vertex-array span again, so the hubs need more than 8 MB a frame (h002 more than 16).
+// At 8 MB each frame split mid-way, which disabled interpolation replay for it (#131).
+inline constexpr uint64_t StorageBufferSize = 33554432;  // 32mb
 inline constexpr uint64_t TextureUploadSize = 25165824;  // 24mb
 
 extern AuroraStats g_stats;
