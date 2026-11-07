@@ -63,7 +63,7 @@ struct Params {
   std::array<float, 4> ao;       // radius, intensity, bias, strength
   std::array<float, 4> ao2;      // angle bias, near fade start, near fade end, unused
   std::array<float, 4> misc; // view mode, longest radius share of height (depth view: its distance), fade start, end
-  std::array<float, 4> ink;  // line width (EFB pixels), darkness, creases (0 or 1), fade start
+  std::array<float, 4> ink;  // line width (EFB pixels), darkness, unused, fade start
   std::array<float, 4> ink2; // fade end, unused
 };
 static_assert(sizeof(Params) == 256);
@@ -254,13 +254,10 @@ fn fs_ao_view(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 // Cartoon ink. A flat surface's inverse distance changes evenly across the picture (even seen at a grazing angle), so
 // a kink in it, along any of four directions, is a silhouette; only the nearer side inks, so the line sits on the
 // object. A pixel inks only when one side drops away, not both: in something thinner than two lines (grass, a stem, a
-// tail's tip) both do, and it keeps its colour instead of turning black. With creases on, a sharp turn of the surface
-// (more than about 60 degrees) inks too, against neighbours on the same surface only (no depth jump; the background
-// beside a silhouette does not ink): the game's low-poly models (tree crowns, hedges) turn less than that between
-// their polygons, so those stay clean.
+// tail's tip) both do, and it keeps its colour instead of turning black. Bold is the same test at a wider reach. It
+// does not ink creases: that tore up small and curved things.
 const INK_KINK_LOW = 0.06;
 const INK_KINK_HIGH = 0.18;
-const INK_CREASE_COS = 0.5;
 fn ink_at(p: vec2i) -> f32 {
     let c4 = view_pos(p);
     if (c4.w == 0.0) {
@@ -281,19 +278,6 @@ fn ink_at(p: vec2i) -> f32 {
         let kink = abs(inv_a + inv_b - 2.0 * inv_c) / inv_c;
         let one_side = (inv_a < inv_c * 0.98) != (inv_b < inv_c * 0.98);
         ink = max(ink, select(0.0, smoothstep(INK_KINK_LOW, INK_KINK_HIGH, kink), one_side));
-    }
-    if (params.ink.z > 0.5 && ink < 1.0) {
-        let n = normal_at(p, c);
-        for (var i = 0; i < 4; i++) {
-            let q = p + dirs[i] * r;
-            let q4 = view_pos(q);
-            let jump = abs(1.0 / abs(q4.z) - 1.0 / dist) * dist;
-            if (q4.w == 0.0 || jump > INK_KINK_LOW) {
-                continue;
-            }
-            let turn = 1.0 - smoothstep(INK_CREASE_COS, INK_CREASE_COS + 0.15, dot(n, normal_at(q, q4.xyz)));
-            ink = max(ink, turn);
-        }
     }
     return ink * (1.0 - smoothstep(params.ink.w, params.ink2.x, dist));
 }
@@ -559,7 +543,7 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
       .misc = {static_cast<float>(mode), mode == 2 ? kDepthViewDistance : kAoMaxRadiusOfHeight, kAoFadeStart,
                kAoFadeEnd},
       .ink = {std::max(1.f, static_cast<float>(size.height) * kInkWidthOfHeight[inkLevel - 1]),
-              kInkDarkness[inkLevel - 1], inkLevel == 2 ? 1.f : 0.f, kInkFadeStart},
+              kInkDarkness[inkLevel - 1], 0.f, kInkFadeStart},
       .ink2 = {kInkFadeEnd, 0.f, 0.f, 0.f},
   };
   g_queue.WriteBuffer(g_params, 0, &params, sizeof(params));

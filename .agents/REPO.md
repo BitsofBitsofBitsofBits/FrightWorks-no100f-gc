@@ -296,8 +296,8 @@ Never name a session `main`.
   Its tuning is at the top of `scene_stage.cpp`; the angle bias keeps the game's low-poly walls and rocks from darkening at every polygon edge.
   `ao PERCENT` in `devmenu.txt` sets it for one run without changing the setting.
   Its targets exist only while it is on or the occlusion view is showing, and are freed at the next frame.
-- Ink outlines (`[video] ink_outlines`: 0 off, 1 thin, 2 bold; F10 > Video > Picture and the launcher) run at the scene stage after the ambient occlusion, from the depth alone: a silhouette is a kink in the inverse depth (flat surfaces have none, even at grazing angles), inked on the nearer side only; Bold also inks sharp creases (over about 60 degrees) on one surface.
-  A pixel inks only when one side drops away, so things thinner than two lines (grass, stems, tails) keep their colour instead of turning black.
+- Ink outlines (`[video] ink_outlines`: 0 off, 1 thin, 2 bold; F10 > Video > Picture and the launcher) run at the scene stage after the ambient occlusion, from the depth alone: a silhouette is a kink in the inverse depth (flat surfaces have none, even at grazing angles), inked on the nearer side only; Bold is the same test with a wider line, with no creases (inking them tore up small and curved things).
+  A pixel inks only when one side drops away, so things thinner than one line keep their colour; those between one and two lines are mostly black.
   Line width follows the picture's height, and lines fade out from 35 to 80 units.
   Tuning is at the top of `scene_stage.cpp`.
   `ink LEVEL` in `devmenu.txt` sets it for one run without changing the setting.
