@@ -656,6 +656,41 @@ TEST(FrameInterpolationContract, CameraMotionIsNotDrawMotion) {
   expect_translation(shown[copy + 1], 0.05f, -1.0f, -3.0f);
 }
 
+// A slow camera turn: draws attached to the camera (no change) and the world's draws (the turn) agree within the
+// estimate's tolerance, so all tie. The first must not win: the camera would read as still, and the world, whose origin
+// is far from the camera, as moving 2 units a frame (i004: 0.57 degrees a frame, origin 250 units away).
+TEST(FrameInterpolationContract, SlowCameraTurnIsNotAStillCamera) {
+  InterpolationPairing test;
+  constexpr float kTurn = 0.5f * 3.14159265f / 180.0f;
+  const float c = std::cos(kTurn);
+  const float s = std::sin(kTurn);
+  constexpr float kX = 250.0f, kY = 3.0f, kZ = -18.0f;
+  const aurora::Mat3x4<float> viewBefore = InterpolationPairing::at(kX, kY, kZ);
+  const aurora::Mat3x4<float> viewAfter{
+      {c, 0.0f, s, c * kX + s * kZ},
+      {0.0f, 1.0f, 0.0f, kY},
+      {-s, 0.0f, c, -s * kX + c * kZ},
+  };
+  std::vector<InterpolationPairing::Draw> previous;
+  std::vector<InterpolationPairing::Draw> current;
+  const auto attached = InterpolationPairing::at(0.0f, -1.0f, -3.0f);
+  for (aurora::HashType i = 0; i < 5; ++i) {
+    previous.push_back({.combined = 200 + i, .pipeline = 200 + i, .position = attached});
+    current.push_back({.combined = 200 + i, .pipeline = 200 + i, .position = attached});
+  }
+  const size_t world = previous.size();
+  for (aurora::HashType i = 0; i < 20; ++i) {
+    previous.push_back({.combined = 300 + i, .pipeline = 300 + i, .position = viewBefore});
+    current.push_back({.combined = 300 + i, .pipeline = 300 + i, .position = viewAfter});
+  }
+  test.frame(previous);
+  const auto shown = test.frame(current);
+  for (size_t i = world; i < shown.size(); ++i) {
+    EXPECT_NEAR(shown[i][0], (kX + viewAfter.m0.w()) * 0.5f, 1e-2f);
+    EXPECT_NEAR(shown[i][2], (kZ + viewAfter.m2.w()) * 0.5f, 1e-2f);
+  }
+}
+
 // With no camera estimate nothing tells a moving camera from a moving draw, so the check gives no verdict.
 TEST(FrameInterpolationContract, NoCameraEstimateRefusesNothing) {
   InterpolationPairing test;

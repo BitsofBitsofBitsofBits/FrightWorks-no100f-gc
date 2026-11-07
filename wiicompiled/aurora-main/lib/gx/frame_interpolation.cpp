@@ -895,6 +895,12 @@ constexpr uint32_t kCameraDeltaMinAgreeingOneIn = 4;
 constexpr float kAffineRotationTolerance = 0.01f;
 constexpr float kAffineTranslationTolerance = 0.02f;
 constexpr float kAffineTranslationShareTolerance = 0.01f;
+// Those are wide enough for a slow camera turn (under about 0.57 degrees a frame) to agree with no turn at all: draws
+// attached to the camera and the world's draws then all tie, and the first one in draw order won, so the camera read as
+// still. The winner is picked again among those that agreed with it, with these, by how many match it this closely.
+constexpr float kAffineRotationTightTolerance = 0.001f;
+constexpr float kAffineTranslationTightTolerance = 0.002f;
+constexpr float kAffineTranslationShareTightTolerance = 0.001f;
 
 Affine to_affine(const Mat3x4<float>& m) noexcept {
   Affine a;
@@ -937,17 +943,19 @@ bool affine_inverse(const Affine& a, Affine& out) noexcept {
   return true;
 }
 
-bool affine_close(const Affine& a, const Affine& b) noexcept {
+bool affine_close(const Affine& a, const Affine& b, float rotationTolerance = kAffineRotationTolerance,
+                  float translationTolerance = kAffineTranslationTolerance,
+                  float translationShareTolerance = kAffineTranslationShareTolerance) noexcept {
   for (int row = 0; row < 3; ++row) {
     for (int k = 0; k < 3; ++k) {
-      if (std::fabs(a[row * 4 + k] - b[row * 4 + k]) > kAffineRotationTolerance) {
+      if (std::fabs(a[row * 4 + k] - b[row * 4 + k]) > rotationTolerance) {
         return false;
       }
     }
   }
   const float dx = a[3] - b[3], dy = a[7] - b[7], dz = a[11] - b[11];
   const float t = std::sqrt(a[3] * a[3] + a[7] * a[7] + a[11] * a[11]);
-  const float tolerance = kAffineTranslationTolerance + kAffineTranslationShareTolerance * t;
+  const float tolerance = translationTolerance + translationShareTolerance * t;
   return dx * dx + dy * dy + dz * dz <= tolerance * tolerance;
 }
 
@@ -1031,10 +1039,31 @@ void estimate_motion_camera_deltas() {
     }
     MotionCameraDelta result{.viewport = candidates[a].viewport};
     if (best != SIZE_MAX && bestSupport >= kCameraDeltaMinAgreeing &&
-        bestSupport * kCameraDeltaMinAgreeingOneIn >= group.size() &&
-        affine_inverse(candidates[best].delta, result.inverse)) {
-      result.cut = camera_cut(candidates[best].delta);
-      s_motionCameraDeltas.push_back(result);
+        bestSupport * kCameraDeltaMinAgreeingOneIn >= group.size()) {
+      // The second vote (see kAffineRotationTightTolerance).
+      size_t winner = best;
+      uint32_t winnerSupport = 0;
+      for (const size_t x : group) {
+        if (!affine_close(candidates[best].delta, candidates[x].delta)) {
+          continue;
+        }
+        uint32_t support = 0;
+        for (const size_t y : group) {
+          support += affine_close(candidates[best].delta, candidates[y].delta) &&
+                             affine_close(candidates[x].delta, candidates[y].delta, kAffineRotationTightTolerance,
+                                          kAffineTranslationTightTolerance, kAffineTranslationShareTightTolerance)
+                         ? 1u
+                         : 0u;
+        }
+        if (support > winnerSupport) {
+          winnerSupport = support;
+          winner = x;
+        }
+      }
+      if (affine_inverse(candidates[winner].delta, result.inverse)) {
+        result.cut = camera_cut(candidates[winner].delta);
+        s_motionCameraDeltas.push_back(result);
+      }
     }
   }
 }
