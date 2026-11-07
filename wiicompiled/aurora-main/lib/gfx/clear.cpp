@@ -38,6 +38,9 @@ struct ClearUniform {
 
 struct FragmentOutput {
     @location(0) color: vec4<f32>,
+    @location(1) motion: vec4<f32>,
+    @location(2) motion_depth: vec4<f32>,
+    @location(3) motion_mark: vec4<f32>,
     @builtin(frag_depth) depth: f32,
 };
 
@@ -60,6 +63,9 @@ fn vs_main(@builtin(vertex_index) vtxIdx: u32) -> VertexOutput {
 fn fs_main() -> FragmentOutput {
     var out: FragmentOutput;
     out.color = vec4<f32>(1.0);
+    out.motion = vec4<f32>(0.0);
+    out.motion_depth = vec4<f32>(clear.depth, 0.0, 0.0, 1.0);
+    out.motion_mark = vec4<f32>(0.0);
     out.depth = clear.depth;
     return out;
 }
@@ -93,16 +99,34 @@ fn fs_main() -> FragmentOutput {
               .dstFactor = wgpu::BlendFactor::Zero,
           },
   };
-  const wgpu::ColorTargetState colorTarget{
-      .format = g_graphicsConfig.surfaceConfiguration.format,
-      .blend = &blendState,
-      .writeMask = clear_write_mask(config.clearColor, config.clearAlpha),
+  const std::array colorTargets{
+      wgpu::ColorTargetState{
+          .format = g_graphicsConfig.surfaceConfiguration.format,
+          .blend = &blendState,
+          .writeMask = clear_write_mask(config.clearColor, config.clearAlpha),
+      },
+      // Motion vectors: a cleared surface has none.
+      wgpu::ColorTargetState{
+          .format = wgpu::TextureFormat::RG16Float,
+          .writeMask =
+              config.clearColor ? wgpu::ColorWriteMask::Red | wgpu::ColorWriteMask::Green : wgpu::ColorWriteMask::None,
+      },
+      // ... the depth the clear leaves ...
+      wgpu::ColorTargetState{
+          .format = wgpu::TextureFormat::R32Float,
+          .writeMask = config.clearColor && config.clearDepth ? wgpu::ColorWriteMask::Red : wgpu::ColorWriteMask::None,
+      },
+      // ... and no HUD mark.
+      wgpu::ColorTargetState{
+          .format = wgpu::TextureFormat::R8Unorm,
+          .writeMask = config.clearColor ? wgpu::ColorWriteMask::Red : wgpu::ColorWriteMask::None,
+      },
   };
   const wgpu::FragmentState fragmentState{
       .module = module,
       .entryPoint = "fs_main",
-      .targetCount = 1,
-      .targets = &colorTarget,
+      .targetCount = config.motionVectors != 0 ? colorTargets.size() : 1,
+      .targets = colorTargets.data(),
   };
   const wgpu::DepthStencilState depthStencil{
       .format = g_graphicsConfig.depthFormat,
