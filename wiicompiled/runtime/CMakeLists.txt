@@ -444,6 +444,11 @@ target_include_directories(no100f_window_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
 target_compile_features(no100f_window_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_window_tests COMMAND no100f_window_tests)
 
+add_executable(no100f_stream_read_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_stream_read_tests.cpp")
+target_include_directories(no100f_stream_read_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_stream_read_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_stream_read_tests COMMAND no100f_stream_read_tests)
+
 add_executable(no100f_camera_aspect_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_camera_aspect_tests.cpp")
 target_include_directories(no100f_camera_aspect_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_camera_aspect_tests PRIVATE cxx_std_17)
