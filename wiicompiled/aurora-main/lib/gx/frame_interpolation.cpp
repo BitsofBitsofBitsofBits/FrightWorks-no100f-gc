@@ -1916,7 +1916,7 @@ void extend_interpolation_draw(uint16_t usedPnMtxMask) noexcept {
 // ----- Motion vectors, vertex history. The game animates characters on the CPU: it rewrites a model's POS array
 // every frame and keeps its indices, so the matrices alone show only where the whole model moved, not its limbs. A draw
 // whose positions changed since last frame keeps a copy of them; next frame the matching draw (same mesh: stable
-// identity, same occurrence in the group, same array size) gets that copy uploaded beside its own, and its shader
+// identity, the nearest copy of it, same array size) gets that copy uploaded beside its own, and its shader
 // reads each vertex's previous position from it.
 constexpr uint32_t kMaximumPosHistoryBytes = 1u << 20;
 
@@ -1964,6 +1964,33 @@ uint32_t motion_vertex_history_bytes(uint32_t posArraySize) noexcept {
   return gfx::motion_vectors_active() && posArraySize <= kMaximumPosHistoryBytes ? posArraySize : 0;
 }
 
+// A draw's own draw last frame among the copies of its mesh. Its place among them says nothing once a copy comes or goes:
+// when one of the i004 ghosts left the view, the next ghost took its place and read its pose as its own previous shape,
+// 15 pixels of motion on a frame where it moved 0.4. So a one-matrix draw takes the copy nearest to where it would be if
+// it stood still, with last frame's estimate of the camera (this frame's comes at seal, and a camera turns smoothly).
+// Copies at one spot keep their order, and a skinned draw has no one position to compare.
+size_t motion_history_partner(const std::vector<size_t>& candidates, size_t ordinal,
+                              const FrameTransformSnapshot& current) noexcept {
+  size_t best = ordinal < candidates.size() ? candidates[ordinal] : SIZE_MAX;
+  if (current.indexedMatrices || candidates.size() < 2) {
+    return best;
+  }
+  const Mat3x4<float> predicted = predicted_still(current);
+  float bestDistance = best != SIZE_MAX ? translation_delta_squared(s_previousFrameTransforms[best].transform.position, predicted)
+                                        : std::numeric_limits<float>::max();
+  for (const size_t index : candidates) {
+    const auto& previous = s_previousFrameTransforms[index].transform;
+    if (previous.indexedMatrices) {
+      continue;
+    }
+    if (const float distance = translation_delta_squared(previous.position, predicted); distance < bestDistance) {
+      bestDistance = distance;
+      best = index;
+    }
+  }
+  return best;
+}
+
 void record_motion_vertex_history(size_t currentTransformIndex, const FrameInterpolationDrawIdentity& identity,
                                   HashType stableIdentity, const InterpolatedUniformLayout& layout) {
   if (layout.posArraySize == 0 || layout.posArraySize > kMaximumPosHistoryBytes) {
@@ -1977,7 +2004,7 @@ void record_motion_vertex_history(size_t currentTransformIndex, const FrameInter
   const auto& currentGroup = s_currentStableTransformIndices[stableIdentity];
   const size_t ordinal = currentGroup.empty() ? 0 : currentGroup.size() - 1;
   const auto& candidates = stablePrevious->second;
-  const size_t own = ordinal < candidates.size() ? candidates[ordinal] : SIZE_MAX;
+  const size_t own = motion_history_partner(candidates, ordinal, s_currentFrameTransforms[currentTransformIndex].transform);
   // Its positions are unchanged when its own draw last frame had the same exact identity. Any draw with that identity
   // is not enough: copies of a mesh the game animates on the CPU, out of step, match each other's last-frame shape
   // (the f001 fish paste), and the moving paste got no motion.

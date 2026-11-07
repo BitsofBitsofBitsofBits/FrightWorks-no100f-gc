@@ -802,12 +802,13 @@ void draw_indexed_quad() {
 // Two copies of a mesh the game animates on the CPU (like the f001 fish paste), one step out of phase: each frame both
 // rewrite their positions (indexed, from their own arrays), copy 1 at x = -2 with its quad raised `step` x 0.5 units,
 // copy 2 at x = +2 a step further. In the next frame copy 1 has the shape copy 2 had: same positions, same identity.
-void draw_animated_copies(int step) {
+// `secondOnly`: copy 1 isn't drawn, as when the game stops drawing one of a mesh's copies.
+void draw_animated_copies(int step, bool secondOnly = false) {
   begin_animated_frame();
   // Each copy's own array, rewritten every frame (aligned like the game's).
   alignas(32) static std::array<std::array<float, 3>, 4> arrays[2];
   constexpr float z = -4.f;
-  for (int copy = 0; copy < 2; ++copy) {
+  for (int copy = secondOnly ? 1 : 0; copy < 2; ++copy) {
     const float raise = static_cast<float>(step + copy) * .5f;
     arrays[copy] = {{{-.8f, raise + .8f, z}, {.8f, raise + .8f, z}, {.8f, raise - .8f, z}, {-.8f, raise - .8f, z}}};
     const float position[3][4]{{1.f, 0.f, 0.f, copy == 0 ? -2.f : 2.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
@@ -941,6 +942,12 @@ int main(int argc, char** argv) {
     // Copy 1 at x = -2 (NDC -0.5: column 16), raised 2.5 units (NDC 0.625: row 12).
     check_motion(16, 12, {0.f, 4.f}, "animated copy");
     std::printf("Actual Aurora motion vectors: a CPU-animated copy out of phase with another keeps its own motion\n");
+    // The game stops drawing copy 1 (the i004 ghosts, as one leaves the view). Copy 2 is now the mesh's first draw, but
+    // its previous shape is still its own: 4 pixels, not the 8 it would read from copy 1's. At x = +2 (column 48), raised
+    // 3.5 units (NDC 0.875: row 4).
+    draw_animated_copies(6, true);
+    check_motion(48, 4, {0.f, 4.f}, "animated copy, the other copy gone");
+    std::printf("Actual Aurora motion vectors: a CPU-animated copy keeps its own previous shape when another stops drawing\n");
     // In-between images: the blur scales each one's motion up by the inverse of how far along it is, so all of a draw's
     // motion has to cover that share of the frame, the vertices' too, or they blur 3x, then 1.5x, then 1x, every frame.
     // 8 pixels by the matrix and 4 by the vertices a frame; pixel (36, 30) stays on the quad in all three images.
