@@ -60,6 +60,7 @@ void Module::show_fatal_dialog(const char*, std::string_view) noexcept {}
 
 namespace aurora::window {
 void set_present_surface_fill(bool) {}
+void set_fixed_aspect(float) {}
 } // namespace aurora::window
 
 // --- fmt::formatter<AuroraLogLevel> ---
@@ -92,6 +93,7 @@ void notify_copy_texture_created() noexcept {}
 
 namespace aurora::vi {
 Vec2<uint32_t> configured_fb_size() noexcept { return s_logicalFbSize; }
+Vec2<uint32_t> visible_fb_size() noexcept { return s_logicalFbSize; }
 void configure(const GXRenderModeObj*) noexcept {}
 } // namespace aurora::vi
 
@@ -101,8 +103,22 @@ std::vector<TextureUpload> g_textureUploads;
 } // namespace aurora::gfx
 
 namespace aurora::gfx::efb_ram {
-void schedule(void*, uint32_t, uint32_t, GXTexFmt, TextureHandle) noexcept {}
+void schedule(void*, uint32_t, uint32_t, GXTexFmt, TextureHandle, uint32_t) noexcept {}
 } // namespace aurora::gfx::efb_ram
+
+// --- Copies patching textures, cut-outs (gx.cpp, common.cpp) ---
+namespace aurora::gx {
+GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_&) noexcept { return nullptr; }
+std::vector<PatchTarget> find_patch_targets(const void*) { return {}; }
+// The game's own alpha test: no draw is split into solid and fringe passes here.
+CutoutMode cutout_mode() noexcept { return CutoutMode::Game; }
+CutoutPasses cutout_passes(const ShaderInfo&) noexcept { return CutoutPasses::None; }
+void apply_cutout_solid(PipelineConfig&) noexcept {}
+void apply_cutout_fringe(PipelineConfig&) noexcept {}
+} // namespace aurora::gx
+namespace aurora::gfx {
+bool add_resolve_patch(const TextureHandle&, TextureHandle, uint32_t, uint32_t, uint32_t, uint32_t) { return false; }
+} // namespace aurora::gfx
 
 // --- get_texture ---
 namespace aurora::gx {
@@ -368,6 +384,13 @@ void push_draw_command<gx::DrawData>(gx::DrawData data) {
     s_lastGxDraw = std::move(data);
   }
 }
+// A deferred draw (translucent tail, cut-out fringe) is recorded like any other.
+void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind) {
+  if (s_trackDrawCommands) {
+    s_lastGxDraw = data;
+  }
+}
+void flush_deferred_draws() {}
 template <>
 gx::DrawData* get_last_draw_command() {
   return s_trackDrawCommands && s_lastGxDraw.has_value() ? &*s_lastGxDraw : nullptr;

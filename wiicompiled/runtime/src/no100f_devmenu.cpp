@@ -662,6 +662,10 @@ struct FreeCam {
     float x = 0, y = 0, z = 0, yaw = 0, pitch = 0;  // yaw 0 looks along +z, pitch > 0 looks down
 };
 FreeCam g_cam;
+// "camspin DEG" / "cammove DX DY DZ": the free camera turns or moves this much every frame (steady motion for
+// scripted tests: frame-to-frame comparisons, motion, temporal effects). Zero stops.
+float g_camSpinDegrees = 0.0f;
+float g_camMove[3] = {0.0f, 0.0f, 0.0f};
 uint32_t g_camScene = 0, g_camSceneId = 0;  // the scene the free camera belongs to
 
 void CamRows(const FreeCam& c, float rows[4][3]) {
@@ -700,7 +704,14 @@ bool ReadMainCamera(FreeCam& c) {
     return true;
 }
 
+// Spin and move values end with the free camera: a later "freecam on" must not start moving by itself.
+void ClearCamMotion() {
+    g_camSpinDegrees = 0.0f;
+    g_camMove[0] = g_camMove[1] = g_camMove[2] = 0.0f;
+}
+
 void SetFreecam(bool on) {
+    if (!on) ClearCamMotion();
     if (on && !g_cam.on && !ReadMainCamera(g_cam)) {
         g_status = "Camera not found.";
         return;
@@ -737,6 +748,11 @@ void ApplySpotCam(const Spot& s) {
 void UpdateFreecam(bool menuFocused) {
     static SDL_Gamepad* pad = nullptr;
     if (!g_cam.on) return;
+    // Once per frame (the camera itself is updated several times per frame).
+    if (g_camSpinDegrees != 0.0f) g_cam.yaw += g_camSpinDegrees * 3.14159265f / 180.0f;
+    g_cam.x += g_camMove[0];
+    g_cam.y += g_camMove[1];
+    g_cam.z += g_camMove[2];
     if (pad && !SDL_GamepadConnected(pad)) {
         SDL_CloseGamepad(pad);
         pad = nullptr;
@@ -1400,6 +1416,8 @@ void DrawDiagnostics() {
 //   find ID|off         draw that suspect's texture solid magenta / back to normal
 //   freecam on|off      free camera (starts at the game camera)
 //   cam X Y Z YAW PITCH free camera at this pose (degrees; pitch > 0 looks down)
+//   camspin DEG         free camera turns DEG degrees every frame (0 stops; turns the free camera on)
+//   cammove DX DY DZ    free camera moves this far every frame (world units; 0 0 0 stops)
 //   cutscene            "cutscene yes|no control yes|no": recorded cutscene playing (devmenu_press.txt skips it), player
 //                       has control (no during cutscenes and in-world camera pans)
 //   perf                draw calls of the last frame + present timing (fps, average/p95 frame time)
@@ -1561,10 +1579,29 @@ void PollCommandFile() {
                 c.yaw *= 3.14159265f / 180.0f;
                 c.pitch *= 3.14159265f / 180.0f;
                 g_cam = c;
+                // The pose belongs to this scene (as with "freecam on"): ApplyFreecam turns it off elsewhere.
+                g_camScene = CurrentScenePtr();
+                g_camSceneId = CurrentSceneId();
                 g_status = "Free camera at " + arg;
             } else {
                 g_status = "cam X Y Z YAW PITCH";
             }
+        } else if (cmd == "camspin") {
+            g_camSpinDegrees = arg.empty() ? 0.0f : static_cast<float>(std::atof(arg.c_str()));
+            if (g_camSpinDegrees != 0.0f && !g_cam.on) SetFreecam(true);
+            g_status = "camera spin " + std::to_string(g_camSpinDegrees) + " degrees per frame" +
+                       (g_cam.on ? "" : " (no free camera here)");
+            if (!g_cam.on) ClearCamMotion();
+        } else if (cmd == "cammove") {
+            std::istringstream as(arg);
+            float dx = 0.0f, dy = 0.0f, dz = 0.0f;
+            as >> dx >> dy >> dz;
+            g_camMove[0] = dx;
+            g_camMove[1] = dy;
+            g_camMove[2] = dz;
+            if ((dx != 0.0f || dy != 0.0f || dz != 0.0f) && !g_cam.on) SetFreecam(true);
+            g_status = "camera move " + arg + " per frame" + (g_cam.on ? "" : " (no free camera here)");
+            if (!g_cam.on) ClearCamMotion();
         } else if (cmd == "find") {
             LoadSuspects();
             const auto it = std::find_if(g_suspects.begin(), g_suspects.end(), [&](const Suspect& s) { return s.id == arg; });
@@ -2326,6 +2363,7 @@ void ApplyFreecam(uint32_t camera, CpuContext* ctx) {
     // A scene change (travel, a door, a warp) turns the free camera off: its pose belongs to the old scene.
     if (CurrentScenePtr() != g_camScene || CurrentSceneId() != g_camSceneId) {
         g_cam.on = false;
+        ClearCamMotion();
         return;
     }
     const uint32_t frame = MainCameraFrame();

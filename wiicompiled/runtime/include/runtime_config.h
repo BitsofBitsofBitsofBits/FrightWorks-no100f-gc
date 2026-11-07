@@ -927,7 +927,9 @@ inline bool XboxOriginalLayout() {
 
 inline bool SetXboxOriginalLayout(bool value) {
     Mutable().controllerLayout = value ? "xbox_original" : "gamecube";
-    return WriteSetting("controller", "layout", FormatString(*Mutable().controllerLayout));
+    // An explicit F10 choice, including the already-selected preset, ends launcher auto-selection.
+    const bool wroteIntent = WriteSetting("launcher", "auto_controller_layout", "false");
+    return WriteSetting("controller", "layout", FormatString(*Mutable().controllerLayout)) && wroteIntent;
 }
 
 // 0 = Black (sneak, default right bumper), 1 = White (soap bubble, default left bumper).

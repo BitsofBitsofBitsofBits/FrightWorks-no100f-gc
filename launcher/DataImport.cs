@@ -21,7 +21,7 @@ static class DataImport
 
     sealed record Source(string Name, string UserData, string? Disc);
 
-    public static async Task OfferAtStart(DataPaths paths, string title)
+    public static async Task OfferAtStart(DataPaths paths, string title, Window? owner = null)
     {
         if (paths.DevTree) return;
         var userData = paths.UserData;
@@ -30,7 +30,7 @@ static class DataImport
             return;
         var source = FindNewest(paths);
         if (source == null) return;
-        bool yes = await Dialogs.YesNo(null,
+        bool yes = await Dialogs.YesNo(owner,
             $"Found your saves and settings from an earlier version in\n{source.Name}\n\nCopy its saves, settings, controls " +
             "and mods into this one?" + (CopiesDisc(source, paths) ? " Its game files come too, so you don't have to choose the disc again." : "") +
             "\n\nThe old folder is left as it is. Extras > Folders can copy from another folder later.");
@@ -40,9 +40,9 @@ static class DataImport
             File.WriteAllText(Path.Combine(userData, Mark), $"Not copied from {source.Name}{Environment.NewLine}");
             return;
         }
-        var (error, _) = await Import(source, paths, title, null);
+        var (error, _) = await Import(source, paths, title, owner);
         if (error != null)
-            await Dialogs.Message(null, $"Copying stopped: {error.Message}\n\nCopy the old folder's files by hand if something is missing.");
+            await Dialogs.Message(owner, $"Copying stopped: {error.Message}\n\nCopy the old folder's files by hand if something is missing.");
         File.WriteAllText(Path.Combine(userData, Mark),
                           $"{(error == null ? "Copied" : "Partly copied")} from {source.Name}{Environment.NewLine}");
     }
@@ -50,12 +50,9 @@ static class DataImport
     // Extras > Folders: the player picks the old game's folder (or its data, UserData or MarioWiiSaveData folder).
     public static async Task FromFolder(Window owner, DataPaths paths, string title)
     {
-        var picked = await owner.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-        {
-            Title = "Choose the folder of the earlier FrightWorks or Refrightened (the one with its launcher), or a folder with a Config.toml",
-            AllowMultiple = false,
-        });
-        if (picked.Count == 0 || picked[0].TryGetLocalPath() is not string folder) return;
+        var folder = await ControllerDialogs.PickPath(owner,
+            "Choose the folder of the earlier FrightWorks or Refrightened (the one with its launcher), or a folder with a Config.toml", folder: true);
+        if (folder == null) return;
         var source = Describe(folder);
         if (source == null || SameFolder(source.UserData, paths.UserData))
         {

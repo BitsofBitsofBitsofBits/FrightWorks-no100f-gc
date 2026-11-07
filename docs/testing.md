@@ -101,6 +101,31 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
 
 ## 3. Unit tests
 
+**Avalonia launcher (.NET 10).** Both suites use Avalonia's headless platform with CPU Skia drawing and disposable
+portable data. Windows and Linux use the same managed test projects; no disc/game is needed. Run with an existing
+.NET 10 SDK and an owned scratch directory:
+
+```powershell
+dotnet run --project tools\launcher-controller-tests\LauncherControllerTests.csproj -c Release -- autotest\launcher-controller
+dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout
+```
+
+Test windows must pass their owned `DataPaths` and `enableServices: false`. That skips SDL/controller polling, game
+launching, updates and OS animation lookup; tests inject controller samples/foreground state rather than OS input.
+The controller suite checks neutral/repeat/deadzone gates, bumper tab switching (and the old bumper focus move where there are no tabs), owned modal routing, menu accessibility, settings and
+same-value native selection intent, cancellation, browsing/text/folder creation, scrolling and persisted auto/manual
+layout policy. Generic navigation regressions cover narrow buttons beneath wide fields, horizontal button rows,
+ordinary slider precision and opt-in `ControllerSlider` coarse steps. Coarse steps retain the selected device's input
+source, give horizontal D-pad input precision priority, clamp to bounds and preserve repeat/ownership/neutral gates.
+The shared slider is only an opt-in control; this controller change does not add HDR settings or choose HDR increments.
+The layout suite deliberately provokes save/background/UI faults to check error routing; those expected
+errors appear on stderr even when the suite passes. Screenshots are synthetic headless evidence, not a hardware test.
+
+Physical verification needs a separate isolated runtime allocation: test held confirm across modal transitions,
+foreground loss/return, disconnect/reconnect, scheme matching/manual persistence and game launch/exit ownership.
+Repeat on Windows and Linux (including X11/Wayland and native storage portals as applicable); Windows headless results
+do not establish Linux hardware, SDL availability, native portal or compositor behavior.
+
 The tests are CMake targets in `wiicompiled/runtime/CMakeLists.txt`; the game build doesn't build them. After a game
 build has created `wiicompiled\native-build`:
 
@@ -167,6 +192,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
   in its workers' configs, and `play-patched`, `iterate` and `capture-window` set it for the run and put your
   `Config.toml` back afterwards. Sound is muted the same way in `iterate`, `capture-window` and `level-sweep.py`
   (no switch), and all three wait for the game-run lock and give it back when the run ends. The helpers are in `tools\debug\kit-common.ps1`.
+  Game runs take one at a time today; shared run slots for automated runs are planned and not built (see `.agents/REPO.md`, Testing).
   Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
   or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
   `e001`.
@@ -244,7 +270,7 @@ rebuild it once the toolchain is there.
 
 `tools/debug/patches/` holds diagnostics that never go into a fix PR. Apply them with `play-patched.ps1 -Patch <name>`
 (or `git apply`, and `git apply -R` before committing). The table with what each one does is in
-[`.claude/skills/manual-yn-bisect/strip-before-pr.md`](../.claude/skills/manual-yn-bisect/strip-before-pr.md). The most
+[`.agents/skills/manual-yn-bisect/strip-before-pr.md`](../.agents/skills/manual-yn-bisect/strip-before-pr.md). The most
 useful:
 
 | Patch | What it adds |
@@ -272,6 +298,8 @@ useful:
 - **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>` (Linux:
   `launcher/publish/FrightWorks --shots <dir>`) draws every page to `<dir>\<Page>.png`. The window takes the size the
   window manager gives it; for fixed sizes use the layout regression below.
+- **Patch mods** (`docs/mod-patches.md`): `dotnet run --project tools\hip-patch-tests` builds levels from made-up data and
+  tries bad recipes, wrong discs, clashes, killed builds and hostile zips. Needs only dotnet; the disc modes are in that page.
 - **Isolated launcher layout regression** (Windows or Linux, .NET 10 SDK or newer):
   `dotnet run --project tools\launcher-layout-tests\LauncherLayoutTests.csproj -c Release -- autotest\launcher-layout`.
   It runs the launcher's real window on Avalonia's headless platform (no screen needed, drawn with Skia like on
@@ -300,8 +328,8 @@ useful:
 
 - Fix-only: minimal diff, no diagnostics (revert any patch: `play-patched.ps1 -Remove -Patch <name>` or `git apply -R`),
   no unrelated changes, no heuristics that hide a symptom.
-- Run the unit tests, and a full build if you touched overrides.
-- Smoke test: boot `h001` and one level you changed something in.
+- Run what the change needs (the table in `.agents/REPO.md`, Testing): the unit tests it affects, and a full build if you touched overrides.
+- Smoke test: not built yet. Until it is, boot `h001` and the level you changed something in, from a fresh build, and check the build ID, the level load and that the game stays up. Keep it short; nothing runs it automatically (no CI), so the PR says what was run.
 - Open it as a draft and say plainly what you tested and what you didn't.
 
 ## 10. Working on several branches at once
@@ -343,7 +371,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its
   own settings.
-- Builds can run side by side. Game runs take turns: `manual-session prepare/start` and `play-patched.ps1` wait while
+- Builds can run side by side. Game runs take turns (shared slots are planned, not built): `manual-session prepare/start` and `play-patched.ps1` wait while
   another checkout's test has the game open. Scripts only close the game they started from their own checkout; your
   own game (launcher or `Play\` in the main checkout) is never closed by a test.
 - Never delete a worktree folder by hand: `Disc`, `texture_pack`, `toolchain` there are links, and some delete tools
@@ -351,9 +379,14 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
   or a program running from it (leftover dotnet build servers it stops itself), and while its Claude session runs:
   close that tab first.
 
-## Claude Code skills
+## Agent skills
 
-`.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
+`.agents/skills/` has step-by-step guides for coding agents, readable by anyone (the shared rules for agents are in `.agents/REPO.md`): `hle-divergence-debug`
 (graphics and state bugs), `game-logic-debug` (60 fps, timing and gameplay bugs, dev menu, postool),
 `manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) `audio-debug` (crackle, clicks, fuzz) and `parallel-work`
 (worktrees and their sessions, run from the coordinator).
+
+Claude Code looks for skills in `.claude/skills/`, which is git-ignored. Run `python tools/setup-agents.py` once in each
+checkout (`py -3 tools\setup-agents.py` on Windows) to link it to `.agents/skills/`: a junction on Windows, a symlink
+elsewhere. It is safe to run again and refuses to replace a real folder that has files in it. `worktree.ps1 new` and `open` run it
+for a worktree (skipped on a branch that has no `.agents/` yet); the main checkout runs it by hand once after it has pulled `.agents/`.

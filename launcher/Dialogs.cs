@@ -38,6 +38,7 @@ static class Dialogs
             int index = i;
             var button = new PlankButton(buttons[i].Text, (_, _) => { answer = index; dialog.Close(); }, primary: buttons[i].Primary);
             first ??= buttons[i].Primary ? button : null;
+            if (buttons[i].Text is "No" or "Cancel" or "Keep my layout" or "Not now") first = button;
             row.Children.Add(button);
         }
         body.Children.Add(row);
@@ -78,16 +79,28 @@ static class Dialogs
 
     public static async Task ShowModal(Window dialog, Window? owner)
     {
+        var navigation = ControllerNavigation.For(owner);
+        var focused = owner?.FocusManager?.GetFocusedElement() as Control;
+        navigation?.Register(dialog);
         dialog.KeyDown += (_, e) => { if (e.Key == Key.Escape) { e.Handled = true; dialog.Close(); } };
-        if (owner is { IsVisible: true })
+        try
         {
-            if (owner.WindowState == WindowState.Minimized) owner.WindowState = WindowState.Normal;
-            await dialog.ShowDialog(owner);
-            return;
+            if (owner is { IsVisible: true })
+            {
+                if (owner.WindowState == WindowState.Minimized) owner.WindowState = WindowState.Normal;
+                await dialog.ShowDialog(owner);
+                return;
+            }
+            var closed = new TaskCompletionSource();
+            dialog.Closed += (_, _) => closed.TrySetResult();
+            dialog.Show();
+            await closed.Task;
         }
-        var closed = new TaskCompletionSource();
-        dialog.Closed += (_, _) => closed.TrySetResult();
-        dialog.Show();
-        await closed.Task;
+        finally
+        {
+            navigation?.Unregister(dialog);
+            if (owner is { IsActive: true } && focused is { IsEffectivelyVisible: true, IsEffectivelyEnabled: true })
+                focused.Focus(NavigationMethod.Directional);
+        }
     }
 }

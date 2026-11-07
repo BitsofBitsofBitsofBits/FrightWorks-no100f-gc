@@ -178,9 +178,11 @@ Pixels run(unsigned splitEvery, bool async = false, bool offscreen = false, unsi
     GXCopyTex(copyDestination.data(), GX_FALSE);
     texture = gx::g_gxState.copyTextures.at(copyDestination.data()).handle;
   } else {
-  // A partial clear forces the real snapshot and clear-uniform paths after the copy.
-  gfx::resolve_pass(texture, {0, 0, 64, 64}, true, true, true, {0.f, 0.f, 0.f, 1.f},
-                    1.f, GX_TF_RGBA8, nullptr, false, nullptr, false, 1.f, false, false, true);
+    // A partial clear forces the real snapshot and clear-uniform paths after the copy. Like GXCopyTex, an EFB
+    // without alpha (GXInit's RGB8) copies as opaque: GX draws do not write its alpha, so it would otherwise be
+    // whatever an earlier case left in the EFB (it persists between frames).
+    gfx::resolve_pass(texture, {0, 0, 64, 64}, true, true, true, {0.f, 0.f, 0.f, 1.f}, 1.f, GX_TF_RGBA8, nullptr, false,
+                      nullptr, !gx::render_target_has_alpha(gx::g_gxState.pixelFmt), 1.f, false, false, true);
   }
   guarded.fill(0xa5);
   const unsigned extent = async ? 4 : 16;
@@ -647,11 +649,15 @@ int main(int argc, char** argv) {
     }
     const gfx::StagingSizes physical{gfx::VertexBufferSize, gfx::UniformBufferSize,
                                       gfx::IndexBufferSize, gfx::StorageBufferSize};
-    const auto uniformTail = gx::MaxUniformSize + 32 * gfx::staging_uniform_bytes(48);
+    // The uniform tail the renderer keeps free (gfx::staging_has_space), and room for exactly two clear uniforms
+    // after it, padded to this device's alignment (64 bytes on some GPUs, 256 on others): the third clear must split.
+    const auto uniformTail = gx::MaxUniformSize + gfx::efb_ram::MaxAsyncReadbackSlots * gfx::staging_uniform_bytes(48);
     for (unsigned buffer = 0; buffer < 4; ++buffer) {
       auto limits = physical;
-      limits[buffer] = buffer == 0 ? 128 : buffer == 1 ? uniformTail + 512 :
-                       buffer == 2 ? 24 : 2 * gfx::staging_storage_bytes(48);
+      limits[buffer] = buffer == 0   ? 128
+                       : buffer == 1 ? uniformTail + 2 * gfx::staging_uniform_bytes(16)
+                       : buffer == 2 ? 24
+                                     : 2 * gfx::staging_storage_bytes(48);
       gfx::set_staging_capacity_limits_for_testing(limits);
       const auto before = gfx::staging_split_count();
       require(run(0, false, false, buffer == 1 ? 0 : buffer == 3 ? 2 : 1) == expected(16),
@@ -672,7 +678,7 @@ int main(int argc, char** argv) {
     require(run(0, false, false, 3) == expected(16), "Raw bridge capacity split changed pixels");
     std::puts("Actual Aurora raw bridge capacity split preserved direct quad pixels");
     limits = physical;
-    limits[1] = uniformTail + 768;
+    limits[1] = uniformTail + 3 * gfx::staging_uniform_bytes(16); // three clear uniforms at this device's alignment
     gfx::set_staging_capacity_limits_for_testing(limits);
     const auto beforeBake = gfx::staging_split_count();
     require(run(0, false, true, 0, true) == expected(16),
