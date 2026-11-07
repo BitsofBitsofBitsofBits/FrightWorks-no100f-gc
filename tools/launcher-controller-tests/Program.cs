@@ -295,11 +295,21 @@ static class LauncherControllerTests
         var focusedBox = w.FocusManager?.GetFocusedElement() as CheckBox;
         Check(focusedBox != null && modsBoard.GetVisualDescendants().Contains(focusedBox) &&
               ((focusedBox.Content as TextBlock)?.Text == "ModB"), "Ticking a mod lost the pad's focus (list rebuilt under it).");
+        Check(focusedBox.Classes.Contains(":focus-visible"), "A pad tick did not keep the focus highlight on the mod.");
         Press(w, LauncherButtons.Down);
         Check((((w.FocusManager?.GetFocusedElement() as CheckBox)?.Content as TextBlock)?.Text) == "ModC", "Down did not move to the next mod after a tick.");
         Press(w, LauncherButtons.Confirm); for (int i = 0; i < 100; i++) { Pump(); Thread.Sleep(10); }
         Press(w, LauncherButtons.Up);
         Check((((w.FocusManager?.GetFocusedElement() as CheckBox)?.Content as TextBlock)?.Text) == "ModB", "Up after a tick did not go back to the previous mod.");
+        // A mouse click (pointer focus) on a mod's checkbox: after the rebuild it keeps focus but shows no focus box.
+        var clicked = modsBoard.GetVisualDescendants().OfType<CheckBox>().First(c => (c.Content as TextBlock)?.Text == "ModA");
+        clicked.Focus(NavigationMethod.Pointer); Pump();
+        Check(!clicked.Classes.Contains(":focus-visible"), "Harness: pointer focus unexpectedly shows the focus box.");
+        clicked.IsChecked = !clicked.IsChecked;
+        for (int i = 0; i < 100; i++) { Pump(); Thread.Sleep(10); }
+        var afterClick = w.FocusManager?.GetFocusedElement() as CheckBox;
+        Check(afterClick != null && (afterClick.Content as TextBlock)?.Text == "ModA", "A mouse tick lost focus on the mod.");
+        Check(!afterClick.Classes.Contains(":focus-visible"), "A mouse tick put a focus box around the mod.");
         string zips = Path.Combine(paths.Root, "zips");
         Directory.CreateDirectory(Path.Combine(zips, "Sub"));
         File.WriteAllText(Path.Combine(zips, "a.zip"), "x"); File.WriteAllText(Path.Combine(zips, "b.ISO"), "x"); File.WriteAllText(Path.Combine(zips, "c.txt"), "x");

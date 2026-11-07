@@ -468,8 +468,10 @@ sealed class MainWindow : Window
         void Fill()
         {
             // The list is rebuilt after every tick: put the pad back on the same mod, or it would be left on nothing.
-            var keep = TopLevel.GetTopLevel(list)?.FocusManager?.GetFocusedElement() is CheckBox { Parent: { } p } focused && ReferenceEquals(p, list)
-                ? (focused.Content as TextBlock)?.Text : null;
+            // Only a pad/keyboard focus shows the focus box; a mouse click must not get one, so restore it the way it came.
+            var focused = TopLevel.GetTopLevel(list)?.FocusManager?.GetFocusedElement() as CheckBox;
+            var keep = focused is { Parent: { } p } && ReferenceEquals(p, list) ? (focused.Content as TextBlock)?.Text : null;
+            var how = focused?.Classes.Contains(":focus-visible") == true ? NavigationMethod.Directional : NavigationMethod.Pointer;
             CheckBox? refocus = null;
             list.Children.Clear();
             var dirs = Directory.Exists(modsDir) ? Directory.GetDirectories(modsDir).Where(ModPatches.ModPatchPanel.IsListed).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray() : Array.Empty<string>();
@@ -493,7 +495,7 @@ sealed class MainWindow : Window
                 if (keep != null && Path.GetFileName(d) == keep) refocus = box;
                 if (patches.StatusText(d) is { } status) list.Children.Add(Note(status));
             }
-            if (refocus != null) Dispatcher.UIThread.Post(() => { refocus.Focus(NavigationMethod.Directional); refocus.BringIntoView(); }, DispatcherPriority.Loaded);
+            if (refocus != null) Dispatcher.UIThread.Post(() => { refocus.Focus(how); refocus.BringIntoView(); }, DispatcherPriority.Loaded);
         }
         body.Children.Add(new LeftCap(480, frame));
         var row = Row();
