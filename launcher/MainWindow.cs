@@ -377,6 +377,18 @@ sealed class MainWindow : Window
             }
             Row("Motion blur", "motion_blur", levels.ToArray(), "0");
         }
+        {
+            // Strength in percent, as in F10 (runtime_config.h kAmbientOcclusionLevels); a strength set by hand in
+            // Config.toml that is none of the levels is kept as its own entry.
+            var levels = new List<(string text, string raw)> { ("Off", "0"), ("Low", "35"), ("Medium", "65"), ("High", "100") };
+            if (int.TryParse(cfg.Get("video", "ambient_occlusion")?.Trim(), out int saved) && saved > 0 && saved <= 100 &&
+                !levels.Exists(l => l.raw == saved.ToString()))
+            {
+                levels.Add(($"{saved}%", saved.ToString()));
+                levels.Sort((a, b) => int.Parse(a.raw).CompareTo(int.Parse(b.raw)));
+            }
+            Row("Ambient occlusion", "ambient_occlusion", levels.ToArray(), "0");
+        }
         Row("Intro movies", "skip_intro", new[] { ("Play them", "false"), ("Skip them", "true") }, "false");
         Row("HDR", "hdr", new[] { ("Off", "false"), (OperatingSystem.IsWindows() ? "On (needs HDR on in Windows)" : "On (needs HDR on in your desktop)", "true") }, "false");
         Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");

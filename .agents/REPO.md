@@ -201,7 +201,7 @@ The dev menu (see Facts) is the way to script a run.
 - **Command file:** `devmenu.txt` in the game's working folder (`Play/` for a normal run).
   It is read every 30 frames, then deleted, and results go to `devmenu.log`.
   It waits until the game is in play, except `skip` and `scene`.
-  Useful commands: `scene ID`, `cam X Y Z YAW PITCH`, `camspin DEG`, `cammove DX DY DZ`, `freecam on|off`, `where`, `perf`, `mvview MODE [SCALE]`, `save NAME`, `cutscene`, `skip`.
+  Useful commands: `scene ID`, `cam X Y Z YAW PITCH`, `camspin DEG`, `cammove DX DY DZ`, `freecam on|off`, `where`, `perf`, `mvview MODE [SCALE]`, `stageview MODE`, `ao PERCENT`, `save NAME`, `cutscene`, `skip`.
   The full list is at the top of `PollCommandFile` in `wiicompiled/runtime/src/no100f_devmenu.cpp` and in the `game-logic-debug` skill.
 - **Presses:** `devmenu_press.txt`, read every 30 frames even outside play.
   Each line is `BUTTON[+BUTTON] [FRAMES] [cutscene]`, with buttons `a b x y z start up down left right` and 10 frames by default.
@@ -282,6 +282,16 @@ Never name a session `main`.
   F3 recordings don't show interpolated frames.
 - Cut-outs: `[video] cutout_mode`, default two passes.
   Fringes are deferred and flushed before non-depth-writing and z-ALWAYS draws (#46).
+- The scene stage (`gfx/scene_stage.cpp`) is where effects on the solid scene go (ambient occlusion, lighting), before the see-through world draws and the HUD; effects on the final picture go at present, like motion blur.
+  The game never marks that point: in a frame it draws the solid world (in several groups around its mist and glow copies of a 710x512 corner), then one see-through tail (the world's second, blended pass, particles, glow), then the HUD.
+  So the stage is the two-pass cut-out modes' tail: the pass splits when the tail is flushed (or at the next copy or the frame's end), after the fringes; with more than one flush, the last one.
+  The `game` and `cut` cut-out modes have no tail, so no stage (and no ambient occlusion).
+  With nothing using it, nothing is split or recorded.
+  It records the solid scene's camera (projection and viewport of the last perspective draw that wrote depth) to turn depth back into positions.
+  `stageview 1` (or F8 > Scene stage view) tints what is drawn before it, `2` shows the solid scene's depth, `3` the ambient occlusion alone.
+- Ambient occlusion (`[video] ambient_occlusion`, percent; F10 > Video > Picture and the launcher: Off, Low 35, Medium 65, High 100) runs at the scene stage: at half resolution from the depth alone, blurred keeping edges, then multiplied into the solid scene's colour (never its alpha).
+  Its tuning is at the top of `scene_stage.cpp`; the angle bias keeps the game's low-poly walls and rocks from darkening at every polygon edge.
+  `ao PERCENT` in `devmenu.txt` sets it for one run without changing the setting.
 - MSAA: on Linux (x86_64 and aarch64) the Vulkan 2x and 8x modes need the patched Dawn package that the build downloads from FrightWorks/dawn-build (release `v20260603.191052-msaa`).
   Other platforms, Windows included, use the stock package.
   Pipelines cached for another MSAA setting are skipped, not failed.

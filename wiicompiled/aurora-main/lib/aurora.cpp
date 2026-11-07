@@ -6,6 +6,7 @@
 #include "gfx/texture_replacement.hpp"
 #include "gfx/efb_ram_copy.hpp"
 #include "gfx/motion_effects.hpp"
+#include "gfx/scene_stage.hpp"
 #include "gx/fifo.hpp"
 #include "gx/shader_info.hpp"
 #include "imgui.hpp"
@@ -933,6 +934,7 @@ AuroraInfo initialize(int argc, char* argv[], const AuroraConfig& config) {
 #ifdef AURORA_ENABLE_GX
   // Before the graphics start, so the pipeline prewarm builds the kind the first frames use.
   gfx::motion::set_blur(g_config.motionBlur);
+  gfx::scene_stage::set_ambient_occlusion(g_config.ambientOcclusion);
 #endif
   if (g_config.maxTextureAnisotropy == 0) {
     g_config.maxTextureAnisotropy = 16;
@@ -2525,6 +2527,30 @@ bool aurora_motion_vectors_active() {
   return aurora::gfx::motion_vectors_active();
 #else
   return false;
+#endif
+}
+void aurora_set_scene_stage_view(int mode) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::scene_stage::set_view(mode);
+#endif
+}
+int aurora_get_scene_stage_view() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::scene_stage::view();
+#else
+  return 0;
+#endif
+}
+void aurora_set_ambient_occlusion(float strength) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::scene_stage::set_ambient_occlusion(strength);
+#endif
+}
+float aurora_get_ambient_occlusion() {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::scene_stage::ambient_occlusion();
+#else
+  return 0.f;
 #endif
 }
 void aurora_set_motion_vector_view(int mode, float scale) {

@@ -3,6 +3,7 @@
 #include "gfx/clear.hpp"
 #include "gfx/efb_ram_copy.hpp"
 #include "gfx/motion_effects.hpp"
+#include "gfx/scene_stage.hpp"
 #include "gfx/pipeline_cache.hpp"
 #include "gfx/texture.hpp"
 #include "gx/gx.hpp"
@@ -565,6 +566,100 @@ void draw_same_state_frame(bool settingChanged) {
   submit(true, false, false, true);
 }
 
+// ----- Scene stage: a solid quad (writes depth) on the left half, then a see-through world quad (depth test, no
+// depth write: the cut-out modes' tail) on the right half; the frame ends with nothing after the tail.
+// `crease`: instead a floor (y = -0.5, from 1.5 to 3 units away) meeting a wall (3 units away, up to y = 1), with a
+// small see-through quad in the top-left corner so the frame has a tail.
+void draw_stage_frame(bool crease = false) {
+  gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Scene stage frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+                                              .color = {0.f, 0.f, 0.f, 1.f},
+                                              .depth = gx::clear_depth_value()});
+  alignas(32) static std::array<uint8_t, 32768> fifo;
+  GXInit(fifo.data(), fifo.size());
+  gx::g_gxState.viewportPolicy = AURORA_VIEWPORT_NATIVE;
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetScissor(0, 0, 64, 64);
+  GXSetCullMode(GX_CULL_NONE);
+  GXSetColorUpdate(true);
+  GXSetAlphaUpdate(true);
+  GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_COPY);
+  GXSetNumTexGens(0);
+  GXSetNumChans(1);
+  GXSetNumTevStages(1);
+  GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+  GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+  GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+  const float projection[]{0.f, 1.f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+  GXSetProjectionv(projection);
+  const float identity[3][4]{{1.f, 0.f, 0.f, 0.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+  GXLoadPosMtxImm(identity, GX_PNMTX0);
+  GXSetCurrentMtx(GX_PNMTX0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+  constexpr float z = -4.f;
+  const auto quad = [&](float left, float right, std::array<u8, 4> color) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy :
+         std::array<std::array<float, 2>, 4>{{{left, .5f}, {right, .5f}, {right, -.5f}, {left, -.5f}}}) {
+      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXColor4u8(color[0], color[1], color[2], color[3]);
+    }
+    GXEnd();
+  };
+  GXSetZMode(true, GX_LEQUAL, true);
+  if (crease) {
+    const auto face = [](std::array<std::array<float, 3>, 4> corners) {
+      GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+      for (const auto& c : corners) {
+        GXPosition3f32(c[0], c[1], c[2]);
+        GXColor4u8(200, 200, 200, 255);
+      }
+      GXEnd();
+    };
+    face({{{-3.f, -.5f, -1.5f}, {3.f, -.5f, -1.5f}, {3.f, -.5f, -3.f}, {-3.f, -.5f, -3.f}}}); // floor
+    face({{{-3.f, 1.f, -3.f}, {3.f, 1.f, -3.f}, {3.f, -.5f, -3.f}, {-3.f, -.5f, -3.f}}});     // wall
+    GXSetZMode(true, GX_LEQUAL, false);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy :
+         std::array<std::array<float, 2>, 4>{{{-.95f, .95f}, {-.9f, .95f}, {-.9f, .9f}, {-.95f, .9f}}}) {
+      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXColor4u8(0, 255, 0, 128);
+    }
+    GXEnd();
+  } else {
+    quad(-.9f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.1f, .9f, {0, 255, 0, 128});
+  }
+  gx::fifo::drain();
+  submit(true, false, false, true);
+}
+
+// The EFB colour at (x, y) as R, G, B.
+std::array<int, 3> read_efb(unsigned x, unsigned y) {
+  const auto bytes = read_texel(webgpu::g_frameBuffer.texture, x, y);
+  if (webgpu::g_frameBuffer.format == wgpu::TextureFormat::BGRA8Unorm)
+    return {bytes[2], bytes[1], bytes[0]};
+  return {bytes[0], bytes[1], bytes[2]};
+}
+
+void check_efb(unsigned x, unsigned y, std::array<int, 3> expected, const char* what) {
+  const auto actual = read_efb(x, y);
+  for (int c = 0; c < 3; ++c) {
+    if (std::abs(actual[c] - expected[c]) > 3) {
+      std::fprintf(stderr, "scene stage %s at %u,%u expected=%d,%d,%d actual=%d,%d,%d\n", what, x, y, expected[0],
+                   expected[1], expected[2], actual[0], actual[1], actual[2]);
+      require(false, "Scene stage pixel mismatch");
+    }
+  }
+}
+
 void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
   const auto actual = read_motion(x, y);
   if (std::fabs(actual[0] - expected[0]) > 0.25f || std::fabs(actual[1] - expected[1]) > 0.25f) {
@@ -652,6 +747,70 @@ int main(int argc, char** argv) {
     gfx::request_motion_vectors(false);
     draw_same_state_frame(true);
     std::printf("Actual Aurora motion setting change resolves the pipeline again\n");
+    // The scene stage runs after the solid scene and before the see-through tail: tinted, the solid quad is
+    // multiplied by (0.35, 0.55, 1) and the see-through one drawn after keeps its colour (half green over black: 128;
+    // tinted it would be 70). The depth view shows the solid quad 4 units away as exp(-4 / 8) grey. Off (before and
+    // after), nothing changes.
+    for (const int mode : {0, 1, 2, 0}) {
+      gfx::scene_stage::set_view(mode);
+      // Draws until the pipelines are built (unready ones are skipped), then once more to read.
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+        require(std::chrono::steady_clock::now() < deadline, "Scene stage pipelines were not built");
+        draw_stage_frame();
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      draw_stage_frame();
+      const int grey = static_cast<int>(std::lround(255.0 * std::exp(-0.5)));
+      check_efb(16, 32,
+                mode == 1   ? std::array{89, 0, 0}
+                : mode == 2 ? std::array{grey, grey, grey}
+                            : std::array{255, 0, 0},
+                mode == 1   ? "tinted solid"
+                : mode == 2 ? "solid depth"
+                            : "solid, view off");
+      // Behind the see-through quad nothing solid is drawn: the depth view shows the clear's depth there, as at the
+      // corner, and the half-green quad drawn after the stage goes over it.
+      const auto under = mode == 2 ? read_efb(4, 4) : std::array{0, 0, 0};
+      check_efb(48, 32, {under[0] / 2, 128 + under[1] / 2, under[2] / 2}, "see-through after the stage");
+    }
+    std::printf(
+        "Actual Aurora scene stage: solid scene tinted, see-through tail after it, depth view, off untouched\n");
+    // Ambient occlusion, seen alone (view 3, full strength): a wall standing on a floor darkens just above their crease
+    // (the wall is 3 units away, so its foot is at row 37 of 64), and neither the wall high up nor the open floor near
+    // the camera shades itself. Applied at full strength the crease darkens the picture too; at 0 nothing changes.
+    {
+      const auto settle = [] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+          require(std::chrono::steady_clock::now() < deadline, "Ambient occlusion pipelines were not built");
+          draw_stage_frame(true);
+          webgpu::g_instance.ProcessEvents();
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        draw_stage_frame(true);
+      };
+      gfx::scene_stage::set_view(3);
+      settle();
+      const int crease = read_efb(32, 35)[0];
+      const int wallHigh = read_efb(32, 24)[0];
+      const int openFloor = read_efb(32, 44)[0];
+      std::printf("Actual Aurora ambient occlusion (0-255, 255 = none): crease %d, wall high %d, open floor %d\n",
+                  crease, wallHigh, openFloor);
+      require(crease < 215, "Ambient occlusion: the crease is not darkened");
+      require(wallHigh > 248 && openFloor > 248, "Ambient occlusion: a flat surface shades itself");
+      gfx::scene_stage::set_view(0);
+      gfx::scene_stage::set_ambient_occlusion(1.f);
+      settle();
+      const int litCrease = read_efb(32, 35)[0];
+      const int litWall = read_efb(32, 24)[0];
+      gfx::scene_stage::set_ambient_occlusion(0.f);
+      settle();
+      const int plainCrease = read_efb(32, 35)[0];
+      require(litCrease < plainCrease - 10 && std::abs(litWall - read_efb(32, 24)[0]) <= 2,
+              "Ambient occlusion: applying it does not darken only the crease");
+    }
     // An alpha-blended surface moves like any other. It owns the depth only on a GPU that can blend the 32-bit float
     // target; elsewhere (AURORA_GFX_FLAGS=nofloat32blend hides the feature) it leaves the depth behind it.
     gfx::request_motion_vectors(true);

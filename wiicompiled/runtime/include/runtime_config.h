@@ -36,6 +36,7 @@ struct RuntimeUserConfig {
     std::optional<bool> forceAspect169;
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
     std::optional<int32_t> motionBlur;  // [video] motion_blur: strength in percent, 0 = off (MotionBlurShutter)
+    std::optional<int32_t> ambientOcclusion;  // [video] ambient_occlusion: strength in percent, 0 = off
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
@@ -370,6 +371,9 @@ inline void EnsureConfigFile() {
               "fps60 = false\n"
               "# motion blur strength in percent: 0 = off, 10 = extra low, 20 = low, 30 = medium, 40 = high, 50 = extra high\n"
               "motion_blur = 0\n"
+              "# ambient occlusion (shade in creases, corners and under things) in percent: 0 = off, 35 = low, 65 = medium,\n"
+              "# 100 = high\n"
+              "ambient_occlusion = 0\n"
               "# 0 = original 4:3, 1 = 16:9, 2 = fill the screen, 3 = cinematic 2.39:1\n"
               "aspect_mode = 3\n"
               "display_mode = \"borderless\"\n"
@@ -534,6 +538,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     if (auto value = FindConfigInt(document, "video", "motion_blur"); value && *value >= 0 && *value <= 100) {
         config.motionBlur = *value;
+    }
+    if (auto value = FindConfigInt(document, "video", "ambient_occlusion"); value && *value >= 0 && *value <= 100) {
+        config.ambientOcclusion = *value;
     }
     if (auto value = FindConfigInt(document, "video", "gpu_compat"); value && *value >= 0 && *value <= 2) {
         config.gpuCompat = *value;
@@ -1058,6 +1065,21 @@ inline bool SetMotionBlur(int32_t value) {
     return WriteSetting("video", "motion_blur", std::to_string(value));
 }
 
+// Ambient occlusion strength in percent, 0 = off (aurora_set_ambient_occlusion takes it as 0 to 1). The menus offer the
+// levels below; any other value from 0 to 100 works too.
+inline int32_t AmbientOcclusion(int32_t fallback = 0) {
+    return Get().ambientOcclusion.value_or(fallback);
+}
+
+inline constexpr MotionBlurLevel kAmbientOcclusionLevels[] = {
+    {"Off", 0}, {"Low", 35}, {"Medium", 65}, {"High", 100},
+};
+
+inline bool SetAmbientOcclusion(int32_t value) {
+    Mutable().ambientOcclusion = value;
+    return WriteSetting("video", "ambient_occlusion", std::to_string(value));
+}
+
 inline bool SetForceAspect169(bool value) {
     Mutable().forceAspect169 = value;
     return WriteSetting("video", "force_16_9", value ? "true" : "false");
@@ -1421,6 +1443,9 @@ inline void LogLoadedConfig() {
             }
             if (config.motionBlur) {
                 std::cout << " motion_blur=" << *config.motionBlur;
+            }
+            if (config.ambientOcclusion) {
+                std::cout << " ambient_occlusion=" << *config.ambientOcclusion;
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");
