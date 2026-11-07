@@ -947,10 +947,27 @@ bool affine_close(const Affine& a, const Affine& b) noexcept {
   return dx * dx + dy * dy + dz * dz <= tolerance * tolerance;
 }
 
+// A camera cut: the game never says when it cuts, so a camera change far beyond any real camera motion in one frame
+// counts as one. Its frame gets no motion at all (paired, a cut's draws would each "move" the whole jump and the blur
+// would smear the frame from edge to edge). Measured per frame at 60 fps: play in e001 and i004 at most 0.9 degrees
+// and 0.084 units; the dev menu's free camera spinning 15 degrees or moving 0.5 units every frame (steady motion,
+// which keeps its blur); cuts 40 to 179 degrees or 5 to 105 units. A turn of more than 90 degrees never pairs at all
+// (kMinimumQuaternionDot), so these limits matter for the smaller cuts.
+constexpr float kCameraCutCosTurn = 0.8660254f; // cos(30 degrees)
+constexpr float kCameraCutMove = 2.0f;          // world units
+
 struct MotionCameraDelta {
   HashType viewport = 0;
   Affine inverse{}; // D^-1: last frame's matrix of a still draw = inverse * this frame's
+  bool cut = false;
 };
+
+// D (the camera's change, current * previous^-1) turns more than 30 degrees or moves more than kCameraCutMove.
+bool camera_cut(const Affine& delta) noexcept {
+  const float cosTurn = (delta[0] + delta[5] + delta[10] - 1.f) * 0.5f;
+  const float move = delta[3] * delta[3] + delta[7] * delta[7] + delta[11] * delta[11];
+  return !(cosTurn >= kCameraCutCosTurn) || !(move <= kCameraCutMove * kCameraCutMove);
+}
 std::vector<MotionCameraDelta> s_motionCameraDeltas;
 
 // The camera's change for every viewport, from the draws recorded so far (see above).
@@ -1012,6 +1029,7 @@ void estimate_motion_camera_deltas() {
     if (best != SIZE_MAX && bestSupport >= kCameraDeltaMinAgreeing &&
         bestSupport * kCameraDeltaMinAgreeingOneIn >= group.size() &&
         affine_inverse(candidates[best].delta, result.inverse)) {
+      result.cut = camera_cut(candidates[best].delta);
       s_motionCameraDeltas.push_back(result);
     }
   }
@@ -1024,6 +1042,12 @@ const MotionCameraDelta* motion_camera_delta(HashType viewport) noexcept {
     }
   }
   return nullptr;
+}
+
+// This frame's camera cut for the viewport (see kCameraCutCosTurn): its draws keep this frame's matrices, no motion.
+bool motion_camera_cut(HashType viewport) noexcept {
+  const auto* delta = motion_camera_delta(viewport);
+  return delta != nullptr && delta->cut;
 }
 
 // Last frame's partner for a motion draw from one identity group, skipping claimed entries: a skinned draw takes
@@ -1074,7 +1098,7 @@ size_t pick_motion_partner(const std::vector<size_t>& candidates, size_t ordinal
 // camera's motion instead of none.
 void write_motion_still(const PendingMotionUniform& task, const FrameTransformSnapshot& current) noexcept {
   const auto* delta = motion_camera_delta(current.viewportIdentity);
-  if (delta == nullptr) {
+  if (delta == nullptr || delta->cut) {
     return;
   }
   const auto still = [&](const Mat3x4<float>& matrix, size_t slot) {
@@ -1693,6 +1717,9 @@ void finalize_frame_interpolation() noexcept {
       if (task.indexedMatrices != (current.indexedMatrices != nullptr)) {
         continue;
       }
+      if (motion_camera_cut(current.viewportIdentity)) {
+        continue; // a camera cut: this frame's matrices, no motion
+      }
       bool paired = false;
       if (task.indexedMatrices) {
         const int32_t palette = paletteDrawIndex[task.currentTransformIndex];
@@ -1798,6 +1825,9 @@ void resolve_pending_motion_uniforms_early() noexcept {
     const auto& entry = s_currentFrameTransforms[task.currentTransformIndex];
     if (task.indexedMatrices != (entry.transform.indexedMatrices != nullptr)) {
       continue;
+    }
+    if (motion_camera_cut(entry.transform.viewportIdentity)) {
+      continue; // a camera cut: this frame's matrices, no motion
     }
     const size_t partner = pair_motion_draw(task.currentTransformIndex, task.indexedMatrices);
     if (partner != SIZE_MAX) {

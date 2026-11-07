@@ -459,8 +459,11 @@ std::array<float, 2> read_motion(unsigned x, unsigned y) {
 }
 
 // One frame: a quad over the middle half of the 64x64 viewport (z = -4), moved `shift` (normalized device
-// coordinates, so 32 pixels per unit) to the right by its position matrix. `blended`: alpha-blended, still writing depth.
-void draw_motion_frame(float shift, bool blended = false) {
+// coordinates, so 32 pixels per unit; the matrix moves it 4 units per unit) to the right by its position matrix.
+// `blended`: alpha-blended, still writing depth. `twoQuads`: instead two narrower quads, x -0.9 to -0.6 and -0.4 to
+// -0.1 (y -0.25 to 0.25), each its own draw on its own matrix slot, both moved the same: two still draws that agree on
+// the camera's change, so a frame-wide shift reads as the camera's own.
+void draw_motion_frame(float shift, bool blended = false, bool twoQuads = false) {
   gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
   require(gfx::begin_frame(), "Motion frame begin failed");
   gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
@@ -491,28 +494,39 @@ void draw_motion_frame(float shift, bool blended = false) {
   constexpr float z = -4.f;
   const float position[3][4]{{1.f, 0.f, 0.f, shift * -z}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
   GXLoadPosMtxImm(position, GX_PNMTX0);
+  GXLoadPosMtxImm(position, GX_PNMTX1);
   GXSetCurrentMtx(GX_PNMTX0);
   GXClearVtxDesc();
   GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
   GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
   GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
   GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
-  GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-  for (const auto& xy : std::array<std::array<float, 2>, 4>{{{-.5f, .5f}, {.5f, .5f}, {.5f, -.5f}, {-.5f, -.5f}}}) {
-    GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
-    GXColor4u8(255, 255, 255, 255);
+  const auto quad = [&](float left, float right, float bottom, float top) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy :
+         std::array<std::array<float, 2>, 4>{{{left, top}, {right, top}, {right, bottom}, {left, bottom}}}) {
+      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXColor4u8(255, 255, 255, 255);
+    }
+    GXEnd();
+  };
+  if (twoQuads) {
+    quad(-.9f, -.6f, -.25f, .25f);
+    GXSetCurrentMtx(GX_PNMTX1);
+    quad(-.4f, -.1f, -.25f, .25f);
+  } else {
+    quad(-.5f, .5f, -.5f, .5f);
   }
-  GXEnd();
   gx::fifo::drain();
   submit(true, false, false, true);
 }
 
 // Draws until the pipelines for the current motion setting are built, as unready ones are skipped.
-void settle_motion_pipelines(bool blended = false) {
+void settle_motion_pipelines(bool blended = false, bool twoQuads = false) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
   for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
     require(std::chrono::steady_clock::now() < deadline, "Motion vector pipelines were not built");
-    draw_motion_frame(0.f, blended);
+    draw_motion_frame(0.f, blended, twoQuads);
     webgpu::g_instance.ProcessEvents();
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
@@ -598,6 +612,18 @@ int main(int argc, char** argv) {
     draw_motion_frame(.25f);
     check_motion(36, 32, {-8.f, 0.f}, "moved");
     check_motion(4, 32, {0.f, 0.f}, "background");
+    // A camera cut: when the whole picture moves more than a camera can in one frame (here 2.4 units, over the
+    // 2-unit limit), the frame has no motion; 1 unit is still motion.
+    settle_motion_pipelines(false, true);
+    draw_motion_frame(.25f, false, true);
+    check_motion(16, 32, {-8.f, 0.f}, "camera move, first quad");
+    check_motion(32, 32, {-8.f, 0.f}, "camera move, second quad");
+    draw_motion_frame(0.f, false, true);
+    draw_motion_frame(0.f, false, true);
+    draw_motion_frame(.6f, false, true);
+    check_motion(27, 32, {0.f, 0.f}, "camera cut, first quad");
+    check_motion(43, 32, {0.f, 0.f}, "camera cut, second quad");
+    std::printf("Actual Aurora camera cut: no motion past the cut limit, -8 px below it\n");
     gfx::request_motion_vectors(false);
     draw_motion_frame(0.f);
     require(!webgpu::g_motionVectors.texture, "Motion vector targets kept after the request ended");
