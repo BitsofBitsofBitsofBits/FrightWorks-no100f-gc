@@ -447,59 +447,41 @@ void draw(const wgpu::CommandEncoder& encoder, Kind kind, const wgpu::TextureVie
   pass.End();
 }
 
-// The inverse of a 4x4 matrix (any layout: the inverse of the transpose is the transpose of the inverse); a zero
-// matrix if it has none.
+// The inverse of a 4x4 matrix, from its cofactors: inverse[r][c] = cofactor[c][r] / determinant (any layout: the inverse
+// of the transpose is the transpose of the inverse); a zero matrix if it has none.
 Mat4x4<float> inverse(const Mat4x4<float>& matrix) {
   const std::array rows{&matrix.m0, &matrix.m1, &matrix.m2, &matrix.m3};
-  std::array<float, 16> m;
-  for (size_t r = 0; r < 4; ++r) {
-    for (size_t c = 0; c < 4; ++c)
-      m[r * 4 + c] = rows[r]->m[c];
-  }
-  std::array<float, 16> inv{};
-  inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] +
-           m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
-  inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] -
-           m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
-  inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] +
-           m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
-  inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] -
-            m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
-  inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] -
-           m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
-  inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] +
-           m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
-  inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] -
-           m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
-  inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] +
-            m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
-  inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] -
-           m[13] * m[3] * m[6];
-  inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] -
-           m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
-  inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] +
-            m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
-  inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] -
-            m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
-  inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] +
-           m[9] * m[3] * m[6];
-  inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] -
-           m[8] * m[3] * m[6];
-  inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] +
-            m[8] * m[3] * m[5];
-  inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] -
-            m[8] * m[2] * m[5];
-  const float det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+  const auto at = [&rows](size_t row, size_t column) { return rows[row]->m[column]; };
+  // The three rows or columns left when one is taken out.
+  const auto others = [](size_t skipped) {
+    std::array<size_t, 3> left{};
+    for (size_t i = 0, n = 0; i < 4; ++i) {
+      if (i != skipped)
+        left[n++] = i;
+    }
+    return left;
+  };
+  // The determinant of what is left without this row and column, expanded along its first row, signed by position.
+  const auto cofactor = [&](size_t row, size_t column) {
+    const auto r = others(row);
+    const auto c = others(column);
+    const auto lower2x2 = [&](size_t a, size_t b) {
+      return at(r[1], c[a]) * at(r[2], c[b]) - at(r[1], c[b]) * at(r[2], c[a]);
+    };
+    const float minor = at(r[0], c[0]) * lower2x2(1, 2) - at(r[0], c[1]) * lower2x2(0, 2) + at(r[0], c[2]) * lower2x2(0, 1);
+    return (row + column) % 2 == 0 ? minor : -minor;
+  };
+  float det = 0.f;
+  for (size_t column = 0; column < 4; ++column)
+    det += at(0, column) * cofactor(0, column);
   Mat4x4<float> out{};
   if (!std::isfinite(det) || std::fabs(det) < 1e-20f) {
     return out;
   }
-  for (float& v : inv)
-    v /= det;
   const std::array outRows{&out.m0, &out.m1, &out.m2, &out.m3};
-  for (size_t r = 0; r < 4; ++r) {
-    for (size_t c = 0; c < 4; ++c)
-      outRows[r]->m[c] = inv[r * 4 + c];
+  for (size_t row = 0; row < 4; ++row) {
+    for (size_t column = 0; column < 4; ++column)
+      outRows[row]->m[column] = cofactor(column, row) / det;
   }
   return out;
 }
@@ -600,6 +582,14 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
     draw(encoder, Kind::Ink, color, size, &depth, nullptr);
   }
 }
+
+void release_unused_targets() noexcept {
+  if (g_aoTargets[0].texture && ambient_occlusion() <= 0.f && view() != 3) {
+    g_aoTargets = {};
+  }
+}
+
+bool holds_targets() noexcept { return static_cast<bool>(g_aoTargets[0].texture); }
 
 void shutdown() noexcept {
   g_pipelines = {};

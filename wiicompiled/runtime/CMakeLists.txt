@@ -203,11 +203,14 @@ set(MKW_TRANSLATED_PPC_FP_OPTIONS -fno-fast-math -ffp-contract=off)
 # kpad.cpp derives the accelerometer values the game reads (magnitude, speed, acc_vertical) in
 # native float math; network play needs them bit-identical on x86 and ARM, as the translated
 # code is.
+# no100f_particles_update.cpp is a native copy of game code and must match it bit for bit without
+# fps60: fast-math would erase the rounding in PPC_Fmadds, so particle sizes would be cut, not rounded.
 set(MKW_PPC_SEMANTIC_RUNTIME_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/src/ppc_helpers.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/fpu_helpers.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/ppc_quantized.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/src/hle/input/kpad.cpp")
+    "${CMAKE_CURRENT_LIST_DIR}/src/hle/input/kpad.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hle/no100f_particles_update.cpp")
 set_source_files_properties(${MKW_PPC_SEMANTIC_RUNTIME_SOURCES} PROPERTIES
     SKIP_UNITY_BUILD_INCLUSION ON
     SKIP_PRECOMPILE_HEADERS ON
@@ -449,10 +452,20 @@ target_include_directories(no100f_stream_read_tests PRIVATE "${CMAKE_CURRENT_LIS
 target_compile_features(no100f_stream_read_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_stream_read_tests COMMAND no100f_stream_read_tests)
 
+add_executable(no100f_confetti_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_confetti_tests.cpp")
+target_include_directories(no100f_confetti_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_confetti_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_confetti_tests COMMAND no100f_confetti_tests)
+
 add_executable(no100f_camera_aspect_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_camera_aspect_tests.cpp")
 target_include_directories(no100f_camera_aspect_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
 target_compile_features(no100f_camera_aspect_tests PRIVATE cxx_std_17)
 add_test(NAME no100f_camera_aspect_tests COMMAND no100f_camera_aspect_tests)
+
+add_executable(no100f_particles_update_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_particles_update_tests.cpp")
+target_include_directories(no100f_particles_update_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
+target_compile_features(no100f_particles_update_tests PRIVATE cxx_std_17)
+add_test(NAME no100f_particles_update_tests COMMAND no100f_particles_update_tests)
 
 add_executable(no100f_ax_address_sync_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_ax_address_sync_tests.cpp")
 target_compile_features(no100f_ax_address_sync_tests PRIVATE cxx_std_17)

@@ -8,7 +8,7 @@ FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-
 from which it split off on October 31, 2026. This repository is the GameCube version; ports of the other console versions
 may follow.
 
-[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1136-scooby-doo-night-of-100-frights/)
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1163-scooby-doo-night-of-100-frights/)
 
 > **Artists wanted:** the launcher needs new art in the style of the original show. [Details below](#wanted-an-artist-for-the-launcher).
 
@@ -35,7 +35,9 @@ may follow.
 - GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures, or that [add things to a level](docs/mod-patches.md)
   using your own disc, so no game data is shared
-- The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page
+- The game's holiday events follow the real date, or pick a holiday, confetti fireworks or none of them on the launcher's **Extras** page
+
+![Scooby watching confetti fireworks over Mystic Manor](docs/screenshots/confetti-fireworks.gif)
 
 **No game data is included.** You need your own disc image.
 
@@ -110,7 +112,7 @@ Folders > Copy from an earlier version**.
 **Version numbers** continue from Scooby-Doo: Refrightened. Its last release, v1.0.2, is the commit FrightWorks split
 off from, so FrightWorks starts at v1.0.3.
 
-![The launcher](docs/launcher.png)
+![The launcher](docs/screenshots/launcher.gif)
 
 ## Wanted: an artist for the launcher
 

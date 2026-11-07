@@ -12,7 +12,8 @@ namespace aurora::gfx::scene_stage {
 // flush_deferred_draws, or at the next copy or the frame's end), the cut-out fringes and the solid surfaces' second
 // layers stay in the pass, the pass ends, the stage runs, and the see-through draws start a new pass that keeps the
 // colour and depth. When a frame flushes more than once, the stage runs at the last flush. A frame with nothing held
-// back (cut-out mode "game" or "cut", or nothing see-through or cut out) has no stage.
+// back (cut-out mode "game" or "cut", or nothing see-through or cut out) has no stage, and neither has a frame submitted
+// in parts (common.cpp end_batch_impl): it shows without the stage's effects, otherwise the same.
 
 // Whether anything uses the stage: with nothing, the pass is not split and nothing is recorded.
 bool wanted() noexcept;
@@ -54,6 +55,11 @@ const Camera& camera() noexcept;
 // reading `depth` (its depth buffer).
 void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color, const wgpu::TextureView& depth,
             wgpu::Extent3D size, uint32_t samples, const Camera& camera);
+
+// Frees the occlusion targets when nothing uses them any more (run where encode runs: it uses them there). Commands
+// already recorded keep their own references.
+void release_unused_targets() noexcept;
+bool holds_targets() noexcept;
 
 // Releases the stage's GPU objects (before the device goes).
 void shutdown() noexcept;

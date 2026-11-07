@@ -186,6 +186,9 @@ struct RenderPass {
   // Solid scene, cut-out fringes, then translucent world draws. Explicit barriers flush both tails.
   CommandList deferred;
   CommandList translucent;
+  // A solid surface's second layer is in `deferred`: it was in the see-through tail until the scene stage moved it, so
+  // it still counts as the tail having started.
+  bool surfaceLayerPending = false;
   std::optional<Viewport> deferredViewport;
   std::optional<Viewport> translucentViewport;
   std::optional<ClipRect> deferredScissor;
@@ -548,6 +551,7 @@ void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind)
     UNLIKELY { return; }
   auto& pass = g_renderPasses[g_currentRenderPass];
   auto& list = kind == DeferredDrawKind::Translucent ? pass.translucent : pass.deferred;
+  pass.surfaceLayerPending |= kind == DeferredDrawKind::SurfaceLayer;
   // Each deferred draw carries the viewport and scissor it was recorded with.
   auto& lastViewport = kind == DeferredDrawKind::Translucent ? pass.translucentViewport : pass.deferredViewport;
   auto& lastScissor = kind == DeferredDrawKind::Translucent ? pass.translucentScissor : pass.deferredScissor;
@@ -596,6 +600,7 @@ void flush_deferred_draws() {
   sort_particle_draws(pass.translucent);
   pass.commands.insert(pass.commands.end(), pass.deferred.begin(), pass.deferred.end());
   pass.deferred.clear();
+  pass.surfaceLayerPending = false;
   pass.deferredViewport.reset();
   pass.deferredScissor.reset();
   if (!g_inOffscreen && scene_stage::wanted()) {
@@ -638,7 +643,9 @@ void flush_deferred_draws() {
 }
 
 bool has_pending_translucent_draws() noexcept {
-  return has_current_render_pass() && !g_renderPasses[g_currentRenderPass].translucent.empty();
+  if (!has_current_render_pass()) return false;
+  const auto& pass = g_renderPasses[g_currentRenderPass];
+  return !pass.translucent.empty() || pass.surfaceLayerPending;
 }
 
 Vec2<uint32_t> get_frame_buffer_size() noexcept {
@@ -1367,7 +1374,11 @@ bool begin_frame() { return begin_frame_impl(true); }
 
 bool resume_frame() { return begin_frame_impl(false); }
 
+// Whether the frame being recorded has already been submitted in part (recording thread).
+static bool g_frameSubmittedInParts = false;
+
 void abort_frame() noexcept {
+  g_frameSubmittedInParts = false;
   efb_ram::cancel();
   efb_ram::abort_async();
   g_verts.release();
@@ -1410,7 +1421,16 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
     // Mid-frame batch split: the staging buffer is about to be unmapped and rotated, so pending
     // interpolation tasks pointing into it would dangle. Tie the clear to the rotation itself.
     gx::drop_pending_frame_interpolation_uniforms();
+    g_frameSubmittedInParts = true;
   }
+  // A frame submitted in parts has no scene stage. A part's see-through draws must go with it, as they use its staging
+  // buffers, so the last flush can come too late for them: the stage would shade them, or shade the solid scene twice.
+  if (g_frameSubmittedInParts) {
+    for (auto& pass : g_renderPasses)
+      pass.sceneStageBefore = false;
+  }
+  if (advanceFrame)
+    g_frameSubmittedInParts = false;
   g_uniforms.append_zeroes(gx::MaxUniformSize); // Pad the end of the buffer
   const auto used = staging_usage();
   for (unsigned i = 0; i < used.size(); ++i) g_stagingHighWater[i] = std::max(g_stagingHighWater[i], used[i]);
@@ -1597,6 +1617,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
       }
     }
   }
+  scene_stage::release_unused_targets();
   // The scene stage runs once per frame, before the last pass that asks for it (a frame can flush its see-through
   // tail more than once; the solid scene is finished at the last).
   u32 sceneStagePass = UINT32_MAX;

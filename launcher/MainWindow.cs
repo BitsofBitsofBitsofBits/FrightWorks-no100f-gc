@@ -380,7 +380,7 @@ sealed class MainWindow : Window
         {
             // Strength in percent, as in F10 (runtime_config.h kAmbientOcclusionLevels); a strength set by hand in
             // Config.toml that is none of the levels is kept as its own entry.
-            var levels = new List<(string text, string raw)> { ("Off", "0"), ("Low", "35"), ("Medium", "65"), ("High", "100") };
+            var levels = new List<(string text, string raw)> { ("Off", "0"), ("Low", "35"), ("Medium", "65") };
             if (int.TryParse(cfg.Get("video", "ambient_occlusion")?.Trim(), out int saved) && saved > 0 && saved <= 100 &&
                 !levels.Exists(l => l.raw == saved.ToString()))
             {
@@ -396,8 +396,8 @@ sealed class MainWindow : Window
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Children.Add(table);
         body.Children.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
-                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation and motion blur settings too, and more (sound, controls); "
-                                              : "resolution, picture shape, window, frame interpolation and motion blur settings too, and more (sound, controls); ") +
+                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation, motion blur and ambient occlusion settings too, and more (sound, controls); "
+                                              : "resolution, picture shape, window, frame interpolation, motion blur and ambient occlusion settings too, and more (sound, controls); ") +
                                "F11 switches between fullscreen and a window, and F2 saves a screenshot." +
                                (MonitorChoice ? " Fullscreen monitor also applies when F11 goes fullscreen from a window." : "")));
 
@@ -555,7 +555,7 @@ sealed class MainWindow : Window
         body.Children.Add(Title("Holidays"));
         body.Children.Add(HolidayBox());
         body.Children.Add(Note("Outside Mystic Manor and in the playground, the game celebrates holidays on their real dates. " +
-                               "Pick one to see it any day, or turn them off."));
+                               "Pick one to see it any day, turn them off, or choose confetti fireworks."));
 
         body.Children.Add(Title("Developer tools"));
         body.Children.Add(DevToolsBox());
@@ -821,11 +821,11 @@ sealed class MainWindow : Window
     }
 
     // The hubs' holiday events ([game] holiday): the game checks the date when a hub loads. "auto" uses today's date,
-    // "off" none, "MM-DD" pretends it is that day.
+    // "off" none, "confetti" fireworks with the colours mixed through each burst, "MM-DD" pretends it is that day.
     static readonly (string text, string value)[] Holidays =
     {
         ("By today's date", "auto"), ("Off", "off"), ("New Year's Day", "01-01"), ("St. Patrick's Day", "03-17"),
-        ("Fourth of July", "07-04"), ("Halloween", "10-31"), ("Christmas", "12-25"),
+        ("Fourth of July", "07-04"), ("Halloween", "10-31"), ("Christmas", "12-25"), ("Confetti fireworks", "confetti"),
     };
 
     Control HolidayBox()
