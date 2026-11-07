@@ -704,7 +704,14 @@ bool ReadMainCamera(FreeCam& c) {
     return true;
 }
 
+// Spin and move values end with the free camera: a later "freecam on" must not start moving by itself.
+void ClearCamMotion() {
+    g_camSpinDegrees = 0.0f;
+    g_camMove[0] = g_camMove[1] = g_camMove[2] = 0.0f;
+}
+
 void SetFreecam(bool on) {
+    if (!on) ClearCamMotion();
     if (on && !g_cam.on && !ReadMainCamera(g_cam)) {
         g_status = "Camera not found.";
         return;
@@ -1571,6 +1578,7 @@ void PollCommandFile() {
             if (g_camSpinDegrees != 0.0f && !g_cam.on) SetFreecam(true);
             g_status = "camera spin " + std::to_string(g_camSpinDegrees) + " degrees per frame" +
                        (g_cam.on ? "" : " (no free camera here)");
+            if (!g_cam.on) ClearCamMotion();
         } else if (cmd == "cammove") {
             std::istringstream as(arg);
             float dx = 0.0f, dy = 0.0f, dz = 0.0f;
@@ -1579,7 +1587,8 @@ void PollCommandFile() {
             g_camMove[1] = dy;
             g_camMove[2] = dz;
             if ((dx != 0.0f || dy != 0.0f || dz != 0.0f) && !g_cam.on) SetFreecam(true);
-            g_status = "camera move " + arg + " per frame";
+            g_status = "camera move " + arg + " per frame" + (g_cam.on ? "" : " (no free camera here)");
+            if (!g_cam.on) ClearCamMotion();
         } else if (cmd == "find") {
             LoadSuspects();
             const auto it = std::find_if(g_suspects.begin(), g_suspects.end(), [&](const Suspect& s) { return s.id == arg; });
@@ -2323,6 +2332,7 @@ void ApplyFreecam(uint32_t camera, CpuContext* ctx) {
     // A scene change (travel, a door, a warp) turns the free camera off: its pose belongs to the old scene.
     if (CurrentScenePtr() != g_camScene || CurrentSceneId() != g_camSceneId) {
         g_cam.on = false;
+        ClearCamMotion();
         return;
     }
     const uint32_t frame = MainCameraFrame();
