@@ -30,7 +30,7 @@ what changes: positions, timers, spawn counts, pools. The usual cause in this po
    address, `dol.py callers/func` for who writes it. `trace ADDR N` follows a linked list per frame.
 3. **Count, don't eyeball**: per-system pool use (`parsys.py`), per-emitter spawn rate at 30 vs 60 (`births-run.ps1` + `births.py`).
 4. **Fix at the per-call site**, re-measure with the same tools (rates within noise of 30 fps, flash count 0), then human visual
-   check if the change is visible, and the smoke test in `.agents/REPO.md` (Testing; the script is not built yet, so boot `h001` and the changed level).
+   check if the change is visible, and the smoke test in `.agents/REPO.md` (Testing: `python tools/smoke-test.py --scenes <changed level>`).
 
 ## Parking Scooby at a fixed spot (`tools/debug/game/mkhip.py`)
 

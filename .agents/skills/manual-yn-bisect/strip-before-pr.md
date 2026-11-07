@@ -9,7 +9,7 @@ Diagnostics never ride along in a PR. Keep them reusable as patch files instead 
    git diff --output=tools/debug/patches/<name>.patch HEAD -- <files>   # byte-exact; don't use Out-File
    git apply --check tools/debug/patches/<name>.patch
    ```
-2. Fresh branch from `origin/main`, apply **only** the fix, rebuild, re-verify: a human visual check if the bug is visible, and the smoke test in `.agents/REPO.md` (Testing; the script is not built yet, so boot `h001` and the changed level).
+2. Fresh branch from `origin/main`, apply **only** the fix, rebuild, re-verify: a human visual check if the bug is visible, and the smoke test in `.agents/REPO.md` (Testing: `python tools/smoke-test.py --scenes <changed level>`).
 3. Commit only the fix paths: `git commit -m "..." -- <fix files>`.
 4. Check overlap with open PRs: `gh pr view <n> --json files`, then
    `git fetch origin pull/<n>/head:refs/remotes/origin/pr-<n>` and `git merge-tree --write-tree HEAD origin/pr-<n>`.
