@@ -55,7 +55,7 @@ struct RuntimeUserConfig {
     std::optional<bool> showFps;
     std::optional<bool> skipIntro;
     std::optional<bool> fps60;
-    std::optional<std::string> holiday;  // NO100F [game] holiday: "auto" (today), "off" or "MM-DD"
+    std::optional<std::string> holiday;  // NO100F [game] holiday: "auto" (today), "off", "rainbow" or "MM-DD"
     std::optional<bool> devTools;        // NO100F [game] dev_tools: F8 dev menu + DEV build mark (launcher Extras)
     std::optional<bool> recordAudio;     // NO100F [game] record_audio: F3 videos (dev tools) include the game's sound
     std::optional<bool> captureOverlay;  // NO100F [game] capture_overlay: F2/F3 captures show the F8/F10 menus (dev tools)
@@ -214,9 +214,9 @@ inline bool IsSupportedDisplayMode(std::string_view value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-// NO100F [game] holiday: "auto", "off", or a forced date "MM-DD".
+// NO100F [game] holiday: "auto", "off", "rainbow" (multicoloured fireworks), or a forced date "MM-DD".
 inline bool IsSupportedHoliday(std::string_view value) {
-    if (value == "auto" || value == "off") return true;
+    if (value == "auto" || value == "off" || value == "rainbow") return true;
     if (value.size() != 5 || value[2] != '-') return false;
     for (const size_t i : {size_t{0}, size_t{1}, size_t{3}, size_t{4}})
         if (value[i] < '0' || value[i] > '9') return false;
@@ -387,7 +387,8 @@ inline void EnsureConfigFile() {
               "texture_dumps = false\n\n"
               "[game]\n"
               "# Holiday events in the hubs (fireworks, Halloween bats, ...): \"auto\" = by today's date,\n"
-              "# \"off\" = never, or \"MM-DD\" to pretend it is that day (e.g. \"10-31\").\n"
+              "# \"off\" = never, \"rainbow\" = fireworks with every colour in each burst,\n"
+              "# or \"MM-DD\" to pretend it is that day (e.g. \"10-31\").\n"
               "holiday = \"auto\"\n"
               "# Developer tools: the F8 dev menu (travel, spots, free camera, texture finder) and a DEV build mark.\n"
               "dev_tools = false\n"
@@ -1208,7 +1209,8 @@ inline bool SkipIntro(bool fallback = false) {
     return Get().skipIntro.value_or(fallback);
 }
 
-// NO100F: the date the hubs' holiday events see (launcher "Holidays"): "auto" = today, "off" = none, "MM-DD" = that day.
+// NO100F: the date the hubs' holiday events see (launcher "Holidays"): "auto" = today, "off" = none, "rainbow" = Jan 1
+// with rainbow firework bursts, "MM-DD" = that day.
 inline std::string Holiday() {
     return Get().holiday.value_or("auto");
 }

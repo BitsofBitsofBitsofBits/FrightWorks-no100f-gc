@@ -35,7 +35,7 @@ may follow.
 - GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures, or that [add things to a level](docs/mod-patches.md)
   using your own disc, so no game data is shared
-- The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page
+- The game's holiday events follow the real date, or pick a holiday, rainbow fireworks or none of them on the launcher's **Extras** page
 
 **No game data is included.** You need your own disc image.
 

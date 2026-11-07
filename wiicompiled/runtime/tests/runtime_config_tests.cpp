@@ -31,6 +31,16 @@ int main(int argc, char** argv) {
         const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "invalid.toml");
         if (!Require(!config.metalFxSpatialUpscaling, "invalid MetalFX setting was accepted")) return 1;
     }
+    for (const char* holiday : {"auto", "off", "rainbow", "01-01", "12-25"}) {
+        std::istringstream input(std::string("[game]\nholiday = \"") + holiday + "\"\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "holiday.toml");
+        if (!Require(config.holiday == std::optional<std::string>{holiday}, "valid holiday setting was not loaded")) return 1;
+    }
+    for (const char* holiday : {"Rainbow", "rainbows", "", "13-01", "01-32"}) {
+        std::istringstream input(std::string("[game]\nholiday = \"") + holiday + "\"\n");
+        const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "bad-holiday.toml");
+        if (!Require(!config.holiday, "invalid holiday setting was accepted")) return 1;
+    }
     // Persistence is opt-in and must use a caller-owned portable copy of this CPU test.
     if (argc == 2) {
         const auto executable = RuntimeConfigFile::ExecutableDirectory();
