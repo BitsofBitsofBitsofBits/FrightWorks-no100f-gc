@@ -203,11 +203,14 @@ set(MKW_TRANSLATED_PPC_FP_OPTIONS -fno-fast-math -ffp-contract=off)
 # kpad.cpp derives the accelerometer values the game reads (magnitude, speed, acc_vertical) in
 # native float math; network play needs them bit-identical on x86 and ARM, as the translated
 # code is.
+# no100f_particles_update.cpp is a native copy of game code and must match it bit for bit without
+# fps60: fast-math would erase the rounding in PPC_Fmadds, so particle sizes would be cut, not rounded.
 set(MKW_PPC_SEMANTIC_RUNTIME_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/src/ppc_helpers.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/fpu_helpers.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/src/ppc_quantized.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/src/hle/input/kpad.cpp")
+    "${CMAKE_CURRENT_LIST_DIR}/src/hle/input/kpad.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/src/hle/no100f_particles_update.cpp")
 set_source_files_properties(${MKW_PPC_SEMANTIC_RUNTIME_SOURCES} PROPERTIES
     SKIP_UNITY_BUILD_INCLUSION ON
     SKIP_PRECOMPILE_HEADERS ON
