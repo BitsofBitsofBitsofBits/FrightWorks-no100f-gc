@@ -4,6 +4,7 @@
 
 #include "clear.hpp"
 #include "motion_effects.hpp"
+#include "scene_stage.hpp"
 #include "depth_peek.hpp"
 #include "efb_ram_copy.hpp"
 #include "../internal.hpp"
@@ -185,6 +186,9 @@ struct RenderPass {
   // Solid scene, cut-out fringes, then translucent world draws. Explicit barriers flush both tails.
   CommandList deferred;
   CommandList translucent;
+  // A solid surface's second layer is in `deferred`: it was in the see-through tail until the scene stage moved it, so
+  // it still counts as the tail having started.
+  bool surfaceLayerPending = false;
   std::optional<Viewport> deferredViewport;
   std::optional<Viewport> translucentViewport;
   std::optional<ClipRect> deferredScissor;
@@ -197,6 +201,10 @@ struct RenderPass {
   // The resolve destination outlives the frame with no re-issue path (one-shot
   // bake), so this pass may not drop draws even in skip-unready-pipelines mode.
   bool requireReadyPipelines = false;
+  // The scene stage (scene_stage.hpp) runs before this pass: it continues the pass before it after the solid scene,
+  // and starts with the see-through tail. `sceneCamera` is the solid scene's camera then.
+  bool sceneStageBefore = false;
+  scene_stage::Camera sceneCamera{};
   bool resolveHalfScale = false;
   bool resolveCopyFilterActive = false;
   bool resolveForceOpaqueAlpha = false;
@@ -543,6 +551,7 @@ void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind)
     UNLIKELY { return; }
   auto& pass = g_renderPasses[g_currentRenderPass];
   auto& list = kind == DeferredDrawKind::Translucent ? pass.translucent : pass.deferred;
+  pass.surfaceLayerPending |= kind == DeferredDrawKind::SurfaceLayer;
   // Each deferred draw carries the viewport and scissor it was recorded with.
   auto& lastViewport = kind == DeferredDrawKind::Translucent ? pass.translucentViewport : pass.deferredViewport;
   auto& lastScissor = kind == DeferredDrawKind::Translucent ? pass.translucentScissor : pass.deferredScissor;
@@ -591,18 +600,52 @@ void flush_deferred_draws() {
   sort_particle_draws(pass.translucent);
   pass.commands.insert(pass.commands.end(), pass.deferred.begin(), pass.deferred.end());
   pass.deferred.clear();
+  pass.surfaceLayerPending = false;
   pass.deferredViewport.reset();
   pass.deferredScissor.reset();
-  pass.commands.insert(pass.commands.end(), pass.translucent.begin(), pass.translucent.end());
-  pass.translucent.clear();
-  pass.translucentViewport.reset();
-  pass.translucentScissor.reset();
+  if (!g_inOffscreen && scene_stage::wanted()) {
+    // The solid scene, its cut-out fringes and its surfaces' second layers are drawn: the scene stage runs here, so
+    // the see-through tail goes into a new pass that keeps the colour and depth (its draws carry their own viewport
+    // and scissor).
+    RenderPass continuation{
+        .colorView = pass.colorView,
+        .motionView = pass.motionView,
+        .motionDepthView = pass.motionDepthView,
+        .motionMarkView = pass.motionMarkView,
+        .resolveView = pass.resolveView,
+        .depthView = pass.depthView,
+        .copySourceTexture = pass.copySourceTexture,
+        .copySourceView = pass.copySourceView,
+        .copySourceDepthView = pass.copySourceDepthView,
+        .targetSize = pass.targetSize,
+        .msaaSamples = pass.msaaSamples,
+        .clearColor = false,
+        .clearDepth = false,
+        .requireReadyPipelines = pass.requireReadyPipelines,
+        .sceneStageBefore = true,
+        .sceneCamera = scene_stage::camera(),
+    };
+    CommandList translucent = std::move(pass.translucent);
+    pass.translucent.clear();
+    pass.translucentViewport.reset();
+    pass.translucentScissor.reset();
+    auto& next = push_render_pass(std::move(continuation)); // `pass` is invalid from here
+    next.commands.insert(next.commands.end(), translucent.begin(), translucent.end());
+    ++g_currentRenderPass;
+  } else {
+    pass.commands.insert(pass.commands.end(), pass.translucent.begin(), pass.translucent.end());
+    pass.translucent.clear();
+    pass.translucentViewport.reset();
+    pass.translucentScissor.reset();
+  }
   push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
 }
 
 bool has_pending_translucent_draws() noexcept {
-  return has_current_render_pass() && !g_renderPasses[g_currentRenderPass].translucent.empty();
+  if (!has_current_render_pass()) return false;
+  const auto& pass = g_renderPasses[g_currentRenderPass];
+  return !pass.translucent.empty() || pass.surfaceLayerPending;
 }
 
 Vec2<uint32_t> get_frame_buffer_size() noexcept {
@@ -697,6 +740,10 @@ void resolve_pass(TextureHandle texture, ClipRect rect, bool clearColor, bool cl
     Log.warn("Dropping resolve pass without an active render pass");
     return;
   }
+  // A pass's tails draw before its copy anyway; flushed here, a frame whose see-through draws are not followed by
+  // anything else still gets its scene stage.
+  if (scene_stage::wanted())
+    flush_deferred_draws();
   ensure_staging_space({0, 2 * staging_uniform_bytes(48), 0, 0});
   auto& prevPass = g_renderPasses[g_currentRenderPass];
   const auto targetWidth = static_cast<int32_t>(prevPass.targetSize.width);
@@ -1183,6 +1230,7 @@ void initialize() {
 
 void shutdown() {
   motion::shutdown();
+  scene_stage::shutdown();
   shutdown_pipeline_cache();
   gx::clear_shader_module_cache();
   efb_ram::shutdown();
@@ -1292,6 +1340,7 @@ static bool begin_frame_impl(bool newFrame, bool capacityResume = false) {
   g_mergedDrawCallCount = 0;
   if (newFrame) {
     latch_motion_vectors();
+    scene_stage::begin_frame();
     gx::begin_frame_interpolation();
   }
   discard_suspended_efb_pass();
@@ -1325,7 +1374,11 @@ bool begin_frame() { return begin_frame_impl(true); }
 
 bool resume_frame() { return begin_frame_impl(false); }
 
+// Whether the frame being recorded has already been submitted in part (recording thread).
+static bool g_frameSubmittedInParts = false;
+
 void abort_frame() noexcept {
+  g_frameSubmittedInParts = false;
   efb_ram::cancel();
   efb_ram::abort_async();
   g_verts.release();
@@ -1361,12 +1414,23 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
   ZoneScoped;
   ASSERT(!advanceFrame || !g_inOffscreen, "end_frame called while offscreen rendering is active");
   if (advanceFrame) {
+    if (scene_stage::wanted())
+      flush_deferred_draws(); // as in resolve_pass
     gx::finalize_frame_interpolation();
   } else {
     // Mid-frame batch split: the staging buffer is about to be unmapped and rotated, so pending
     // interpolation tasks pointing into it would dangle. Tie the clear to the rotation itself.
     gx::drop_pending_frame_interpolation_uniforms();
+    g_frameSubmittedInParts = true;
   }
+  // A frame submitted in parts has no scene stage. A part's see-through draws must go with it, as they use its staging
+  // buffers, so the last flush can come too late for them: the stage would shade them, or shade the solid scene twice.
+  if (g_frameSubmittedInParts) {
+    for (auto& pass : g_renderPasses)
+      pass.sceneStageBefore = false;
+  }
+  if (advanceFrame)
+    g_frameSubmittedInParts = false;
   g_uniforms.append_zeroes(gx::MaxUniformSize); // Pad the end of the buffer
   const auto used = staging_usage();
   for (unsigned i = 0; i < used.size(); ++i) g_stagingHighWater[i] = std::max(g_stagingHighWater[i], used[i]);
@@ -1553,9 +1617,21 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
       }
     }
   }
+  scene_stage::release_unused_targets();
+  // The scene stage runs once per frame, before the last pass that asks for it (a frame can flush its see-through
+  // tail more than once; the solid scene is finished at the last).
+  u32 sceneStagePass = UINT32_MAX;
+  for (u32 i = 0; i < renderPasses.size(); ++i) {
+    if (renderPasses[i].sceneStageBefore)
+      sceneStagePass = i;
+  }
   for (u32 i = 0; i < renderPasses.size(); ++i) {
     sort_particle_draws(renderPasses[i].translucent);
     const auto& passInfo = renderPasses[i];
+    if (i == sceneStagePass) {
+      scene_stage::encode(cmd, passInfo.colorView, passInfo.depthView, passInfo.targetSize, passInfo.msaaSamples,
+                          passInfo.sceneCamera);
+    }
     if (encodeTextureBakes) {
       for (const auto& conv : passInfo.paletteConvs) {
         tex_palette_conv::run(cmd, conv);

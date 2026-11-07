@@ -158,6 +158,11 @@ Aurora's standalone test build also has `gx_readback_tests` (`AURORA_BUILD_GPU_T
 actual GPU pixels.
 It starts with the motion vectors: none while nothing asks for them, zero for a still quad, the expected 8 pixels for one moved by its matrix, and the targets freed again when they are no longer wanted.
 It then checks that a motion setting change resolves the pipeline again with no GX state written, that an alpha-blended surface owns its depth only where the GPU has `float32-blendable`, and that the blurred picture can be copied for a screenshot.
+Then the scene stage: with its tint view, a solid quad is tinted and a see-through world quad drawn after it is not; its depth view shows the solid quad's distance; with the view off nothing changes.
+Then ambient occlusion: a wall standing on a floor darkens just above the crease, the wall high up and the open floor don't shade themselves, and applied it darkens only the crease; turned off, its targets are freed.
+Then a solid surface drawn a second time see-through (the game's two-layer materials) is tinted with the solid scene, as part of it.
+Then a late blended surface in front of a second layer stays after it, and the second layers of solid draws that merged are recognised too.
+Then a frame split mid-way, three ways (between two flushes, with the tail pending, in the middle of the tail), has no stage at all, and the next whole frame has it again.
 CTest runs it three times: as is, with `AURORA_GFX_FLAGS=validate`, and with `AURORA_GFX_FLAGS=validate,nofloat32blend`, which hides that feature.
 Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
@@ -249,6 +254,13 @@ recorded cutscene (A) or the title intro / attract demo (Start). More commands (
 Grey (or the picture) is still; the hue is the direction a surface came from and the saturation its speed, full at SCALE pixels per frame (16 by default).
 It turns the motion vectors on while it shows, like the **Motion blur** setting (`[video] motion_blur`, 0 to 100 percent), which uses them.
 Anything that should move but shows grey, or flashes from frame to frame, has lost its pairing with last frame's draw.
+
+**Scene stage view** (F8, or `stageview MODE` in `Play\devmenu.txt`: 0 off, 1 tint, 2 depth, 3 occlusion) shows where the solid scene ends in each frame.
+Tint turns everything drawn before the stage blue: the see-through world draws (fog, particles, glow, the lit windows), the sky and the HUD come after it and keep their colour.
+Depth shows the solid scene's distance from the camera, near = white.
+Something solid that keeps its colour under the tint, or something see-through that turns blue, is drawn on the wrong side of the stage.
+Occlusion shows the **Ambient occlusion** setting's shading alone at full strength (white = none): it belongs in creases, corners and under things, never across flat walls or floors.
+`ao PERCENT` in `devmenu.txt` switches the setting's strength for one run to compare (0 off, 35 low, 65 medium, 100 high).
 
 **F3** (developer tools on) starts / stops a video of the game: `Videos\FrightWorks_<date>_<time>.mp4` beside the
 launcher (`Play\Videos` in a source build) and a `.txt` with the build, picture size, Scooby's position at the start and
