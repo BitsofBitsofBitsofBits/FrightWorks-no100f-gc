@@ -41,6 +41,33 @@ int main(int argc, char** argv) {
         const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "bad-holiday.toml");
         if (!Require(!config.holiday, "invalid holiday setting was accepted")) return 1;
     }
+    // Frame interpolation only runs at 60 fps: a config that asks for it at 30 fps gets it off, however it got there.
+    {
+        const struct {
+            const char* video;
+            uint32_t fps;
+        } cases[] = {
+            {"", 0},
+            {"frame_interpolation_fps = 120\n", 0},
+            {"fps60 = false\nframe_interpolation_fps = 120\n", 0},
+            {"fps60 = false\nframe_interpolation_fps = 180\n", 0},
+            {"fps60 = false\nframe_interpolation_fps = 240\n", 0},
+            {"fps60 = true\n", 0},
+            {"fps60 = true\nframe_interpolation_fps = 0\n", 0},
+            {"fps60 = true\nframe_interpolation_fps = 120\n", 120},
+            {"fps60 = true\nframe_interpolation_fps = 180\n", 180},
+            {"fps60 = true\nframe_interpolation_fps = 240\n", 180},
+            {"fps60 = true\nframe_interpolation_fps = 60\n", 0},
+        };
+        for (const auto& c : cases) {
+            std::istringstream input(std::string("[video]\n") + c.video);
+            const RuntimeUserConfig config = RuntimeConfigFile::ParseConfig(input, "interpolation.toml");
+            if (RuntimeConfigFile::FrameInterpolationFpsIn(config) != c.fps) {
+                std::cerr << "wrong interpolation for: " << c.video << '\n';
+                return 1;
+            }
+        }
+    }
     // Persistence is opt-in and must use a caller-owned portable copy of this CPU test.
     if (argc == 2) {
         const auto executable = RuntimeConfigFile::ExecutableDirectory();

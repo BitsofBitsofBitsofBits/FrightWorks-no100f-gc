@@ -1406,7 +1406,10 @@ void DrawVideoSettings() {
         "Off", "120 FPS", "180 FPS",
     };
     bool frameInterpolationModeChanged = false;
+    // At 30 fps the mode is Off (RuntimeConfigFile::FrameInterpolationFps). fps60 can't change while the game runs.
+    const bool frameInterpolationLocked = !RuntimeConfigFile::Fps60();
     RowLabel("Frame interpolation", labelWidth, controlWidth);
+    ImGui::BeginDisabled(frameInterpolationLocked);
     if (ImGui::BeginCombo("##interpolation", kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)])) {
         for (int mode = 0; mode < static_cast<int>(kFrameInterpolationModes.size()); ++mode) {
             const bool selected = g_frameInterpolationMode == mode;
@@ -1420,6 +1423,7 @@ void DrawVideoSettings() {
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     if (frameInterpolationModeChanged) {
         const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
         aurora_set_frame_interpolation_fps(targetFps);
@@ -1430,7 +1434,8 @@ void DrawVideoSettings() {
             aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
         }
     }
-    Hint("Experimental: you might see visual artifacts.");
+    Hint(frameInterpolationLocked ? "Only works at 60 fps, so it stays off at 30 fps. The launcher sets the frame rate."
+                                  : "Experimental: you might see visual artifacts.");
     {
         // A strength set by hand in Config.toml that is none of the levels shows as its percentage.
         const int percent = std::clamp(RuntimeConfigFile::MotionBlur(), 0, 100);

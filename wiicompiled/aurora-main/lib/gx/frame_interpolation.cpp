@@ -1241,8 +1241,9 @@ void write_motion_partner(const PendingMotionUniform& task, const FrameTransform
 constexpr float kMaximumDrawSpeed = 60.0f;
 // The step when the game gives no present schedule: one retrace.
 constexpr float kDefaultFrameStepSeconds = 1.0f / 60.0f;
-// Anchor of the last sealed frame's schedule, for the time this frame covers. The game steps by measured time, and
-// with fps60 off it presents every second retrace, so a real move in one frame is twice as long.
+// Anchor of the last sealed frame's schedule, for the time this frame covers. The game steps by measured time, so a
+// frame two retraces after the last has a real move twice as long. (The game keeps interpolation off with fps60 off,
+// where every frame is like this.)
 uint64_t s_lastSealedAnchorNanos = 0;
 
 // The time this frame covers, from the anchors of the present schedule.

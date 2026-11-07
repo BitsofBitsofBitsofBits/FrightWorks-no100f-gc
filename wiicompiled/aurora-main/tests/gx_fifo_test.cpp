@@ -615,8 +615,8 @@ TEST(FrameInterpolationContract, RefusedExactMatchLeavesTheDrawFreeForItsOwnPart
   expect_translation(test.frame(current)[draw], 2.25f, 0.0f, -5.0f);
 }
 
-// Real motion keeps interpolating, up to the speed limit, and the limit follows the frame's real step: with fps60 off
-// the game presents every second retrace and a real move in one frame is twice as long.
+// Real motion keeps interpolating, up to the speed limit, and the limit follows the frame's real step: a frame two
+// retraces after the last has a real move twice as long.
 TEST(FrameInterpolationContract, RealMotionInterpolatesAtTheFramesRealStep) {
   constexpr uint64_t kRetraceNanos = 16'666'667;
   const auto move = [](float distance, uint64_t step) {
@@ -630,9 +630,9 @@ TEST(FrameInterpolationContract, RealMotionInterpolatesAtTheFramesRealStep) {
     test.frame(first, kStart);
     return test.frame(second, kStart + step)[first.size() - 1][0];
   };
-  EXPECT_NEAR(move(0.54f, kRetraceNanos), 1.27f, 1e-3f);        // a collected snack, fps60 on: midpoint
+  EXPECT_NEAR(move(0.54f, kRetraceNanos), 1.27f, 1e-3f);        // a collected snack: midpoint
   EXPECT_NEAR(move(1.5f, kRetraceNanos), 2.5f, 1e-3f);          // too far for one retrace: its end position
-  EXPECT_NEAR(move(1.08f, 2 * kRetraceNanos), 1.54f, 1e-3f);    // the same snack, fps60 off: midpoint
+  EXPECT_NEAR(move(1.08f, 2 * kRetraceNanos), 1.54f, 1e-3f);    // the same snack over two retraces: midpoint
   EXPECT_NEAR(move(1.5f, 2 * kRetraceNanos), 1.75f, 1e-3f);     // fine for two retraces
   EXPECT_NEAR(move(3.0f, 2 * kRetraceNanos), 4.0f, 1e-3f);      // too far for two
 }

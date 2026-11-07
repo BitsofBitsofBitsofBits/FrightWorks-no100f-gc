@@ -356,8 +356,8 @@ inline void EnsureConfigFile() {
         return;
     }
     // Scooby-Doo! Night of 100 Frights defaults: borderless 1080p (2.25 x 480 lines; 4.5 = 4K, 0 = the screen's
-    // own size), cinematic 2.39:1, no frame interpolation (the game runs at 30 fps, which the 60 fps-based
-    // interpolation backs off from), HD textures on. The launcher writes the same keys.
+    // own size), cinematic 2.39:1, no frame interpolation (the game runs at 30 fps, where interpolation stays off:
+    // FrameInterpolationFps), HD textures on. The launcher writes the same keys.
     output << "# FrightWorks: Night of 100 Frights user configuration\n"
               "# paths.dvd_root is your Scooby-Doo! Night of 100 Frights (USA, GIHE78) extracted to a DATA folder;\n"
               "# the launcher fills it in from a .iso/.gcm/.ciso.\n\n"
@@ -366,7 +366,7 @@ inline void EnsureConfigFile() {
               "force_16_9 = false\n"
               "# render height = 480 x resolution_multiplier: 1.5 = 720p, 2.25 = 1080p, 4.5 = 4K, 0 = screen size\n"
               "resolution_multiplier = 2.25\n"
-              "# 0 (off), 120 or 180\n"
+              "# 0 (off), 120 or 180; only with fps60 = true, it stays off at 30 fps\n"
               "frame_interpolation_fps = 0\n"
               "# true = 60 fps (the game times itself by the clock, so it keeps its speed)\n"
               "fps60 = false\n"
@@ -1221,9 +1221,14 @@ inline bool SetWiiAccelOffset(const std::array<double, 3>& offset) {
     return ok;
 }
 
-// Target frame rate for frame interpolation, or 0 to disable it.
+// Target frame rate for frame interpolation, or 0 to disable it. Always 0 at 30 fps ([video] fps60 off), whatever the
+// file says: vi.cpp would report every frame as late there, so it would do nothing. The saved value isn't touched.
+inline uint32_t FrameInterpolationFpsIn(const RuntimeUserConfig& config, uint32_t fallback = 0) {
+    return config.fps60.value_or(false) ? config.frameInterpolationFps.value_or(fallback) : 0;
+}
+
 inline uint32_t FrameInterpolationFps(uint32_t fallback = 0) {
-    return Get().frameInterpolationFps.value_or(fallback);
+    return FrameInterpolationFpsIn(Get(), fallback);
 }
 
 // Whether to skip draws whose graphics pipeline has not finished compiling yet.
