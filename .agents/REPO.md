@@ -292,6 +292,8 @@ Never name a session `main`.
 - GC audio runs on the game thread.
 - Volume sliders work through a native override of MIXAdjustFader (#86, `music_attenuation.cpp`).
   Known limits: resident dialog counts as SFX, Bink audio is master only.
+- Stream voices' DVD read callback is a native override that also fixes the game's end-of-track check (`hle/no100f_stream_read.h`, issue 14).
+- Timing-sensitive bugs: dev menu `scene` warps skip what a player does before the warp, so a clean run from them doesn't clear a bug reported from normal play. Reproduce it with the reporter's route, using timed presses rather than mashing: menus drop presses that arrive too early.
 
 **Paths**
 - Portable (`data\portable.txt`): everything in `data\UserData`, disc in `data\Disc\DATA`.
