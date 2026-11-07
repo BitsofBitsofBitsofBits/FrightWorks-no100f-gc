@@ -79,9 +79,16 @@ The goal is a clean remaster, not matching Dolphin: Dolphin and the disc's data 
 - Only @-mention someone who needs to act.
 - There is no CI: never check or report CI status.
 - Before editing a PR or issue body, fetch the current one and edit that: someone may have added media.
-- `gh` can't upload media (accounts without write access to the repo never can).
-  Add `<!-- drop <file> here -->` markers and collect the files in one folder for a person to drag in.
+- `gh` still cannot upload attachments.
+  Screenshots go through `tools/debug/pr-media.py` to FrightWorks/pr-media, which needs write access to that repo.
+  People without that access use the drop-marker route: add `<!-- drop <file> here -->` markers and collect the files in one folder for a person to drag in.
+  Agents must look at each picture before upload.
+  No personal paths, names or addresses on screen.
+  Screenshots only, never disc or game files.
+  Uploaded pictures stay public.
+  mp4 and other video stay drag and drop, because GitHub only plays attachments.
   GitHub won't attach `.wav` or `.mp3`: use `.mp4`.
+  If the permission system refuses the push as a public upload, report the exact command and stop: don't work around it or retry another way.
 - PR images must be readable at GitHub's display size: zoomed crops or a few large panels, not grids of small screenshots.
 - Keep contributors as commit authors when moving their work.
 - Issue labels: at most one per category (`type:`, `area:`, `priority:`, `status:`).
