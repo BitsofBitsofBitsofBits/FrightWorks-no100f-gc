@@ -16,7 +16,8 @@ Every run gets, with nothing left to the caller:
   * controller isolation: NSMBW_INPUT_SCRIPT set (the game then reports pad 1 connected every frame) and
     SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT set to a device ID that does not exist, so no real controller reaches the
     game. The process gets both; the player's own game is unaffected;
-  * a build-ID check: the exe must have been built from the commit under test (check_build / expected_build_id).
+  * a build-ID check: the exe must have been built from the code under test: the same commit, or an older one with only
+    test and doc files changed since (check_build / expected_build_id).
 
 `game_cmd` replaces the exe with another command (the tests use a windowless stand-in script).
 """
@@ -37,7 +38,7 @@ SCRUB_PREFIXES = ("NO100F_", "AX_", "NSMBW_", "AUDIO_", "AURORA_", "SPM_")
 SCRUB_NAMES = ("BUTTON_ICONS", "SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "SDL_GAMECONTROLLER_IGNORE_DEVICES",
                "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT", "SDL_WINDOW_ACTIVATE_WHEN_SHOWN")
 CRASH_PATTERN = re.compile(r"AccessViolation|OS panic|missing_target|Unhandled|FATAL|Fatal Error")
-BUILD_ID_PATTERN = re.compile(r"\d+\.\d+\.\d+\S* [\w./-]+@[0-9a-f]{7}(?:\+[0-9a-f]{4})?")
+BUILD_ID_PATTERN = re.compile(r"\d+\.\d+\.\d+[^\s\x00]* [\w./-]+@[0-9a-f]{7}(?:\+[0-9a-f]{4})?")  # NULs sit between strings in an exe
 
 
 class GameCrashed(Exception):
@@ -151,17 +152,43 @@ def find_build_id(text) -> str:
     return m.group() if m else ""
 
 
-def check_build(found, expected: BuildId):
-    """(ok, message). The branch and commit must match; a different uncommitted-diff hash is only a warning, because
-    the test scripts being written are themselves part of the diff."""
+# Paths that are not inputs of the game build: a change to them since the build does not make the build stale.
+TEST_ONLY_PREFIXES = ("tools/testkit/", "docs/", "autotest/")
+TEST_ONLY_FILES = ("tools/smoke-test.py",)
+
+
+def is_test_only(path: str) -> bool:
+    return path.startswith(TEST_ONLY_PREFIXES) or path in TEST_ONLY_FILES or path.lower().endswith(".md")
+
+
+def check_build(found, expected: BuildId, repo=None):
+    """(ok, message): was the game built from the code under test?
+    Identical ID: yes. Otherwise, for a clean build of the same branch, `git diff --name-only <built commit>` (that commit
+    against the working tree, committed and uncommitted tracked changes) must name only files outside the build's
+    inputs (tools/testkit/, tools/smoke-test.py, docs/, *.md, autotest/): then the run is accepted and says which files
+    differ. Anything else, a build made from uncommitted changes that are gone or different now included, fails:
+    rebuild. Without `repo` only the exact ID passes."""
     if not found:
         return False, f"no build ID found (expected {expected.base})"
-    base = found.split("+")[0]
-    if base != expected.base:
-        return False, f"build ID {found} is not the commit under test ({expected.base})"
-    if found != expected.full:
-        return True, f"build ID {found}; the checkout is now {expected.full} (uncommitted changes since the build)"
-    return True, f"build ID {found}"
+    if found == expected.full:
+        return True, f"build ID {found}"
+    built, _, built_changes = found.partition("+")
+    parts = built.rsplit("@", 1)
+    head = f"HEAD {expected.commit}" + (f" + uncommitted ({expected.changes})" if expected.changes else "")
+    stale = f"build ID {found} is not the code under test ({expected.full}): rebuild"
+    if repo is None or len(parts) != 2 or built_changes:
+        return False, stale
+    built_branch = parts[0].split(" ", 1)[1] if " " in parts[0] else ""
+    if built_branch != expected.branch:
+        return False, stale
+    if not _git(repo, "rev-parse", "--verify", "--quiet", parts[1] + "^{commit}"):
+        return False, f"build commit {parts[1]} is not in this repository: rebuild"
+    names = [n for n in _git(repo, "diff", "--name-only", parts[1]).splitlines() if n]
+    game = [n for n in names if not is_test_only(n)]
+    if game:
+        return False, f"{stale}; changed since the build: {', '.join(game[:6])}{' ...' if len(game) > 6 else ''}"
+    shown = ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+    return True, f"build {parts[1]}, {head}, only test/doc files differ: {shown or 'none'}"
 
 
 def exe_build_id(exe) -> str:
@@ -205,14 +232,15 @@ def boot_ini(disc_data, level) -> str:
 # ---- the game -------------------------------------------------------------------------------------------------------
 class TestGame:
     def __init__(self, name, work_dir, boot=None, hd=False, repo=REPO, src_play=None, disc_data=None, game_cmd=None,
-                 extra_env=None, config_extra="", window=(1280, 720), activate_when_shown=None, dev_tools=True):
+                 extra_env=None, config_extra="", window=(1280, 720), activate_when_shown=None, dev_tools=True,
+                 build_check=True):
         self.name, self.repo = name, Path(repo)
         self.play = Path(work_dir) / "Play"
         self.src_play = Path(src_play) if src_play else self.repo / "Play"
         self.disc_data = Path(disc_data) if disc_data else self.repo / "Disc" / "DATA"
         self.boot, self.hd, self.window = boot, hd, window
         self.game_cmd, self.extra_env, self.config_extra = game_cmd, dict(extra_env or {}), config_extra
-        self.activate_when_shown, self.dev_tools = activate_when_shown, dev_tools
+        self.activate_when_shown, self.dev_tools, self.build_check = activate_when_shown, dev_tools, build_check
         self.proc = None
         self.launches = 0
         self.start_time = 0.0
@@ -287,8 +315,13 @@ class TestGame:
         """Raises BuildMismatch unless the exe is from the commit under test; returns the message (maybe a warning)."""
         if self.game_cmd:
             return "stand-in game: build ID not checked"
+        if not self.build_check:
+            return "build ID check SKIPPED (manual override)"
         expected = expected_build_id(self.repo)
-        ok, msg = check_build(exe_build_id(self.exe_path()), expected)
+        exe = self.exe_path()
+        if not exe.exists():  # before prepare(): the build the copy will be made from
+            exe = next((self.src_play / n for n in EXE_NAMES if (self.src_play / n).exists()), exe)
+        ok, msg = check_build(exe_build_id(exe), expected, self.repo)
         if not ok:
             raise BuildMismatch(msg)
         return msg
@@ -298,7 +331,9 @@ class TestGame:
         found = find_build_id(self.console_text())
         if not found:
             return None
-        ok, msg = check_build(found, expected_build_id(self.repo))
+        if not self.build_check:
+            return f"build ID {found} (check skipped)"
+        ok, msg = check_build(found, expected_build_id(self.repo), self.repo)
         if not ok:
             raise BuildMismatch(msg)
         return msg

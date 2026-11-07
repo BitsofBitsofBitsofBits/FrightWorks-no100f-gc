@@ -85,6 +85,26 @@ def wait_until_playable(game, boot_level=None, timeout=150.0, skip_button="a", s
     return {"seconds": seconds, "presses": presses, "where": where}
 
 
+def wait_for_scene(game, scene, timeout=60.0, screenshot=None):
+    """After a `scene X` command: wait until `where` names that scene (the old scene answers until the travel is done).
+    Returns the where tuple; PlayTimeout / GameCrashed like wait_until_playable."""
+    t0 = time.time()
+    last = "no answer"
+    while time.time() - t0 < timeout:
+        game.check_crash()
+        try:
+            where = game.devmenu.where(timeout=5)
+        except DevMenuTimeout:
+            where = None
+        if where:
+            last = where[0]
+            if where[0].lower() == scene.lower():
+                return where
+        time.sleep(0.5)
+    shot = str(screenshot) if screenshot and game.screenshot(screenshot) else None
+    raise PlayTimeout(f"{game.name}: still not in {scene} after {timeout:.0f} s (scene: {last})", last, shot)
+
+
 def retry_on_timeout(run, log=print):
     """run(attempt) -> result, for attempt 1 and, after a PlayTimeout only, attempt 2 (it must launch afresh).
     Returns (outcome, result, notes): outcome 'passed' or 'passed on retry'. A second timeout raises the PlayTimeout;

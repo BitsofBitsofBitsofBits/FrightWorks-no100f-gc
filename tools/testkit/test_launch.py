@@ -91,18 +91,81 @@ class BuildIdTest(unittest.TestCase):
         self.assertEqual(launch.find_build_id(blob.decode("latin-1")), "2.3.4 work@abcdef0")
         self.assertEqual(launch.find_build_id("2.3.4 work@abcdef0+1a2b"), "2.3.4 work@abcdef0+1a2b")
         self.assertEqual(launch.find_build_id("no id here"), "")
+        # the real exe has the pieces as separate strings first, NUL separated (seen in a 1.1.1 build)
+        real = b"zMe\x001.1.1\x00tools/smoke-test\x002116fe1\x00\x001.1.1 tools/smoke-test@2116fe1\x00\x00\x01"
+        self.assertEqual(launch.find_build_id(real.decode("latin-1")), "1.1.1 tools/smoke-test@2116fe1")
 
-    def test_check_build_commit_must_match_diff_hash_only_warns(self):
+    def test_check_build_exact_id_and_garbage(self):
         exp = launch.BuildId("2.3.4", "work", "abcdef0", "")
         self.assertEqual(launch.check_build("2.3.4 work@abcdef0", exp), (True, "build ID 2.3.4 work@abcdef0"))
-        ok, msg = launch.check_build("2.3.4 work@abcdef0+1a2b", exp)
-        self.assertTrue(ok)
-        self.assertIn("uncommitted", msg)
-        ok, msg = launch.check_build("2.3.4 work@1234567", exp)
-        self.assertFalse(ok)
-        self.assertIn("not the commit under test", msg)
-        self.assertFalse(launch.check_build("2.3.4 other@abcdef0", exp)[0])
         self.assertFalse(launch.check_build("", exp)[0])
+        self.assertFalse(launch.check_build("2.3.4 work@1234567", exp)[0])  # no repo: only the exact ID passes
+        self.assertFalse(launch.check_build("2.3.4 other@abcdef0", exp)[0])
+
+    def commit(self, rel, text="x"):
+        p = self.repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", rel)
+
+    def built_id(self):
+        return str(launch.expected_build_id(self.repo))
+
+    def test_head_ahead_by_test_and_doc_files_only_is_accepted(self):
+        built = self.built_id()
+        self.commit("tools/testkit/new.py")
+        self.commit("tools/smoke-test.py")
+        self.commit("docs/testing.md")
+        self.commit(".agents/REPO.md")
+        self.commit("README.md")
+        (self.repo / "autotest").mkdir()
+        ok, msg = launch.check_build(built, launch.expected_build_id(self.repo), self.repo)
+        self.assertTrue(ok, msg)
+        self.assertIn("only test/doc files differ", msg)
+        self.assertIn("and 1 more", msg)  # 5 files, 4 of them named
+        self.assertIn(built.split("@")[1], msg)
+
+    def test_uncommitted_test_file_edit_is_accepted_too(self):
+        built = self.built_id()
+        self.commit("tools/testkit/a.py")
+        (self.repo / "tools" / "testkit" / "a.py").write_text("edited")
+        exp = launch.expected_build_id(self.repo)
+        self.assertNotEqual(exp.changes, "")
+        self.assertTrue(launch.check_build(built, exp, self.repo)[0])
+
+    def test_a_game_file_changed_since_the_build_fails_and_says_which(self):
+        built = self.built_id()
+        self.commit("tools/testkit/a.py")
+        self.commit("wiicompiled/runtime/src/main.cpp")
+        ok, msg = launch.check_build(built, launch.expected_build_id(self.repo), self.repo)
+        self.assertFalse(ok)
+        self.assertIn("wiicompiled/runtime/src/main.cpp", msg)
+        self.assertIn("rebuild", msg)
+
+    def test_uncommitted_game_change_fails(self):
+        built = self.built_id()
+        (self.repo / "launcher" / "ScoobyReMasked.Launcher.csproj").write_text("<Version>2.3.4</Version>\n")
+        ok, msg = launch.check_build(built, launch.expected_build_id(self.repo), self.repo)
+        self.assertFalse(ok)
+        self.assertIn("csproj", msg)
+
+    def test_a_build_made_from_uncommitted_changes_that_differ_now_fails(self):
+        csproj = self.repo / "launcher" / "ScoobyReMasked.Launcher.csproj"
+        csproj.write_text("<Version>2.3.4</Version>\n")
+        built = self.built_id()
+        self.assertIn("+", built)
+        self.assertTrue(launch.check_build(built, launch.expected_build_id(self.repo), self.repo)[0])  # same edits: exact ID
+        csproj.write_text("<Version>2.3.4</Version>\n\n")
+        self.assertFalse(launch.check_build(built, launch.expected_build_id(self.repo), self.repo)[0])
+
+    def test_other_branch_or_unknown_commit_fails(self):
+        built = self.built_id()
+        self.assertFalse(launch.check_build(built.replace(" work@", " other@"), launch.expected_build_id(self.repo), self.repo)[0])
+        self.commit("tools/testkit/a.py")
+        ok, msg = launch.check_build("2.3.4 work@1234567", launch.expected_build_id(self.repo), self.repo)
+        self.assertFalse(ok)
+        self.assertIn("not in this repository", msg)
 
 
 class LinkTest(unittest.TestCase):
