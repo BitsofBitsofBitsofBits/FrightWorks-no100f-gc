@@ -261,7 +261,7 @@ Tint turns everything drawn before the stage blue: the see-through world draws (
 Depth shows the solid scene's distance from the camera, near = white.
 Something solid that keeps its colour under the tint, or something see-through that turns blue, is drawn on the wrong side of the stage.
 Occlusion shows the **Ambient occlusion** setting's shading alone at full strength (white = none): it belongs in creases, corners and under things, never across flat walls or floors.
-`ao PERCENT` in `devmenu.txt` switches the setting's strength for one run to compare (0 off, 35 low, 65 medium, 100 high).
+`ao PERCENT` in `devmenu.txt` switches the setting's strength for one run to compare (0 off, 35 low, 65 medium).
 Outlines shows the **Ink outlines** lines alone, black on white (Bold when the setting is off): lines belong on silhouettes (and with Bold on sharp creases), never across flat walls or floors, and grass and stems keep no solid black.
 `ink LEVEL` in `devmenu.txt` switches them for one run (0 off, 1 thin, 2 bold).
 
