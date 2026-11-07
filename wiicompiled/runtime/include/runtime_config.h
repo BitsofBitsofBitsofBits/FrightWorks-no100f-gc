@@ -1072,7 +1072,7 @@ inline int32_t AmbientOcclusion(int32_t fallback = 0) {
 }
 
 inline constexpr MotionBlurLevel kAmbientOcclusionLevels[] = {
-    {"Off", 0}, {"Low", 35}, {"Medium", 65}, {"High", 100},
+    {"Off", 0}, {"Low", 35}, {"Medium", 65},
 };
 
 inline bool SetAmbientOcclusion(int32_t value) {

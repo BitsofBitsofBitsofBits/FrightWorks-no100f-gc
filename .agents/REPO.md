@@ -290,7 +290,7 @@ Never name a session `main`.
   With nothing using it, nothing is split or recorded.
   It records the solid scene's camera (projection and viewport of the last perspective draw that wrote depth) to turn depth back into positions.
   `stageview 1` (or F8 > Scene stage view) tints what is drawn before it, `2` shows the solid scene's depth, `3` the ambient occlusion alone.
-- Ambient occlusion (`[video] ambient_occlusion`, percent; F10 > Video > Picture and the launcher: Off, Low 35, Medium 65, High 100) runs at the scene stage: at half resolution from the depth alone, blurred keeping edges, then multiplied into the solid scene's colour (never its alpha).
+- Ambient occlusion (`[video] ambient_occlusion`, percent; F10 > Video > Picture and the launcher: Off, Low 35, Medium 65; any other value up to 100, set by hand, shows as its percentage) runs at the scene stage: at half resolution from the depth alone, blurred keeping edges, then multiplied into the solid scene's colour (never its alpha).
   Its tuning is at the top of `scene_stage.cpp`; the angle bias keeps the game's low-poly walls and rocks from darkening at every polygon edge.
   `ao PERCENT` in `devmenu.txt` sets it for one run without changing the setting.
 - MSAA: on Linux (x86_64 and aarch64) the Vulkan 2x and 8x modes need the patched Dawn package that the build downloads from FrightWorks/dawn-build (release `v20260603.191052-msaa`).

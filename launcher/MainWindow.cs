@@ -380,7 +380,7 @@ sealed class MainWindow : Window
         {
             // Strength in percent, as in F10 (runtime_config.h kAmbientOcclusionLevels); a strength set by hand in
             // Config.toml that is none of the levels is kept as its own entry.
-            var levels = new List<(string text, string raw)> { ("Off", "0"), ("Low", "35"), ("Medium", "65"), ("High", "100") };
+            var levels = new List<(string text, string raw)> { ("Off", "0"), ("Low", "35"), ("Medium", "65") };
             if (int.TryParse(cfg.Get("video", "ambient_occlusion")?.Trim(), out int saved) && saved > 0 && saved <= 100 &&
                 !levels.Exists(l => l.raw == saved.ToString()))
             {
