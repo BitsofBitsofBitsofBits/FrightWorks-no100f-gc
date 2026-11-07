@@ -117,7 +117,8 @@ same-value native selection intent, cancellation, browsing/text/folder creation,
 layout policy. Generic navigation regressions cover narrow buttons beneath wide fields, horizontal button rows,
 ordinary slider precision and opt-in `ControllerSlider` coarse steps. Coarse steps retain the selected device's input
 source, give horizontal D-pad input precision priority, clamp to bounds and preserve repeat/ownership/neutral gates.
-The shared slider is only an opt-in control; this controller change does not add HDR settings or choose HDR increments.
+The HDR window is covered too: the pad opens it from Display, the left stick steps paper white by 10 nits and peak by 100,
+the D-pad by 0.1, ends clamp, the dropdown uses the themed popup and Back closes it.
 The layout suite deliberately provokes save/background/UI faults to check error routing; those expected
 errors appear on stderr even when the suite passes. Screenshots are synthetic headless evidence, not a hardware test.
 
@@ -135,7 +136,7 @@ dotnet run --project tools\launcher-hdr-tests\LauncherHdrTests.csproj -c Release
 They use services-disabled portable fixtures and CPU-rendered Avalonia windows, not SDL/game/GPU input. Windows display
 metadata is synthetic; unsupported-platform gating, missing/partial settings, saved precision, slider endpoints,
 keyboard increments, modal ownership and save failures are covered. The opt-in controller slider metadata is checked
-independently; real stick-versus-D-pad dispatch is supplied by the separate controller navigation feature.
+independently; stick-versus-D-pad dispatch is in the controller suite above.
 Compilation/headless checks do not establish HDR hardware or Linux compositor support.
 
 The tests are CMake targets in `wiicompiled/runtime/CMakeLists.txt`; the game build doesn't build them. After a game
