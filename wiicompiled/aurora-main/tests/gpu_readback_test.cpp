@@ -758,12 +758,10 @@ void settle_stage_frame(StageScene scene) {
   draw_stage_frame(scene);
 }
 
-// Two copies of a mesh the game animates on the CPU (like the f001 fish paste), one step out of phase: each frame both
-// rewrite their positions (indexed, from their own arrays), copy 1 at x = -2 with its quad raised `step` x 0.5 units,
-// copy 2 at x = +2 a step further. In the next frame copy 1 has the shape copy 2 had: same positions, same identity.
-void draw_animated_copies(int step) {
+// The GX state both animated-mesh tests draw with: indexed positions, opaque, on a black 64x64 frame.
+void begin_animated_frame() {
   gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
-  require(gfx::begin_frame(), "Animated copies frame begin failed");
+  require(gfx::begin_frame(), "Animated frame begin failed");
   gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
                                               .color = {0.f, 0.f, 0.f, 1.f},
                                               .depth = gx::clear_depth_value()});
@@ -790,6 +788,22 @@ void draw_animated_copies(int step) {
   GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
   GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
   GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+}
+
+void draw_indexed_quad() {
+  GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+  for (u8 index = 0; index < 4; ++index) {
+    GXPosition1x8(index);
+    GXColor4u8(255, 255, 255, 255);
+  }
+  GXEnd();
+}
+
+// Two copies of a mesh the game animates on the CPU (like the f001 fish paste), one step out of phase: each frame both
+// rewrite their positions (indexed, from their own arrays), copy 1 at x = -2 with its quad raised `step` x 0.5 units,
+// copy 2 at x = +2 a step further. In the next frame copy 1 has the shape copy 2 had: same positions, same identity.
+void draw_animated_copies(int step) {
+  begin_animated_frame();
   // Each copy's own array, rewritten every frame (aligned like the game's).
   alignas(32) static std::array<std::array<float, 3>, 4> arrays[2];
   constexpr float z = -4.f;
@@ -800,24 +814,62 @@ void draw_animated_copies(int step) {
     GXLoadPosMtxImm(position, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
     GXSetArray(GX_VA_POS, arrays[copy].data(), sizeof(arrays[copy]), sizeof(arrays[copy][0]), true);
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-    for (u8 index = 0; index < 4; ++index) {
-      GXPosition1x8(index);
-      GXColor4u8(255, 255, 255, 255);
-    }
-    GXEnd();
+    draw_indexed_quad();
   }
   gx::fifo::drain();
   submit(true, false, false, true);
 }
 
-void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
-  const auto actual = read_motion(x, y);
+// One mesh animated on the CPU (the i004 ghosts) that also moves by its matrix, `step` x 1 unit to the right (8 pixels)
+// with its quad raised `step` x 0.5 units (4 pixels). Returns the motion at (x, y) in each image of the frame, the
+// in-between images first, as the frame's presentation replays them.
+std::vector<std::array<float, 2>> draw_animated_mover(int step, unsigned x, unsigned y) {
+  begin_animated_frame();
+  alignas(32) static std::array<std::array<float, 3>, 4> array;
+  constexpr float z = -4.f;
+  const float raise = static_cast<float>(step) * .5f;
+  array = {{{-1.6f, raise + 1.6f, z}, {1.6f, raise + 1.6f, z}, {1.6f, raise - 1.6f, z}, {-1.6f, raise - 1.6f, z}}};
+  const float position[3][4]{{1.f, 0.f, 0.f, static_cast<float>(step)}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+  GXLoadPosMtxImm(position, GX_PNMTX0);
+  GXSetCurrentMtx(GX_PNMTX0);
+  GXSetArray(GX_VA_POS, array.data(), sizeof(array), sizeof(array[0]), true);
+  draw_indexed_quad();
+  gx::fifo::drain();
+
+  auto encoder = webgpu::g_device.CreateCommandEncoder();
+  gfx::end_frame(encoder);
+  gfx::SealedFrame frame;
+  gfx::seal_frame(frame);
+  std::vector<std::array<float, 2>> motion;
+  const auto image = [&](int32_t interpolatedFrame, bool finalize) {
+    gfx::render(frame, encoder, interpolatedFrame, finalize);
+    const auto commands = encoder.Finish();
+    webgpu::g_queue.Submit(1, &commands);
+    motion.push_back(read_motion(x, y));
+    encoder = webgpu::g_device.CreateCommandEncoder();
+  };
+  if (gx::frame_interpolation_replay_safe()) {
+    AuroraFrameInterpolationDiagnostics interpolation{};
+    gx::get_frame_interpolation_diagnostics(interpolation);
+    for (uint32_t sample = 0; sample < interpolation.activeSamples; ++sample) {
+      image(static_cast<int32_t>(sample), false);
+    }
+  }
+  image(-1, true);
+  gfx::after_submit();
+  return motion;
+}
+
+void check_motion_value(std::array<float, 2> actual, std::array<float, 2> expected, const char* what) {
   if (std::fabs(actual[0] - expected[0]) > 0.25f || std::fabs(actual[1] - expected[1]) > 0.25f) {
-    std::fprintf(stderr, "motion %s at %u,%u expected=%g,%g actual=%g,%g\n", what, x, y, expected[0], expected[1],
-                 actual[0], actual[1]);
+    std::fprintf(stderr, "motion %s expected=%g,%g actual=%g,%g\n", what, expected[0], expected[1], actual[0],
+                 actual[1]);
     require(false, "Motion vector mismatch");
   }
+}
+
+void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
+  check_motion_value(read_motion(x, y), expected, what);
 }
 } // namespace
 
@@ -889,6 +941,33 @@ int main(int argc, char** argv) {
     // Copy 1 at x = -2 (NDC -0.5: column 16), raised 2.5 units (NDC 0.625: row 12).
     check_motion(16, 12, {0.f, 4.f}, "animated copy");
     std::printf("Actual Aurora motion vectors: a CPU-animated copy out of phase with another keeps its own motion\n");
+    // In-between images: the blur scales each one's motion up by the inverse of how far along it is, so all of a draw's
+    // motion has to cover that share of the frame, the vertices' too, or they blur 3x, then 1.5x, then 1x, every frame.
+    // 8 pixels by the matrix and 4 by the vertices a frame; pixel (36, 30) stays on the quad in all three images.
+    aurora_set_frame_interpolation_fps(180);
+    {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      for (int step = -3; step < 0 || gfx::queued_pipeline_count() != 0; ++step) {
+        require(std::chrono::steady_clock::now() < deadline, "Animated mover pipelines were not built");
+        draw_animated_mover(std::min(step, -1), 36, 30);
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    draw_animated_mover(-1, 36, 30);
+    draw_animated_mover(0, 36, 30);
+    {
+      const auto images = draw_animated_mover(1, 36, 30);
+      for (const auto& m : images) {
+        std::printf("Animated mover image motion %g,%g\n", m[0], m[1]);
+      }
+      require(images.size() == 3, "Animated mover did not replay two in-between images");
+      check_motion_value(images[0], {-8.f / 3.f, 4.f / 3.f}, "animated mover, first in-between image");
+      check_motion_value(images[1], {-16.f / 3.f, 8.f / 3.f}, "animated mover, second in-between image");
+      check_motion_value(images[2], {-8.f, 4.f}, "animated mover, the frame's own image");
+    }
+    aurora_set_frame_interpolation_fps(0);
+    std::printf("Actual Aurora motion vectors: an in-between image's vertex motion covers its share of the frame\n");
     // A camera cut: when the whole picture moves more than a camera can in one frame (here 2.4 units, over the
     // 2-unit limit), the frame has no motion; 1 unit is still motion.
     settle_motion_pipelines(false, true);

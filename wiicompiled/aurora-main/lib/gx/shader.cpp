@@ -1095,7 +1095,10 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
     vtxXfrAttrsPre += "\n    out.mv_cur_clip = out.pos;";
     if (info.motionPrev) {
       // Vertex history: a CPU-animated model's previous positions come from last frame's copy of its POS array
-      // (same indices, mv_prev_pos.x = where the copy is, .y = whether there is one).
+      // (same indices, mv_prev_pos.x = where the copy is, .y = whether there is one). Every image draws this frame's
+      // positions, in-between images too, so an image's previous position is only the share of the way back it covers
+      // (.z, a float: how far along the frame the image is). Matrix motion gets the same share from its interpolated
+      // matrices, and the blur scales both up by the inverse (encode_motion_effects).
       std::string prevPos = std::string(vtx_attr(config, GX_VA_POS));
       const auto posType = config.attrs[GX_VA_POS].attrType;
       if (config.lineMode == 0 && (posType == GX_INDEX8 || posType == GX_INDEX16)) {
@@ -1106,7 +1109,8 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
         }
         vtxXfrAttrsPre += fmt::format(
             "\n    var mv_prev_in_pos = {};"
-            "\n    if ((ubuf.mv_prev_pos.y & 1u) != 0u) {{ mv_prev_in_pos = {}; }}",
+            "\n    if ((ubuf.mv_prev_pos.y & 1u) != 0u) {{"
+            " mv_prev_in_pos = mix(mv_prev_in_pos, {}, bitcast<f32>(ubuf.mv_prev_pos.z)); }}",
             prevPos, load);
         prevPos = "mv_prev_in_pos";
       }

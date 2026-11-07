@@ -188,6 +188,7 @@ struct PendingUniformInterpolation {
   uint32_t numerator = 0;
   uint32_t denominator = 1;
   bool indexedMatrices = false;
+  size_t motionPrevOffset = SIZE_MAX; // where the draw's motion block starts, if it has one
 };
 
 std::vector<FrameTransformEntry> s_previousFrameTransforms;
@@ -867,7 +868,8 @@ void begin_frame_interpolation() noexcept {
 
 // ----- Motion vectors (gfx::motion_vectors_active): last frame's matrices for each draw's previous-transform block.
 
-constexpr size_t kMotionPrevPosOffset = sizeof(Vec4<float>); // vec4u: previous POS array offset, valid
+constexpr size_t kMotionPrevPosOffset = sizeof(Vec4<float>); // vec4u: previous POS array offset, flags, image's share
+constexpr size_t kMotionImageShareOffset = kMotionPrevPosOffset + 2 * sizeof(uint32_t); // the share, a float
 constexpr size_t kMotionProjectionOffset = kMotionPrevPosOffset + sizeof(Vec4<uint32_t>);
 constexpr size_t kMotionPositionOffset = kMotionProjectionOffset + sizeof(Mat4x4<float>);
 
@@ -1677,6 +1679,11 @@ void finalize_frame_interpolation() noexcept {
 
       const auto& current = s_currentFrameTransforms[task.currentTransformIndex].transform;
       std::memcpy(task.uniformData, task.sourceUniformData, task.uniformSize);
+      const float weight =
+          static_cast<float>(task.numerator) / static_cast<float>(task.denominator);
+      if (task.motionPrevOffset != SIZE_MAX) {
+        std::memcpy(task.uniformData + task.motionPrevOffset + kMotionImageShareOffset, &weight, sizeof(weight));
+      }
       const auto& prepared = preparedTransforms[task.currentTransformIndex];
       if (task.indexedMatrices && !prepared.indexedValid) {
         return;
@@ -1688,8 +1695,6 @@ void finalize_frame_interpolation() noexcept {
         return;
       }
       const auto& previous = s_previousFrameTransforms[previousTransformIndex].transform;
-      const float weight =
-          static_cast<float>(task.numerator) / static_cast<float>(task.denominator);
       const auto interpolatedProjection =
           interpolate_projection(previous.projection, current.projection, weight);
       std::memcpy(task.uniformData + task.projectionOffset, &interpolatedProjection,
@@ -1988,6 +1993,9 @@ void record_motion_vertex_history(size_t currentTransformIndex, const FrameInter
       const auto range = gfx::push_storage(previous.posHistory->data(), previous.posHistory->size());
       const std::array<uint32_t, 2> prevPos{static_cast<uint32_t>(range.offset), 1u};
       std::memcpy(layout.motionPrevData + kMotionPrevPosOffset, prevPos.data(), sizeof(prevPos));
+      // The frame's own image; the in-between images' copies write their own share.
+      const float wholeFrame = 1.f;
+      std::memcpy(layout.motionPrevData + kMotionImageShareOffset, &wholeFrame, sizeof(wholeFrame));
     }
   }
   s_currentFrameTransforms[currentTransformIndex].posHistory =
@@ -2086,6 +2094,9 @@ std::array<gfx::Range, MaxInterpolatedFrames> record_interpolation_draw(
           .numerator = sample + 1,
           .denominator = sampleCount + 1,
           .indexedMatrices = uniformLayout.indexedMatrices,
+          .motionPrevOffset = uniformLayout.motionPrevData != nullptr
+                                  ? static_cast<size_t>(uniformLayout.motionPrevData - uniformLayout.sourceUniformData)
+                                  : SIZE_MAX,
       });
       interpolatedRanges[sample] = interpolatedRange;
     }
