@@ -394,6 +394,7 @@ enum class DeferredDrawKind : uint8_t { Cutout, Translucent };
 // a clear, overlay or render-pass boundary ends the deferred scene.
 void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind kind = DeferredDrawKind::Cutout);
 void flush_deferred_draws();
+bool has_pending_translucent_draws() noexcept;
 
 template <typename PipelineConfig>
 PipelineRef pipeline_ref(const PipelineConfig& config);

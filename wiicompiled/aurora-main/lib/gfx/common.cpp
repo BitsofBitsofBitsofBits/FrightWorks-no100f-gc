@@ -584,6 +584,10 @@ void flush_deferred_draws() {
   push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
 }
 
+bool has_pending_translucent_draws() noexcept {
+  return has_current_render_pass() && !g_renderPasses[g_currentRenderPass].translucent.empty();
+}
+
 Vec2<uint32_t> get_frame_buffer_size() noexcept {
   if (webgpu::g_frameBuffer.size.width != 0 && webgpu::g_frameBuffer.size.height != 0) {
     return {webgpu::g_frameBuffer.size.width, webgpu::g_frameBuffer.size.height};

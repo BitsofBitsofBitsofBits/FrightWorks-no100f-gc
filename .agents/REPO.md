@@ -224,6 +224,8 @@ Worktrees without sessions: `python3 tools/debug/worktree.py new --noopen --name
 The tools are `tools/debug/worktree.ps1` (Windows) and `worktree.py`.
 In a worktree, `Disc`, `texture_pack`, `toolchain`, `game` and `wiicompiled/Dependencies` are links to the main checkout: read only.
 Never delete a worktree folder by hand; `remove` unlinks first.
+Don't switch a checkout that has the `.claude/skills` link to a commit from before `.agents/` existed: git fails partway, after deleting tracked files.
+To build old source there, set only the paths that differ with `git restore --source=<commit> --worktree --pathspec-from-file=<list>`.
 A worktree's first build must be full.
 Never name a session `main`.
 
