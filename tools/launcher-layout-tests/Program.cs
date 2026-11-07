@@ -293,6 +293,20 @@ static class LauncherLayoutTests
             Check(saved.Contains("fullscreen_display = \"NOPE0000/gone\""), "Another setting dropped the saved monitor");
         }
 
+        // ----- Holidays: confetti fireworks is a choice like the others, saved in [game] and off unless picked -----
+        window.ShowBoard("extras");
+        Pump();
+        var holidayBox = Descendants(window.boards["extras"]).OfType<ThemedCombo>().Single(c => c.Items.Contains("Confetti fireworks"));
+        Check((string)holidayBox.SelectedItem! == "By today's date", "Holidays doesn't start on today's date");
+        Check(new GameConfig(config).Get("game", "holiday") == null, "Opening Extras saved a holiday");
+        holidayBox.SelectedItem = "Confetti fireworks";
+        Check(new GameConfig(config).Get("game", "holiday") == "confetti", "Confetti fireworks wasn't saved as holiday = confetti");
+        Check(File.ReadAllText(config).Contains("unknown_setting = 42"), "Changing the holiday overwrote another setting");
+        holidayBox.SelectedItem = "By today's date";
+        Check(new GameConfig(config).Get("game", "holiday") == "auto", "Going back to today's date wasn't saved");
+        window.CloseBoards();
+        Pump();
+
         // ----- A Config.toml that can't be written: the launcher asks Continue or Quit, it doesn't close -----
         string beforeReadOnly = File.ReadAllText(config);
         File.SetAttributes(config, FileAttributes.ReadOnly);

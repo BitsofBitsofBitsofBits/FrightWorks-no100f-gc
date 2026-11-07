@@ -6,7 +6,8 @@
 // Dates the game reacts to: Jan 1, Feb 2, Mar 22, May 30, Aug 28, Sep 8, Nov 5, Dec 20, Dec 31 fireworks; Mar 17 green
 // chimney smoke (the "FOUNTAIN EMITTER" objects); Jul 4 red/white/blue smoke + fireworks; Oct 31 bats over the manor
 // door (BAT HANG 0-19); Dec 14 and Dec 25 snow (other December days set the snow object up without visible snow).
-// "off" answers June 15 (June has no events).
+// "off" answers June 15 (June has no events). "confetti" answers Jan 1 for its fireworks; the burst colours are in
+// no100f_particles_entity.cpp.
 #include <ctime>
 #include <string>
 #include "hle_stubs.h"
@@ -19,6 +20,7 @@ struct MonthDay { uint32_t month, day; };
 MonthDay HolidayDate() {
     static const std::string mode = RuntimeConfigFile::Holiday();
     if (mode == "off") return {6, 15};
+    if (mode == "confetti") return {1, 1};
     if (mode != "auto")  // "MM-DD", validated when the config is read
         return {static_cast<uint32_t>((mode[0] - '0') * 10 + (mode[1] - '0')),
                 static_cast<uint32_t>((mode[3] - '0') * 10 + (mode[4] - '0'))};
