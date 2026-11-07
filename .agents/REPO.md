@@ -119,6 +119,10 @@ Check new dependencies for it.
 Avalonia's `Avalonia.BuildServices` posts on every compile, so it's pinned and blocked through the root `Directory.Build.targets` (bumping Avalonia may need that pin bumped).
 Set `DOTNET_CLI_TELEMETRY_OPTOUT=1` when running `dotnet` by hand.
 
+**New downloads:** when adding a download to the build or tools, or changing its source, check what it fetches and from where.
+Pin a version and hash where the source allows it, and say so in the PR.
+A new download that runs an installer or changes security settings needs the maintainer's OK.
+
 **Credits:** in game "Made by Loneranger419 with the help of BitsofBitsofBits" (`no100f_credits.h`; later helpers are appended to `kHelpers`).
 JosiahG in the README, launcher Extras > About and `tools/package-README.txt`.
 ScoobyHD by dogerki in the README.
