@@ -30,7 +30,7 @@ what changes: positions, timers, spawn counts, pools. The usual cause in this po
    address, `dol.py callers/func` for who writes it. `trace ADDR N` follows a linked list per frame.
 3. **Count, don't eyeball**: per-system pool use (`parsys.py`), per-emitter spawn rate at 30 vs 60 (`births-run.ps1` + `births.py`).
 4. **Fix at the per-call site**, re-measure with the same tools (rates within noise of 30 fps, flash count 0), then human visual
-   check + smoke boots.
+   check if the change is visible, and the smoke test in `.agents/REPO.md` (Testing; the script is not built yet, so boot `h001` and the changed level).
 
 ## Parking Scooby at a fixed spot (`tools/debug/game/mkhip.py`)
 
@@ -81,7 +81,9 @@ by one in this scene), Player tab (health/snacks and power-ups: unlock/lock all 
 `Play/devmenu.txt` (every 30 frames, then deleted; results in `Play/devmenu.log`; the file is left alone until in play with
 no scene/spot transfer pending, except diagnostic-only files below, `skip`, or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
 `save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `powerups [all|none|HEX]`, `powerup NAME on|off` (sd2.ini name without `eSPECIAL_`), `monsters [on|off]` (list / all),
-`monster N|NAME on|off`, `ents` (scene entity list), `textures`. These commands don't edit warp flags or save files.
+`monster N|NAME on|off`, `ents` (scene entity list), `textures`, `freecam on|off`, `cam X Y Z YAW PITCH` (free camera at
+this pose, degrees; pitch > 0 looks down), `camspin DEG` / `cammove DX DY DZ` (the free camera turns or moves this
+much every frame: steady motion for frame-to-frame checks; 0 stops). These commands don't edit warp flags or save files.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `cutscene` (`cutscene yes|no control yes|no`).
 

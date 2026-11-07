@@ -8,6 +8,8 @@ FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-
 from which it split off on October 31, 2026. This repository is the GameCube version; ports of the other console versions
 may follow.
 
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1136-scooby-doo-night-of-100-frights/)
+
 > **Artists wanted:** the launcher needs new art in the style of the original show. [Details below](#wanted-an-artist-for-the-launcher).
 
 ![Mystic Manor in widescreen at 4K](docs/screenshots/courtyard.jpg)
@@ -28,9 +30,11 @@ may follow.
   button prompts match your Xbox, PlayStation or Nintendo controller and follow remapped face buttons
 - Optional original Xbox controls: X head smash, B dig / talk and back in menus, LB soap bubble, RB sneak (together with
   the triggers, as on the Xbox); the button prompts and tutorial hints follow. Black and White can also go on other
-  buttons. The launcher detects an Xbox controller and asks once which layout to use
+  buttons. The launcher can automatically match Xbox controllers to Original Xbox and GameCube adapters to GameCube,
+  until you choose a layout manually; existing saved layouts ask once before opting in
 - GameCube memory-card saves
-- Option to skip the intro movies; mods that replace game files or textures
+- Option to skip the intro movies; mods that replace game files or textures, or that [add things to a level](docs/mod-patches.md)
+  using your own disc, so no game data is shared
 - The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page
 
 **No game data is included.** You need your own disc image.
@@ -72,6 +76,25 @@ long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
 screenshot and **F1** opens this page in your browser. The title screen and main menu list
 these keys in the corner. With more than one monitor, **Settings** > **Display** > **Fullscreen monitor** (or **F10** >
 Video) picks the one fullscreen uses.
+
+**Launcher controller navigation.** D-pad or left stick moves focus, South confirms (Xbox A, PlayStation Cross,
+Nintendo B), East goes back, the bumpers (LB/RB) switch tabs where a page has them (Settings: Display and Controls)
+and otherwise move to the previous/next control, and right-stick Y scrolls. Sliders and numeric
+fields use left/right. This works through Settings, Mods, Extras, owned questions, local file/folder browsers and
+on-screen text entry, independently of the game's bindings. Input is ignored while another window owns focus or the
+game owns the controllers; reconnecting and returning from a dialog/game require neutral first.
+
+**Automatic layout.** Settings > Controls can match reliably identified Xbox controllers (including Xbox One) to the
+existing **Original Xbox** scheme, and GameCube adapters to **GameCube**. PlayStation, Switch, unknown or conflicting
+connected types leave the current scheme alone. A manual choice, even the current value, stops matching; the checkbox
+can re-enable it. Custom bindings are kept. An older saved layout is left alone unless you accept the one-time opt-in.
+New native F10 layout choices also stop matching; older game binaries can only be detected when they change the saved
+layout value, not when they choose the same value again.
+
+Controller-operated pickers use the launcher's themed local browser, including folder creation and path entry.
+Mouse/keyboard retain native storage pickers (including Linux portals). A native picker opened with the mouse needs
+OS keyboard/mouse input: cancel it and invoke the launcher action with the controller to use the local browser.
+The on-screen keyboard enters ASCII; existing Unicode text is preserved and physical keyboards can enter other characters.
 
 For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
 free camera, god mode, power-ups on/off, texture finder), **F3** video recording of the game (needs
@@ -153,6 +176,8 @@ launcher/publish/FrightWorks                    # or start the game directly: "P
 On Linux the game doesn't record F3 videos or pick a fullscreen monitor yet, so the launcher leaves those out.
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
+
+**Using an AI agent on this repo?** Have it read [`.agents/REPO.md`](.agents/REPO.md) first: it holds the repo's rules and how to test, and skills are in `.agents/skills/`.
 
 ## Credits
 
