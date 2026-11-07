@@ -47,6 +47,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | `pr-media.py` | Upload PR and issue screenshots to FrightWorks/pr-media (needs write access there): `--pr N` or `--issue N`, then `.png`/`.jpg` files; checks signature, 10 MB, name clashes and PNG text chunks / JPEG EXIF (refuses, never strips), pushes a plain commit from a temporary shallow clone, prints one Markdown image line per file. `--dry-run` checks only; `--repo URL` for tests; `--self-test` runs the checks against a local bare repo (Python 3.8+, standard library + git) |
 | `holiday-shots.ps1` | Screenshot loop for `[game] holiday` dates per hub (needs PR #13) |
 | `patches/` | Diagnostics kept out of PRs; table in `.agents\skills\manual-yn-bisect\strip-before-pr.md` |
+| `patches/pad-script.patch` | Scripted pad 1: hold the stick and press buttons at set times, dev tools on or off (`NO100F_PAD_SCRIPT=<file>`). Format: top of `no100f_pad_script.h`, which the patch adds; usage in the `game-logic-debug` skill. Routes: `game/pad-walk-check.txt`, `audio/issue14-route.txt` |
 
 ### F8 progression diagnostics
 

@@ -299,6 +299,7 @@ useful:
 | `postool` | Live memory: write `dump NAME`, `peek ADDR [N]` or `poke ADDR HEX...` lines to `Play\postool.txt` (run every 20 frames, output in `Play\postool\`); **F9** saves Scooby's position to `Play\postool\spots.txt` |
 | `audio-diagnostic` | Per-stage audio dumps (`AX_DIAG_DIR`) |
 | `real-date` | Real clock for old builds that always start on 2000-01-01 |
+| `pad-script` | Scripted pad 1 with the stick and timed buttons, dev tools on or off (`NO100F_PAD_SCRIPT=<file>`; usage in the `game-logic-debug` skill) |
 
 ## 7. Logs, scripted input and other switches
 

@@ -116,6 +116,23 @@ scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines
 (`cutscene` = only while one plays), injected into pad 1 by PADRead. `tools\debug\texhunt\look.ps1` presses A every 2 s
 while `cutscene yes`, then waits for `control yes`.
 
+**Stick and timed input without dev tools:** `tools/debug/patches/pad-script.patch` adds a scripted pad 1 (`devmenu_press.txt` needs dev tools and `NSMBW_INPUT_SCRIPT` has no stick). A route file has one step per line: `wait MS`, `waitmode MODE STATE`, `waitplay SCENE`, `do SX SY BUTTONS PERIOD_MS DURATION_MS [until SCENE | untilmode MODE STATE]`; `#` starts a comment. The full format is at the top of `no100f_pad_script.h`, which the patch adds; read it in the patch file. One bad line means no step of that file runs, and stderr says which line. `NO100F_PAD_SCRIPT_LIVE=<file>` takes more steps while the game runs. Routes: `tools/debug/game/pad-walk-check.txt`, `tools/debug/audio/issue14-route.txt`.
+
+```powershell
+git apply tools\debug\patches\pad-script.patch
+powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # first build in a checkout: full
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare -Boot e001  # muted, rumble off, boot mod
+$env:NO100F_DEV_TOOLS = '0'
+$env:NO100F_PAD_SCRIPT = (Resolve-Path tools\debug\game\pad-walk-check.txt).Path            # full path: the game runs in Play\
+Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play -RedirectStandardError autotest\pad-script.log
+# wait on the [padscript] step lines in the log; manual-session.ps1 shot takes a picture
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
+Remove-Item Env:NO100F_*
+git apply -R tools\debug\patches\pad-script.patch                                           # next build: full translate
+```
+
+For dev tools on, `manual-session start` passes the variable to the game. A real pad still counts, and the game reads it without focus, so leave it alone during a run. On Linux `manual-session` isn't available: set the same variables, set `[audio] muted` and `[controller] rumble = false` yourself and run `Play/FrightWorks Game`.
+
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
 optional seventh column starting with `effect`, any case = Effects tab instead; `#` comments; the Reload button re-reads
 it; each tab keeps its own "This level only" / "Hide fine" filters) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
