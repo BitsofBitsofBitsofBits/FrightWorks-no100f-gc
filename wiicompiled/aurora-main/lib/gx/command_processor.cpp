@@ -6,6 +6,7 @@
 #include "command_processor.hpp"
 
 #include "../gfx/common.hpp"
+#include "../gfx/scene_stage.hpp"
 #include "../dolphin/gx/__gx.h"
 #include "../gfx/texture_replacement.hpp"
 #include "dolphin/gx/GXAurora.h"
@@ -2843,6 +2844,19 @@ static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t verte
   return gfx::staging_has_space(demand);
 }
 
+// Whether a draw in the current state is part of the world as the two-pass cut-out modes order it.
+static bool ordered_world_state() noexcept {
+  const auto mode = cutout_mode();
+  return (mode == CutoutMode::TwoPass || mode == CutoutMode::TwoPassAll) && g_gxState.projType == GX_PERSPECTIVE &&
+         g_gxState.depthCompare && (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
+}
+
+// A surface as the scene stage's two-layer rule knows it: its geometry and position matrix.
+static HashType stage_surface(HashType geometrySignature) noexcept {
+  const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
+  return xxh3_hash_s(&matrix, sizeof(matrix), geometrySignature);
+}
+
 static std::vector<float> direct_billboard_depths(GXPrimitive prim, GXVtxFmt fmt,
                                                  const uint8_t* vertices, uint32_t vertexBytes) {
   const auto mode = cutout_mode();
@@ -2932,11 +2946,11 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
         (untextured ? (e[1] <= -0.99f || e[3] >= 0.99f)
                     : e[1] <= -0.99f && e[3] >= 0.99f && g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA);
   }
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
-                       matrixUsage.mask, matrixUsage.topologySignature,
-                       interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive,
-                       direct_billboard_depths(prim, fmt, vertices, vertexBytes));
+  handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
+                       interpolationIdentityActive || gfx::scene_stage::wanted()
+                           ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize)
+                           : 0,
+                       interpolationIdentityActive, direct_billboard_depths(prim, fmt, vertices, vertexBytes));
   g_rawFullscreenOverlay = false;
   return true;
 }
@@ -3135,6 +3149,11 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
       lastDraw->vtxCount += vtxCount;
       lastDraw->indexCount += numIndices;
       ++gfx::g_mergedDrawCallCount;
+      // Merged into a solid draw (a see-through draw never takes more): it is a solid surface of its own, whose second
+      // layer has to be recognised like any other's.
+      if (g_gxState.depthUpdate && ordered_world_state() && gfx::scene_stage::wanted()) {
+        gfx::scene_stage::note_solid_surface(stage_surface(draw_geometry_signature(fmt, vertices, vtxCount, vtxSize)));
+      }
       // This primitive now renders through the draw we merged into, so its palette slots belong to that draw's interpolation snapshot as well.
       if (s_lastDrawRecordedInterpolation) UNLIKELY {
         extend_interpolation_draw(pn_mtx_mask(vertices, vtxCount, vtxSize));
@@ -3152,9 +3171,10 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     g_gxState.proj.m0[0] = raw[0];
     (g_gxState.projType == GX_ORTHOGRAPHIC ? g_gxState.proj.m0[3] : g_gxState.proj.m0[2]) = raw[1];
   }
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
-                       matrixUsage.mask, matrixUsage.topologySignature,
-                       interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
+  handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
+                       interpolationIdentityActive || gfx::scene_stage::wanted()
+                           ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize)
+                           : 0,
                        interpolationIdentityActive, particleDepths);
   if (fullScreenQuad) {
     g_gxState.proj = widenedProj;
@@ -3377,9 +3397,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   };
   const auto cutoutMode = cutout_mode();
   const bool enhancedCutouts = cutoutMode == CutoutMode::TwoPass || cutoutMode == CutoutMode::TwoPassAll;
-  const bool orderedWorld = enhancedCutouts && g_gxState.projType == GX_PERSPECTIVE &&
-                            g_gxState.depthCompare &&
-                            (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
+  const bool orderedWorld = ordered_world_state();
   // The game also draws blended surfaces after its particles with depth write on and no alpha test, such as the faded
   // door and wall pieces between the camera and the room at the start of i004. They keep that place in the tail: drawn
   // earlier, their depth would hide every translucent draw behind them, even at alpha 0.
@@ -3387,13 +3405,27 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
                                   g_gxState.alphaCompare.comp0 == GX_ALWAYS &&
                                   g_gxState.alphaCompare.comp1 == GX_ALWAYS && gfx::has_pending_translucent_draws();
   const bool translucentWorld = orderedWorld && (!g_gxState.depthUpdate || lateBlendedSurface);
+  // With the scene stage in use, a see-through draw of a surface already drawn solid this frame (the game's two-layer
+  // materials) is the solid surface's second layer: it is drawn with the cut-out fringes, before the stage, instead of
+  // in the see-through tail. Late blended surfaces (which write depth) stay in the tail.
+  bool surfaceLayer = false;
+  if (orderedWorld && geometrySignature != 0 && particleDepths.empty() && gfx::scene_stage::wanted()) {
+    const HashType surface = stage_surface(geometrySignature);
+    if (!translucentWorld && g_gxState.depthUpdate) {
+      gfx::scene_stage::note_solid_surface(surface);
+    } else if (translucentWorld && !lateBlendedSurface) {
+      surfaceLayer = gfx::scene_stage::is_solid_surface(surface);
+    }
+  }
   if (!orderedWorld && (enhancedCutouts || !g_gxState.depthCompare ||
                         !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS)) {
     gfx::flush_deferred_draws();
   }
   // The game queues alpha-tested grass after particles. Finish that solid geometry and its
   // fringes before blending clouds over it; retain submission order within the translucent tail.
-  if (translucentWorld) {
+  if (surfaceLayer) {
+    gfx::push_deferred_draw_command(draw, gfx::DeferredDrawKind::SurfaceLayer);
+  } else if (translucentWorld) {
     if (!particleDepths.empty()) {
       const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
       const HashType group = xxh3_hash_s(&g_gxState.proj, sizeof(g_gxState.proj),

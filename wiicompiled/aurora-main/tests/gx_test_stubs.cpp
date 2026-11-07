@@ -81,6 +81,13 @@ uint32_t g_mergedDrawCallCount = 0;
 bool motion_vectors_active() noexcept { return false; }
 } // namespace aurora::gfx
 
+namespace aurora::gfx::scene_stage {
+bool wanted() noexcept { return false; }
+void note_camera(const Mat4x4<float>&, const webgpu::Viewport&) noexcept {}
+void note_solid_surface(HashType) noexcept {}
+bool is_solid_surface(HashType) noexcept { return false; }
+} // namespace aurora::gfx::scene_stage
+
 namespace aurora::webgpu {
 GraphicsConfig g_graphicsConfig{};
 } // namespace aurora::webgpu

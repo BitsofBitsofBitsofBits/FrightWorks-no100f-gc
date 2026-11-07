@@ -377,14 +377,26 @@ sealed class MainWindow : Window
             }
             Row("Motion blur", "motion_blur", levels.ToArray(), "0");
         }
+        {
+            // Strength in percent, as in F10 (runtime_config.h kAmbientOcclusionLevels); a strength set by hand in
+            // Config.toml that is none of the levels is kept as its own entry.
+            var levels = new List<(string text, string raw)> { ("Off", "0"), ("Low", "35"), ("Medium", "65") };
+            if (int.TryParse(cfg.Get("video", "ambient_occlusion")?.Trim(), out int saved) && saved > 0 && saved <= 100 &&
+                !levels.Exists(l => l.raw == saved.ToString()))
+            {
+                levels.Add(($"{saved}%", saved.ToString()));
+                levels.Sort((a, b) => int.Parse(a.raw).CompareTo(int.Parse(b.raw)));
+            }
+            Row("Ambient occlusion", "ambient_occlusion", levels.ToArray(), "0");
+        }
         Row("Intro movies", "skip_intro", new[] { ("Play them", "false"), ("Skip them", "true") }, "false");
         Row("HDR", "hdr", new[] { ("Off", "false"), (OperatingSystem.IsWindows() ? "On (needs HDR on in Windows)" : "On (needs HDR on in your desktop)", "true") }, "false");
         Row("HDR brightness", "hdr_paper_white_nits", new[] { ("Dim (120 nits)", "120.0"), ("Normal (200 nits)", "200.0"), ("Bright (300 nits)", "300.0"), ("Brightest (400 nits)", "400.0") }, "200.0");
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Children.Add(table);
         body.Children.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 has the " +
-                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation and motion blur settings too, and more (sound, controls); "
-                                              : "resolution, picture shape, window, frame interpolation and motion blur settings too, and more (sound, controls); ") +
+                               (MonitorChoice ? "resolution, picture shape, window, fullscreen monitor, frame interpolation, motion blur and ambient occlusion settings too, and more (sound, controls); "
+                                              : "resolution, picture shape, window, frame interpolation, motion blur and ambient occlusion settings too, and more (sound, controls); ") +
                                "F11 switches between fullscreen and a window, and F2 saves a screenshot." +
                                (MonitorChoice ? " Fullscreen monitor also applies when F11 goes fullscreen from a window." : "")));
 
