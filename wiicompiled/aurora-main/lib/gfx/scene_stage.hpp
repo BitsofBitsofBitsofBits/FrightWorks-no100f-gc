@@ -8,14 +8,21 @@ namespace aurora::gfx::scene_stage {
 // (the world's second, blended pass, fog, particles, glow) have not been drawn yet, nor its HUD. Effects that belong
 // to the solid scene run there, on the EFB's colour, reading its depth: ambient occlusion, later lighting.
 //
-// The game never marks that point, so it is taken from the cut-out modes' see-through tail: when the tail is flushed
-// (common.cpp flush_deferred_draws, or at the next copy or the frame's end), the cut-out fringes stay in the pass,
-// the pass ends, the stage runs, and the see-through draws start a new pass that keeps the colour and depth. When a
-// frame flushes more than once, the stage runs at the last flush. A frame with no see-through tail (cut-out mode
-// "game" or "cut", or nothing see-through) has no stage.
+// The game never marks that point, so it is taken from the cut-out modes' tails: when they are flushed (common.cpp
+// flush_deferred_draws, or at the next copy or the frame's end), the cut-out fringes and the solid surfaces' second
+// layers stay in the pass, the pass ends, the stage runs, and the see-through draws start a new pass that keeps the
+// colour and depth. When a frame flushes more than once, the stage runs at the last flush. A frame with nothing held
+// back (cut-out mode "game" or "cut", or nothing see-through or cut out) has no stage.
 
 // Whether anything uses the stage: with nothing, the pass is not split and nothing is recorded.
 bool wanted() noexcept;
+
+// Solid surfaces the game draws a second time, see-through: its two-layer materials (the f001 dock house: the walls
+// drawn solid, then the same draws again blended, depth test only). The second layer belongs to the solid surface, so
+// it is drawn before the stage. A surface is its geometry and position matrix; the set is per frame (recording thread).
+void begin_frame() noexcept;
+void note_solid_surface(HashType surface) noexcept;
+bool is_solid_surface(HashType surface) noexcept;
 
 // Ambient occlusion: how much the solid scene is darkened where surfaces crowd each other (creases, corners, under
 // things), 0 = off, 1 = full. Clamped to [0, 1]; takes effect at the next frame.

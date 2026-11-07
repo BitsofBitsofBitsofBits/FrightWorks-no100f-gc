@@ -160,6 +160,7 @@ It starts with the motion vectors: none while nothing asks for them, zero for a 
 It then checks that a motion setting change resolves the pipeline again with no GX state written, that an alpha-blended surface owns its depth only where the GPU has `float32-blendable`, and that the blurred picture can be copied for a screenshot.
 Then the scene stage: with its tint view, a solid quad is tinted and a see-through world quad drawn after it is not; its depth view shows the solid quad's distance; with the view off nothing changes.
 Then ambient occlusion: a wall standing on a floor darkens just above the crease, the wall high up and the open floor don't shade themselves, and applied it darkens only the crease.
+Then a solid surface drawn a second time see-through (the game's two-layer materials) is tinted with the solid scene, as part of it.
 CTest runs it three times: as is, with `AURORA_GFX_FLAGS=validate`, and with `AURORA_GFX_FLAGS=validate,nofloat32blend`, which hides that feature.
 Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.

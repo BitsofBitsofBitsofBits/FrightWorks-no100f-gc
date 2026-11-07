@@ -285,7 +285,8 @@ Never name a session `main`.
 - The scene stage (`gfx/scene_stage.cpp`) is where effects on the solid scene go (ambient occlusion, lighting), before the see-through world draws and the HUD; effects on the final picture go at present, like motion blur.
   The game never marks that point: in a frame it draws the solid world (in several groups around its mist and glow copies of a 710x512 corner), then one see-through tail (the world's second, blended pass, particles, glow), then the HUD.
   So the stage is the two-pass cut-out modes' tail: the pass splits when the tail is flushed (or at the next copy or the frame's end), after the fringes; with more than one flush, the last one.
-  The `game` and `cut` cut-out modes have no tail, so no stage (and no ambient occlusion).
+  The game draws some solid surfaces twice (two-layer materials such as the `f001` dock house: solid, then the same draws again blended, depth test only); with the stage in use, such a second layer (same geometry and matrix as a solid draw this frame) is drawn with the fringes, before the stage.
+  The `game` and `cut` cut-out modes hold nothing back, so they have no stage (and no ambient occlusion).
   With nothing using it, nothing is split or recorded.
   It records the solid scene's camera (projection and viewport of the last perspective draw that wrote depth) to turn depth back into positions.
   `stageview 1` (or F8 > Scene stage view) tints what is drawn before it, `2` shows the solid scene's depth, `3` the ambient occlusion alone.

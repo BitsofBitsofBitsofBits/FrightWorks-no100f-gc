@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace aurora::gfx::scene_stage {
@@ -30,12 +31,17 @@ constexpr float kAoAngleBias = 0.26f;
 // The occlusion fades out between these distances from the camera: far away it is small and noisy.
 constexpr float kAoFadeStart = 40.f;
 constexpr float kAoFadeEnd = 80.f;
+// And it fades in between these: things right in front of the camera (tree trunks, posts the camera passes) cover
+// much of the picture, and their shading came out blotchy; Scooby is about 4 units away.
+constexpr float kAoNearFadeStart = 1.f;
+constexpr float kAoNearFadeEnd = 2.5f;
 // The longest sampling radius, as a share of the picture's height (close up, the radius covers a lot of screen).
 constexpr float kAoMaxRadiusOfHeight = 0.05f;
 // The depth view's distance scale: a surface this far from the camera shows at 1/e brightness.
 constexpr float kDepthViewDistance = 8.f;
 
 std::atomic_int g_viewMode{0};
+std::unordered_set<HashType> g_solidSurfaces;
 std::atomic<float> g_aoStrength{0.f};
 Camera g_camera;
 
@@ -47,7 +53,7 @@ struct Params {
   std::array<float, 4> depthMap; // stored depth = x + ndc z * y
   std::array<float, 4> sizes;    // EFB width, height; occlusion target width, height
   std::array<float, 4> ao;       // radius, intensity, bias, strength
-  std::array<float, 4> ao2;      // angle bias, unused
+  std::array<float, 4> ao2;      // angle bias, near fade start, near fade end, unused
   std::array<float, 4> misc; // view mode, longest radius share of height (depth view: its distance), fade start, end
 };
 static_assert(sizeof(Params) == 224);
@@ -155,7 +161,8 @@ fn fs_ao(@builtin(position) pos: vec4f) -> @location(0) vec4f {
         sum += f * f * f * max((dot(v, n) - params.ao2.x * sqrt(vv) - params.ao.z * dist) / (vv + 0.01 * r2), 0.0);
     }
     let ao = max(0.0, 1.0 - sum * params.ao.y * 5.0 / (r2 * r2 * r2 * f32(SAMPLES)));
-    return vec4f(mix(ao, 1.0, smoothstep(params.misc.z, params.misc.w, dist)), dist, 0.0, 0.0);
+    let fade = max(smoothstep(params.misc.z, params.misc.w, dist), 1.0 - smoothstep(params.ao2.y, params.ao2.z, dist));
+    return vec4f(mix(ao, 1.0, fade), dist, 0.0, 0.0);
 }
 
 // A 9-tap Gaussian along `dir` that only mixes pixels at about the same distance (edges stay sharp).
@@ -428,6 +435,10 @@ bool wanted() noexcept {
   return g_viewMode.load(std::memory_order_relaxed) != 0 || g_aoStrength.load(std::memory_order_relaxed) > 0.f;
 }
 
+void begin_frame() noexcept { g_solidSurfaces.clear(); }
+void note_solid_surface(HashType surface) noexcept { g_solidSurfaces.insert(surface); }
+bool is_solid_surface(HashType surface) noexcept { return g_solidSurfaces.contains(surface); }
+
 void set_ambient_occlusion(float strength) noexcept {
   g_aoStrength.store(std::isfinite(strength) ? std::clamp(strength, 0.f, 1.f) : 0.f, std::memory_order_relaxed);
 }
@@ -472,7 +483,7 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
       .sizes = {static_cast<float>(size.width), static_cast<float>(size.height), static_cast<float>(half.width),
                 static_cast<float>(half.height)},
       .ao = {kAoRadius, kAoIntensity, kAoBias, strength},
-      .ao2 = {kAoAngleBias, 0.f, 0.f, 0.f},
+      .ao2 = {kAoAngleBias, kAoNearFadeStart, kAoNearFadeEnd, 0.f},
       .misc = {static_cast<float>(mode), mode == 2 ? kDepthViewDistance : kAoMaxRadiusOfHeight, kAoFadeStart,
                kAoFadeEnd},
   };

@@ -568,9 +568,13 @@ void draw_same_state_frame(bool settingChanged) {
 
 // ----- Scene stage: a solid quad (writes depth) on the left half, then a see-through world quad (depth test, no
 // depth write: the cut-out modes' tail) on the right half; the frame ends with nothing after the tail.
-// `crease`: instead a floor (y = -0.5, from 1.5 to 3 units away) meeting a wall (3 units away, up to y = 1), with a
+// Crease: instead a floor (y = -0.5, from 1.5 to 3 units away) meeting a wall (3 units away, up to y = 1), with a
 // small see-through quad in the top-left corner so the frame has a tail.
-void draw_stage_frame(bool crease = false) {
+// Layer: the left quad is drawn a second time, see-through (half green from the material colour, the same vertices,
+// depth test only), like the game's two-layer materials; the right quad as usual.
+enum class StageScene { Basic, Crease, Layer };
+void draw_stage_frame(StageScene scene = StageScene::Basic) {
+  const bool crease = scene == StageScene::Crease;
   gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
   gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
   require(gfx::begin_frame(), "Scene stage frame begin failed");
@@ -635,6 +639,12 @@ void draw_stage_frame(bool crease = false) {
   } else {
     quad(-.9f, -.1f, {255, 0, 0, 255});
     GXSetZMode(true, GX_LEQUAL, false);
+    if (scene == StageScene::Layer) {
+      GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+      GXSetChanMatColor(GX_COLOR0A0, GXColor{0, 255, 0, 128});
+      quad(-.9f, -.1f, {255, 0, 0, 255});
+      GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    }
     quad(.1f, .9f, {0, 255, 0, 128});
   }
   gx::fifo::drain();
@@ -785,11 +795,11 @@ int main(int argc, char** argv) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
         for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
           require(std::chrono::steady_clock::now() < deadline, "Ambient occlusion pipelines were not built");
-          draw_stage_frame(true);
+          draw_stage_frame(StageScene::Crease);
           webgpu::g_instance.ProcessEvents();
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        draw_stage_frame(true);
+        draw_stage_frame(StageScene::Crease);
       };
       gfx::scene_stage::set_view(3);
       settle();
@@ -810,6 +820,23 @@ int main(int argc, char** argv) {
       const int plainCrease = read_efb(32, 35)[0];
       require(litCrease < plainCrease - 10 && std::abs(litWall - read_efb(32, 24)[0]) <= 2,
               "Ambient occlusion: applying it does not darken only the crease");
+    }
+    // A see-through second layer of a solid surface is part of the solid scene: drawn before the stage, it is tinted
+    // with its surface (half green over red: R 128 x 0.35, G 128 x 0.55 = 70; after the stage G would stay 128).
+    {
+      gfx::scene_stage::set_view(1);
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+        require(std::chrono::steady_clock::now() < deadline, "Surface layer pipelines were not built");
+        draw_stage_frame(StageScene::Layer);
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      draw_stage_frame(StageScene::Layer);
+      check_efb(16, 32, {45, 70, 0}, "second layer of a solid surface");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the stage, with a layer");
+      gfx::scene_stage::set_view(0);
+      std::printf("Actual Aurora scene stage: a solid surface's see-through second layer is drawn before the stage\n");
     }
     // An alpha-blended surface moves like any other. It owns the depth only on a GPU that can blend the 32-bit float
     // target; elsewhere (AURORA_GFX_FLAGS=nofloat32blend hides the feature) it leaves the depth behind it.

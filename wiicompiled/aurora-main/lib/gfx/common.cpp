@@ -598,9 +598,10 @@ void flush_deferred_draws() {
   pass.deferred.clear();
   pass.deferredViewport.reset();
   pass.deferredScissor.reset();
-  if (!pass.translucent.empty() && !g_inOffscreen && scene_stage::wanted()) {
-    // The solid scene and its cut-out fringes are drawn: the scene stage runs here, so the see-through tail goes into
-    // a new pass that keeps the colour and depth (its draws carry their own viewport and scissor).
+  if (!g_inOffscreen && scene_stage::wanted()) {
+    // The solid scene, its cut-out fringes and its surfaces' second layers are drawn: the scene stage runs here, so
+    // the see-through tail goes into a new pass that keeps the colour and depth (its draws carry their own viewport
+    // and scissor).
     RenderPass continuation{
         .colorView = pass.colorView,
         .motionView = pass.motionView,
@@ -1332,6 +1333,7 @@ static bool begin_frame_impl(bool newFrame, bool capacityResume = false) {
   g_mergedDrawCallCount = 0;
   if (newFrame) {
     latch_motion_vectors();
+    scene_stage::begin_frame();
     gx::begin_frame_interpolation();
   }
   discard_suspended_efb_pass();

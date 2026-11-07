@@ -6,6 +6,7 @@
 #include "command_processor.hpp"
 
 #include "../gfx/common.hpp"
+#include "../gfx/scene_stage.hpp"
 #include "../dolphin/gx/__gx.h"
 #include "../gfx/texture_replacement.hpp"
 #include "dolphin/gx/GXAurora.h"
@@ -2932,11 +2933,11 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
         (untextured ? (e[1] <= -0.99f || e[3] >= 0.99f)
                     : e[1] <= -0.99f && e[3] >= 0.99f && g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA);
   }
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
-                       matrixUsage.mask, matrixUsage.topologySignature,
-                       interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
-                       interpolationIdentityActive,
-                       direct_billboard_depths(prim, fmt, vertices, vertexBytes));
+  handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
+                       interpolationIdentityActive || gfx::scene_stage::wanted()
+                           ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize)
+                           : 0,
+                       interpolationIdentityActive, direct_billboard_depths(prim, fmt, vertices, vertexBytes));
   g_rawFullscreenOverlay = false;
   return true;
 }
@@ -3152,9 +3153,10 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
     g_gxState.proj.m0[0] = raw[0];
     (g_gxState.projType == GX_ORTHOGRAPHIC ? g_gxState.proj.m0[3] : g_gxState.proj.m0[2]) = raw[1];
   }
-  handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
-                       matrixUsage.mask, matrixUsage.topologySignature,
-                       interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
+  handle_draw_unmerged(prim, fmt, vtxCount, vertRange, matrixUsage.mask, matrixUsage.topologySignature,
+                       interpolationIdentityActive || gfx::scene_stage::wanted()
+                           ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize)
+                           : 0,
                        interpolationIdentityActive, particleDepths);
   if (fullScreenQuad) {
     g_gxState.proj = widenedProj;
@@ -3387,13 +3389,28 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
                                   g_gxState.alphaCompare.comp0 == GX_ALWAYS &&
                                   g_gxState.alphaCompare.comp1 == GX_ALWAYS && gfx::has_pending_translucent_draws();
   const bool translucentWorld = orderedWorld && (!g_gxState.depthUpdate || lateBlendedSurface);
+  // With the scene stage in use, a see-through draw of a surface already drawn solid this frame (the game's two-layer
+  // materials) is the solid surface's second layer: it is drawn with the cut-out fringes, before the stage, instead of
+  // in the see-through tail. Late blended surfaces (which write depth) stay in the tail.
+  bool surfaceLayer = false;
+  if (orderedWorld && geometrySignature != 0 && particleDepths.empty() && gfx::scene_stage::wanted()) {
+    const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
+    const HashType surface = xxh3_hash_s(&matrix, sizeof(matrix), geometrySignature);
+    if (!translucentWorld && g_gxState.depthUpdate) {
+      gfx::scene_stage::note_solid_surface(surface);
+    } else if (translucentWorld && !lateBlendedSurface) {
+      surfaceLayer = gfx::scene_stage::is_solid_surface(surface);
+    }
+  }
   if (!orderedWorld && (enhancedCutouts || !g_gxState.depthCompare ||
                         !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS)) {
     gfx::flush_deferred_draws();
   }
   // The game queues alpha-tested grass after particles. Finish that solid geometry and its
   // fringes before blending clouds over it; retain submission order within the translucent tail.
-  if (translucentWorld) {
+  if (surfaceLayer) {
+    gfx::push_deferred_draw_command(draw);
+  } else if (translucentWorld) {
     if (!particleDepths.empty()) {
       const auto& matrix = g_gxState.pnMtx[g_gxState.currentPnMtx].pos;
       const HashType group = xxh3_hash_s(&g_gxState.proj, sizeof(g_gxState.proj),
