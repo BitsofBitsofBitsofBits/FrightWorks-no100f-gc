@@ -125,6 +125,29 @@ static class LauncherHdrTests
             Check(errors == 1 && File.ReadAllText(path) == "[video]\nhdr = false\n", "Startup failure silently saved");
         }
         finally { File.SetAttributes(path, FileAttributes.Normal); Dialogs.MessageOverride = null; }
+
+        // A query that throws must not stop the launcher starting, and ends exactly like one that returns a failure.
+        const string partial = "[future]\nvalue = \"keep\"\n[video]\nhdr_peak_nits = 1234.5\n";
+        File.WriteAllText(path, partial);
+        fresh.InitializeHdrDefaults(true, () => new WindowsHdr.Snapshot(null, null, null, "Detection failed")).GetAwaiter().GetResult();
+        string returnedFailure = File.ReadAllText(path);
+        File.WriteAllText(path, partial);
+        fresh.InitializeHdrDefaults(true, () => throw new InvalidOperationException("synthetic interop failure")).GetAwaiter().GetResult();
+        Check(File.ReadAllText(path) == returnedFailure, "A throwing query did not end like a returned failure");
+        var failed = new GameConfig(path);
+        Check(failed.Get("video", "hdr") == "false" && failed.Get("video", "hdr_paper_white_nits") == "200" &&
+              failed.Get("video", "hdr_peak_nits") == "1234.5" && failed.Get("future", "value") == "keep",
+              "A throwing query did not leave safe defaults with saved values kept");
+        var statusWindow = fresh.CreateHdrWindow();
+        statusWindow.Show();
+        Pump();
+        Check(statusWindow.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text?.Contains("query failed (InvalidOperationException)") == true),
+              "A throwing query was not reported in the HDR window");
+        statusWindow.Close();
+        File.WriteAllText(path, partial);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            fresh.InitializeHdrDefaults(true, () => WindowsDefaults).GetAwaiter().GetResult();
+        Check(File.ReadAllText(path) == partial, "An unreadable config was changed");
         fresh.Close();
     }
 

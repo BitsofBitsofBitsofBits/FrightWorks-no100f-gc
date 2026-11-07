@@ -409,17 +409,31 @@ sealed class MainWindow : Window
             hdrStatus = "Windows HDR defaults are unavailable on this platform. Saved targets are kept.";
             return;
         }
-        var config = new GameConfig(configPath);
-        if (!HdrSettings.NeedsDefaults(config)) return;
-        var defaults = readDefaults();
-        config = new GameConfig(configPath);
-        HdrSettings.InitializeMissing(config, defaults);
-        hdrStatus = defaults.Status + " Saved adjustments are kept.";
-        try { config.Save(); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        // Nothing here may stop the launcher from starting: a query that throws counts as a failed query (the
+        // same safe defaults and status as one that returns a failure), and a config that can't be read stays as it is.
+        try
         {
-            hdrStatus = "Couldn't save initial HDR defaults: " + e.Message;
-            await Dialogs.Message(this, hdrStatus);
+            var config = new GameConfig(configPath);
+            if (!HdrSettings.NeedsDefaults(config)) return;
+            WindowsHdr.Snapshot defaults;
+            try { defaults = readDefaults(); }
+            catch (Exception e)
+            {
+                defaults = new(null, null, null, $"Windows HDR query failed ({e.GetType().Name}); using safe HDR defaults.");
+            }
+            config = new GameConfig(configPath);
+            HdrSettings.InitializeMissing(config, defaults);
+            hdrStatus = defaults.Status + " Saved adjustments are kept.";
+            try { config.Save(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                hdrStatus = "Couldn't save initial HDR defaults: " + e.Message;
+                await Dialogs.Message(this, hdrStatus);
+            }
+        }
+        catch (Exception e)
+        {
+            hdrStatus = $"Couldn't set up the initial HDR defaults ({e.GetType().Name}); saved settings are unchanged.";
         }
     }
 

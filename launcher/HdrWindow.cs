@@ -31,8 +31,11 @@ sealed class HdrWindow : Window
         MinHeight = Math.Min(360, Height);
         var body = new StackPanel { Margin = new Thickness(20), Spacing = 5 };
         body.Children.Add(Skin.Title("HDR brightness"));
-        body.Children.Add(Note("Launcher changes apply when the game starts. In-game F10 brightness sliders update live; " +
-                               "turning HDR on or off requires a restart.", 680));
+        // Only the Windows game has the F10 HDR page; elsewhere the launcher is the only place to change these.
+        body.Children.Add(Note(OperatingSystem.IsWindows()
+            ? "Launcher changes apply when the game starts. In-game F10 brightness sliders update live; " +
+              "turning HDR on or off requires a restart."
+            : "Launcher changes apply when the game starts.", 680));
         body.Children.Add(Note("With launcher controller navigation, use the left stick for larger steps and the D-pad for precise 0.1-nit adjustments.", 680));
         if (!OperatingSystem.IsWindows())
             body.Children.Add(Note("Windows HDR defaults are unavailable here. Saved targets remain editable, but Linux HDR " +
