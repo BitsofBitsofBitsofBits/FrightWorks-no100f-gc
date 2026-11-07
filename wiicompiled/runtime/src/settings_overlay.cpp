@@ -1386,6 +1386,28 @@ void DrawVideoSettings() {
         }
     }
     Hint("Experimental: you might see visual artifacts.");
+    {
+        // A strength set by hand in Config.toml that is none of the levels shows as its percentage.
+        const int percent = std::clamp(RuntimeConfigFile::MotionBlur(), 0, 100);
+        std::string current = std::to_string(percent) + "%";
+        for (const auto& level : RuntimeConfigFile::kMotionBlurLevels) {
+            if (level.percent == percent) current = level.name;
+        }
+        RowLabel("Motion blur", labelWidth, controlWidth);
+        if (ImGui::BeginCombo("##motionblur", current.c_str())) {
+            for (const auto& level : RuntimeConfigFile::kMotionBlurLevels) {
+                const bool selected = level.percent == percent;
+                if (ImGui::Selectable(level.name, selected) && !selected) {
+                    aurora_set_motion_blur(RuntimeConfigFile::MotionBlurShutter(level.percent));
+                    RuntimeConfigFile::SetMotionBlur(level.percent);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
     if (Toggle("Show FPS", &g_showFps)) {
         RuntimeConfigFile::SetShowFps(g_showFps);
     }

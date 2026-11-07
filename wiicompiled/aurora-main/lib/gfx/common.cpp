@@ -3,6 +3,7 @@
 #include "../gx/shader_info.hpp"
 
 #include "clear.hpp"
+#include "motion_effects.hpp"
 #include "depth_peek.hpp"
 #include "efb_ram_copy.hpp"
 #include "../internal.hpp"
@@ -154,6 +155,9 @@ uint32_t g_mergedDrawCallCount = 0;
 using CommandList = std::vector<Command>;
 struct RenderPass {
   wgpu::TextureView colorView;
+  wgpu::TextureView motionView;      // motion vectors (location 1), when motion_vectors_active()
+  wgpu::TextureView motionDepthView; // their surfaces' depth (location 2)
+  wgpu::TextureView motionMarkView;  // the HUD mark (location 3)
   wgpu::TextureView resolveView; // MSAA resolve target; null if msaaSamples == 1
   wgpu::TextureView depthView;
   wgpu::Texture copySourceTexture;
@@ -187,6 +191,9 @@ struct RenderPass {
   std::optional<ClipRect> translucentScissor;
   bool clearColor = true;
   bool clearDepth = true;
+  // Motion vectors start each frame at zero: set on a new frame's first EFB pass only, so the passes that continue
+  // a frame split by a mid-frame submit (or a later EFB pass) keep the motion drawn before them.
+  bool clearMotion = false;
   // The resolve destination outlives the frame with no re-issue path (one-shot
   // bake), so this pass may not drop draws even in skip-unready-pipelines mode.
   bool requireReadyPipelines = false;
@@ -259,6 +266,7 @@ struct SealedFrameData {
   depth_peek::FrameMapping depthMapping;
   DebugFrameData debug;
   std::vector<RenderPass> passes;
+  std::optional<MotionTargets> motion; // the EFB motion targets, when the frame was drawn with motion vectors
 };
 
 SealedFrame::SealedFrame() : m_data(std::make_unique<SealedFrameData>()) {}
@@ -335,6 +343,9 @@ static void discard_suspended_efb_pass() noexcept {
 static bool has_current_render_pass() noexcept { return g_currentRenderPass < g_renderPasses.size(); }
 static webgpu::TextureWithSampler g_offscreenColor;
 static webgpu::TextureWithSampler g_offscreenDepth;
+static webgpu::TextureWithSampler g_offscreenMotion;
+static webgpu::TextureWithSampler g_offscreenMotionDepth;
+static webgpu::TextureWithSampler g_offscreenMotionMark;
 
 struct ResolveSourceSnapshotPool {
   TextureHandle entry;
@@ -458,6 +469,9 @@ static ClipRect calculate_resolve_snapshot_rect(const wgpu::Extent3D& targetSize
 
 static void set_efb_targets(RenderPass& pass) {
   pass.colorView = webgpu::g_frameBuffer.view;
+  pass.motionView = webgpu::g_motionVectors.view;
+  pass.motionDepthView = webgpu::g_motionDepth.view;
+  pass.motionMarkView = webgpu::g_motionMark.view;
   pass.resolveView = webgpu::g_graphicsConfig.msaaSamples > 1 ? webgpu::g_frameBufferResolved.view : nullptr;
   pass.depthView = webgpu::g_depthBuffer.view;
   pass.copySourceTexture =
@@ -482,6 +496,9 @@ struct OffscreenCacheKey {
 struct OffscreenCacheEntry {
   webgpu::TextureWithSampler color;
   webgpu::TextureWithSampler depth;
+  webgpu::TextureWithSampler motion; // only when motion_vectors_active(); never read back
+  webgpu::TextureWithSampler motionDepth;
+  webgpu::TextureWithSampler motionMark;
 };
 static absl::flat_hash_map<OffscreenCacheKey, OffscreenCacheEntry> g_offscreenCache;
 std::vector<TextureUpload> g_textureUploads;
@@ -637,7 +654,9 @@ void push_draw_command(clear::DrawData data) {
 }
 
 template <>
-PipelineRef pipeline_ref(const clear::PipelineConfig& config) {
+PipelineRef pipeline_ref(const clear::PipelineConfig& requested) {
+  auto config = requested;
+  config.motionVectors = motion_vectors_active() ? 1 : 0;
   return find_pipeline(ShaderType::Clear, config, [=] { return create_pipeline(config); });
 }
 
@@ -779,6 +798,9 @@ void resolve_pass(TextureHandle texture, ClipRect rect, bool clearColor, bool cl
   const auto msaaSamples = prevPass.msaaSamples;
   RenderPass newPass{
       .colorView = prevPass.colorView,
+      .motionView = prevPass.motionView,
+      .motionDepthView = prevPass.motionDepthView,
+      .motionMarkView = prevPass.motionMarkView,
       .resolveView = prevPass.resolveView,
       .depthView = prevPass.depthView,
       .copySourceTexture = prevPass.copySourceTexture,
@@ -829,6 +851,43 @@ void queue_palette_conv(tex_palette_conv::ConvRequest req) {
 }
 
 bool is_offscreen() noexcept { return g_inOffscreen; }
+
+static std::atomic_bool g_motionVectorsRequested{false};
+// Latched by begin_frame_impl (the recording thread); atomic only so other threads can read it for display.
+static std::atomic_bool g_motionVectorsActive{false};
+
+void request_motion_vectors(bool requested) noexcept {
+  g_motionVectorsRequested.store(requested, std::memory_order_release);
+}
+
+bool motion_vectors_wanted() noexcept { return g_motionVectorsRequested.load(std::memory_order_acquire); }
+
+bool motion_vectors_active() noexcept { return g_motionVectorsActive.load(std::memory_order_relaxed); }
+
+// At a new frame: take the request, and make the EFB motion targets match it (created at the render size, or freed).
+// Cached offscreen targets carry motion targets only if they were created with them, so they are dropped on a change.
+// Passes already recorded or being encoded keep their own references to the targets they were drawn with.
+static void latch_motion_vectors() noexcept {
+  const bool wanted = motion_vectors_wanted();
+  const auto& size = webgpu::g_frameBuffer.size;
+  const auto& motion = webgpu::g_motionVectors;
+  const bool targetsMatch =
+      wanted ? motion.texture && motion.size.width == size.width && motion.size.height == size.height : !motion.texture;
+  if (wanted == motion_vectors_active() && targetsMatch) {
+    return;
+  }
+  g_motionVectorsActive.store(wanted, std::memory_order_relaxed);
+  webgpu::create_motion_targets(wanted);
+  g_offscreenCache.clear();
+  // The change is in the pass's attachments, not in any GX state: resolve the draws' pipelines again.
+  gx::g_gxState.stateDirty = true;
+  gx::g_gxState.pipelineStateGeneration = gx::next_gx_state_epoch();
+}
+
+const MotionTargets* sealed_motion_targets(const SealedFrame& frame) noexcept {
+  const auto& motion = frame.data().motion;
+  return motion.has_value() ? &*motion : nullptr;
+}
 
 uint32_t get_sample_count() noexcept {
   if (!has_current_render_pass()) {
@@ -893,6 +952,14 @@ static OffscreenCacheEntry get_offscreen_textures(uint32_t width, uint32_t heigh
   OffscreenCacheEntry entry{
       .color = std::move(color),
       .depth = std::move(depth),
+      // Offscreen passes are single-sampled.
+      .motion = motion_vectors_active() ? webgpu::create_motion_target(webgpu::MotionTarget::Motion, width, height, 1)
+                                        : webgpu::TextureWithSampler{},
+      .motionDepth = motion_vectors_active()
+                         ? webgpu::create_motion_target(webgpu::MotionTarget::Depth, width, height, 1)
+                         : webgpu::TextureWithSampler{},
+      .motionMark = motion_vectors_active() ? webgpu::create_motion_target(webgpu::MotionTarget::Mark, width, height, 1)
+                                            : webgpu::TextureWithSampler{},
   };
   auto [insertIt, _] = g_offscreenCache.emplace(key, std::move(entry));
   return insertIt->second;
@@ -920,10 +987,16 @@ void begin_offscreen(uint32_t width, uint32_t height) {
   auto offscreenEntry = get_offscreen_textures(width, height);
   g_offscreenColor = std::move(offscreenEntry.color);
   g_offscreenDepth = std::move(offscreenEntry.depth);
+  g_offscreenMotion = std::move(offscreenEntry.motion);
+  g_offscreenMotionDepth = std::move(offscreenEntry.motionDepth);
+  g_offscreenMotionMark = std::move(offscreenEntry.motionMark);
 
   // Start a new pass with offscreen targets
   RenderPass newPass{
       .colorView = g_offscreenColor.view,
+      .motionView = g_offscreenMotion.view,
+      .motionDepthView = g_offscreenMotionDepth.view,
+      .motionMarkView = g_offscreenMotionMark.view,
       .depthView = g_offscreenDepth.view,
       .copySourceTexture = g_offscreenColor.texture,
       .copySourceView = g_offscreenColor.view,
@@ -1109,6 +1182,7 @@ void initialize() {
 }
 
 void shutdown() {
+  motion::shutdown();
   shutdown_pipeline_cache();
   gx::clear_shader_module_cache();
   efb_ram::shutdown();
@@ -1217,6 +1291,7 @@ static bool begin_frame_impl(bool newFrame, bool capacityResume = false) {
   g_drawCallCount = 0;
   g_mergedDrawCallCount = 0;
   if (newFrame) {
+    latch_motion_vectors();
     gx::begin_frame_interpolation();
   }
   discard_suspended_efb_pass();
@@ -1224,6 +1299,7 @@ static bool begin_frame_impl(bool newFrame, bool capacityResume = false) {
 
   push_render_pass(RenderPass{});
   set_efb_targets(g_renderPasses[0]);
+  g_renderPasses[0].clearMotion = newFrame;
   // The EFB keeps its contents from one frame to the next, as on hardware: only a copy that asks for it clears it
   // (resolve_pass). A frame that draws nothing shows the last picture again, not the copy-clear colour (white in
   // NO100F, whose copies never clear: the movie player's blank presents around every Bink movie flashed white).
@@ -1373,11 +1449,19 @@ void split_staging_batch() {
   const auto renderScissor = gx::g_gxState.renderScissor;
   const auto& active = g_renderPasses[g_currentRenderPass];
   RenderPass continuation{
-      .colorView = active.colorView, .resolveView = active.resolveView,
-      .depthView = active.depthView, .copySourceTexture = active.copySourceTexture,
-      .copySourceView = active.copySourceView, .copySourceDepthView = active.copySourceDepthView,
-      .targetSize = active.targetSize, .msaaSamples = active.msaaSamples,
-      .clearColor = false, .clearDepth = false,
+      .colorView = active.colorView,
+      .motionView = active.motionView,
+      .motionDepthView = active.motionDepthView,
+      .motionMarkView = active.motionMarkView,
+      .resolveView = active.resolveView,
+      .depthView = active.depthView,
+      .copySourceTexture = active.copySourceTexture,
+      .copySourceView = active.copySourceView,
+      .copySourceDepthView = active.copySourceDepthView,
+      .targetSize = active.targetSize,
+      .msaaSamples = active.msaaSamples,
+      .clearColor = false,
+      .clearDepth = false,
       .requireReadyPipelines = active.requireReadyPipelines || offscreen,
   };
   auto suspended = std::move(g_suspendedEfbPass);
@@ -1488,6 +1572,11 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
       continue;
     }
 
+    // Motion vectors start each frame at zero (RenderPass::clearMotion); offscreen targets clear with their color.
+    // Recorded with the pass (motion_vectors_active then): this may run while the producer records the next frame.
+    const bool motionPass =
+        passInfo.motionView != nullptr && passInfo.motionDepthView != nullptr && passInfo.motionMarkView != nullptr;
+    const bool clearMotion = passInfo.clearColor || passInfo.clearMotion;
     const std::array attachments{
         wgpu::RenderPassColorAttachment{
             .view = passInfo.colorView,
@@ -1502,6 +1591,24 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
                     .a = passInfo.clearColorValue.w(),
                 },
         },
+        wgpu::RenderPassColorAttachment{
+            .view = passInfo.motionView,
+            .loadOp = clearMotion ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load,
+            .storeOp = wgpu::StoreOp::Store,
+            .clearValue = {.r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0},
+        },
+        wgpu::RenderPassColorAttachment{
+            .view = passInfo.motionDepthView,
+            .loadOp = clearMotion ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load,
+            .storeOp = wgpu::StoreOp::Store,
+            .clearValue = {.r = gx::UseReversedZ ? 0.0 : 1.0, .g = 0.0, .b = 0.0, .a = 0.0},
+        },
+        wgpu::RenderPassColorAttachment{
+            .view = passInfo.motionMarkView,
+            .loadOp = clearMotion ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load,
+            .storeOp = wgpu::StoreOp::Store,
+            .clearValue = {.r = 0.0, .g = 0.0, .b = 0.0, .a = 0.0},
+        },
     };
     const wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{
         .view = passInfo.depthView,
@@ -1511,7 +1618,7 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
     };
     const wgpu::RenderPassDescriptor renderPassDescriptor{
         .label = render_pass_label(i),
-        .colorAttachmentCount = attachments.size(),
+        .colorAttachmentCount = motionPass ? attachments.size() : 1,
         .colorAttachments = attachments.data(),
         .depthStencilAttachment = &depthStencilAttachment,
     };
@@ -1638,6 +1745,14 @@ void seal_frame(SealedFrame& out) noexcept {
   // capacity included, back to the producer.
   recycle_render_passes(passes);
   passes.swap(g_renderPasses);
+  out.data().motion.reset();
+  if (motion_vectors_active() && webgpu::g_motionVectors.texture) {
+    out.data().motion = MotionTargets{
+        .motion = webgpu::g_motionVectors,
+        .depth = webgpu::g_motionDepth,
+        .mark = webgpu::g_motionMark,
+    };
+  }
 #ifdef AURORA_GFX_DEBUG_GROUPS
   // Marker indices and unmatched-group warnings belong to these detached passes.
   // The next producer frame must not modify strings still read by this encoder.

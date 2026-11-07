@@ -2,6 +2,7 @@
 #include "gfx/common.hpp"
 #include "gfx/clear.hpp"
 #include "gfx/efb_ram_copy.hpp"
+#include "gfx/motion_effects.hpp"
 #include "gfx/pipeline_cache.hpp"
 #include "gfx/texture.hpp"
 #include "gx/gx.hpp"
@@ -14,7 +15,9 @@
 #include <bit>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <stdexcept>
@@ -415,6 +418,161 @@ void check_alpha_pixel(const Pixels& pixels, unsigned x, std::array<int, 3> rgb)
     }
   }
 }
+
+// ----- Motion vectors: the same perspective quad on consecutive frames, moved by its position matrix.
+
+float half_to_float(uint16_t h) {
+  const uint32_t sign = (h & 0x8000u) << 16;
+  const uint32_t exponent = (h >> 10) & 0x1fu;
+  const uint32_t mantissa = h & 0x3ffu;
+  if (exponent == 0) {
+    const float value = std::ldexp(static_cast<float>(mantissa), -24);
+    return sign ? -value : value;
+  }
+  return std::bit_cast<float>(sign | ((exponent + 112u) << 23) | (mantissa << 13));
+}
+
+// The 4 bytes of a 32-bit target's pixel (x, y), as the screenshot path reads them: copied to a buffer.
+std::array<uint8_t, 4> read_texel(const wgpu::Texture& texture, unsigned x, unsigned y) {
+  require(static_cast<bool>(texture), "No target to read");
+  const wgpu::BufferDescriptor descriptor{.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst,
+                                          .size = 256};
+  const auto buffer = webgpu::g_device.CreateBuffer(&descriptor);
+  auto encoder = webgpu::g_device.CreateCommandEncoder();
+  const wgpu::TexelCopyTextureInfo source{.texture = texture, .origin = {x, y, 0}};
+  const wgpu::TexelCopyBufferInfo destination{.layout = {.bytesPerRow = 256, .rowsPerImage = 1}, .buffer = buffer};
+  const wgpu::Extent3D size{1, 1, 1};
+  encoder.CopyTextureToBuffer(&source, &destination, &size);
+  const auto commands = encoder.Finish();
+  webgpu::g_queue.Submit(1, &commands);
+  std::atomic_bool done{false};
+  bool mapped = false;
+  buffer.MapAsync(wgpu::MapMode::Read, 0, 4, wgpu::CallbackMode::AllowProcessEvents,
+                  [&](wgpu::MapAsyncStatus status, wgpu::StringView) {
+                    mapped = status == wgpu::MapAsyncStatus::Success;
+                    done = true;
+                  });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!done) {
+    webgpu::g_instance.ProcessEvents();
+    require(std::chrono::steady_clock::now() < deadline, "Motion readback did not complete");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(mapped, "Motion readback failed");
+  std::array<uint8_t, 4> result;
+  std::memcpy(result.data(), buffer.GetConstMappedRange(0, 4), result.size());
+  buffer.Unmap();
+  return result;
+}
+
+// The EFB motion vector (render pixels, where the surface was last frame minus where it is) at pixel (x, y).
+std::array<float, 2> read_motion(unsigned x, unsigned y) {
+  const auto half = std::bit_cast<std::array<uint16_t, 2>>(read_texel(webgpu::g_motionVectors.texture, x, y));
+  return {half_to_float(half[0]), half_to_float(half[1])};
+}
+
+// One frame: a quad over the middle half of the 64x64 viewport (z = -4), moved `shift` (normalized device
+// coordinates, so 32 pixels per unit; the matrix moves it 4 units per unit) to the right by its position matrix.
+// `blended`: alpha-blended, still writing depth. `twoQuads`: instead two narrower quads, x -0.9 to -0.6 and -0.4 to
+// -0.1 (y -0.25 to 0.25), each its own draw on its own matrix slot, both moved the same: two still draws that agree on
+// the camera's change, so a frame-wide shift reads as the camera's own.
+void draw_motion_frame(float shift, bool blended = false, bool twoQuads = false) {
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Motion frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+                                              .color = {0.f, 0.f, 0.f, 1.f},
+                                              .depth = gx::clear_depth_value()});
+  alignas(32) static std::array<uint8_t, 32768> fifo;
+  GXInit(fifo.data(), fifo.size());
+  gx::g_gxState.viewportPolicy = AURORA_VIEWPORT_NATIVE;
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetScissor(0, 0, 64, 64);
+  GXSetCullMode(GX_CULL_NONE);
+  GXSetColorUpdate(true);
+  GXSetAlphaUpdate(true);
+  if (blended) {
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_COPY);
+  } else {
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_COPY);
+  }
+  GXSetZMode(true, GX_LEQUAL, true);
+  GXSetNumTexGens(0);
+  GXSetNumChans(1);
+  GXSetNumTevStages(1);
+  GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+  GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+  GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+  const float projection[]{0.f, 1.f, 0.f, 1.f, 0.f, -0.01f, -0.1f}; // perspective: x, y divided by -z
+  GXSetProjectionv(projection);
+  constexpr float z = -4.f;
+  const float position[3][4]{{1.f, 0.f, 0.f, shift * -z}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+  GXLoadPosMtxImm(position, GX_PNMTX0);
+  GXLoadPosMtxImm(position, GX_PNMTX1);
+  GXSetCurrentMtx(GX_PNMTX0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+  const auto quad = [&](float left, float right, float bottom, float top) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy :
+         std::array<std::array<float, 2>, 4>{{{left, top}, {right, top}, {right, bottom}, {left, bottom}}}) {
+      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXColor4u8(255, 255, 255, 255);
+    }
+    GXEnd();
+  };
+  if (twoQuads) {
+    quad(-.9f, -.6f, -.25f, .25f);
+    GXSetCurrentMtx(GX_PNMTX1);
+    quad(-.4f, -.1f, -.25f, .25f);
+  } else {
+    quad(-.5f, .5f, -.5f, .5f);
+  }
+  gx::fifo::drain();
+  submit(true, false, false, true);
+}
+
+// Draws until the pipelines for the current motion setting are built, as unready ones are skipped.
+void settle_motion_pipelines(bool blended = false, bool twoQuads = false) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+    require(std::chrono::steady_clock::now() < deadline, "Motion vector pipelines were not built");
+    draw_motion_frame(0.f, blended, twoQuads);
+    webgpu::g_instance.ProcessEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+// One frame repeating the last draw with no GX state written since, so only a motion setting change can end the
+// resolved pipeline: a frame with one material can do this (a movie, say).
+void draw_same_state_frame(bool settingChanged) {
+  const auto generation = gx::g_gxState.pipelineStateGeneration;
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Motion frame begin failed");
+  require((generation != gx::g_gxState.pipelineStateGeneration) == settingChanged,
+          settingChanged ? "Resolved pipeline kept across a motion setting change"
+                         : "Resolved pipeline dropped with no motion setting change");
+  constexpr float z = -4.f;
+  GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+  for (const auto& xy : std::array<std::array<float, 2>, 4>{{{-.5f, .5f}, {.5f, .5f}, {.5f, -.5f}, {-.5f, -.5f}}}) {
+    GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+    GXColor4u8(255, 255, 255, 255);
+  }
+  GXEnd();
+  gx::fifo::drain();
+  submit(true, false, false, true);
+}
+
+void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
+  const auto actual = read_motion(x, y);
+  if (std::fabs(actual[0] - expected[0]) > 0.25f || std::fabs(actual[1] - expected[1]) > 0.25f) {
+    std::fprintf(stderr, "motion %s at %u,%u expected=%g,%g actual=%g,%g\n", what, x, y, expected[0], expected[1],
+                 actual[0], actual[1]);
+    require(false, "Motion vector mismatch");
+  }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -450,6 +608,86 @@ int main(int argc, char** argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     std::printf("Actual Aurora completed seeded startup queue (%u observed pending)\n", prewarmQueued);
+    // Motion vectors: on only while requested; a still quad has none; one moved 0.25 (8 pixels) to the right by its
+    // matrix was 8 pixels to the left last frame, both where it covers and nowhere else.
+    require(!webgpu::g_motionVectors.texture, "Motion vector targets exist while not requested");
+    gfx::request_motion_vectors(true);
+    // Its pipelines (with the motion targets) are new: draw until they are built, as unready ones are skipped.
+    const auto motionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+      require(std::chrono::steady_clock::now() < motionDeadline, "Motion vector pipelines were not built");
+      draw_motion_frame(0.f);
+      webgpu::g_instance.ProcessEvents();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    draw_motion_frame(0.f);
+    check_motion(32, 32, {0.f, 0.f}, "still");
+    draw_motion_frame(.25f);
+    check_motion(36, 32, {-8.f, 0.f}, "moved");
+    check_motion(4, 32, {0.f, 0.f}, "background");
+    // A camera cut: when the whole picture moves more than a camera can in one frame (here 2.4 units, over the
+    // 2-unit limit), the frame has no motion; 1 unit is still motion.
+    settle_motion_pipelines(false, true);
+    draw_motion_frame(.25f, false, true);
+    check_motion(16, 32, {-8.f, 0.f}, "camera move, first quad");
+    check_motion(32, 32, {-8.f, 0.f}, "camera move, second quad");
+    draw_motion_frame(0.f, false, true);
+    draw_motion_frame(0.f, false, true);
+    draw_motion_frame(.6f, false, true);
+    check_motion(27, 32, {0.f, 0.f}, "camera cut, first quad");
+    check_motion(43, 32, {0.f, 0.f}, "camera cut, second quad");
+    std::printf("Actual Aurora camera cut: no motion past the cut limit, -8 px below it\n");
+    gfx::request_motion_vectors(false);
+    draw_motion_frame(0.f);
+    require(!webgpu::g_motionVectors.texture, "Motion vector targets kept after the request ended");
+    std::printf("Actual Aurora motion vectors: still 0, moved -8 px, off frees the targets\n");
+    // The motion setting changes the pass's attachments: a pipeline resolved before the change must not be reused,
+    // and nothing is resolved again while it stays the same.
+    settle_motion_pipelines();
+    draw_same_state_frame(false);
+    gfx::request_motion_vectors(true);
+    draw_same_state_frame(true);
+    settle_motion_pipelines();
+    draw_same_state_frame(false);
+    gfx::request_motion_vectors(false);
+    draw_same_state_frame(true);
+    std::printf("Actual Aurora motion setting change resolves the pipeline again\n");
+    // An alpha-blended surface moves like any other. It owns the depth only on a GPU that can blend the 32-bit float
+    // target; elsewhere (AURORA_GFX_FLAGS=nofloat32blend hides the feature) it leaves the depth behind it.
+    gfx::request_motion_vectors(true);
+    settle_motion_pipelines(true);
+    draw_motion_frame(.25f, true);
+    check_motion(36, 32, {-8.f, 0.f}, "blended");
+    const auto depthAt = [](unsigned x, unsigned y) {
+      return std::bit_cast<float>(read_texel(webgpu::g_motionDepth.texture, x, y));
+    };
+    require((depthAt(36, 32) != depthAt(4, 32)) == webgpu::g_float32Blendable,
+            webgpu::g_float32Blendable ? "Alpha-blended surface did not own its depth"
+                                       : "Alpha-blended surface wrote depth with no blendable target");
+    std::printf("Actual Aurora alpha-blended motion: moved -8 px, float32-blendable %d\n",
+                webgpu::g_float32Blendable ? 1 : 0);
+    // The blurred picture is what is presented, so a screenshot or frame capture copies it (aurora.cpp
+    // encode_frame_capture).
+    gfx::motion::set_blur(1.f);
+    settle_motion_pipelines();
+    {
+      const auto picture = webgpu::current_present_source();
+      auto encoder = webgpu::g_device.CreateCommandEncoder();
+      const auto blurred = gfx::motion::encode(
+          encoder, picture,
+          gfx::MotionTargets{webgpu::g_motionVectors, webgpu::g_motionDepth, webgpu::g_motionMark}, 1.f);
+      const auto commands = encoder.Finish();
+      webgpu::g_queue.Submit(1, &commands);
+      require(blurred.texture.Get() != picture.texture.Get(), "Motion blur did not replace the picture");
+      require((blurred.texture.GetUsage() & wgpu::TextureUsage::CopySrc) != wgpu::TextureUsage::None,
+              "Blurred picture cannot be copied to a screenshot");
+      require(read_texel(blurred.texture, 32, 32)[0] > 200 && read_texel(blurred.texture, 4, 32)[0] < 50,
+              "Blurred picture does not show the frame");
+    }
+    gfx::motion::set_blur(0.f);
+    draw_motion_frame(0.f);
+    require(!webgpu::g_motionVectors.texture, "Motion vector targets kept after blur was turned off");
+    std::printf("Actual Aurora blurred picture copied for capture\n");
     for (const auto mode : {gx::CutoutMode::TwoPass, gx::CutoutMode::TwoPassAll}) {
       check_alpha_pixel(run_alpha_order(mode), 4, {127, 128, 0});
       check_alpha_pixel(run_alpha_order(mode, 1), 4, {255, 0, 0});
