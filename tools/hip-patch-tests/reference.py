@@ -1,7 +1,7 @@
 """Repeats `HipPatchTests --export DISC WORK` with tools/debug/game/hipedit.py: the two must agree byte for byte.
 
     dotnet run --project tools/hip-patch-tests -- --export DISC WORK
-    python tools/hip-patch-tests/reference.py DISC WORK PATH_TO_FOLDER_WITH_hipedit
+    python tools/hip-patch-tests/reference.py DISC WORK
 
 WORK holds only generated assets and hashes, but it is built from a real disc: keep it in a git-ignored folder.
 """
@@ -9,8 +9,8 @@ import hashlib
 import os
 import sys
 
-disc, work, tools = sys.argv[1:4]
-sys.path.insert(0, tools)
+disc, work = sys.argv[1:3]
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "debug", "game"))
 from hipedit import Hip, xstrhash  # noqa: E402
 
 

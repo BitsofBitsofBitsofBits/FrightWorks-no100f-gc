@@ -119,8 +119,8 @@ oversized contents, or a recipe or asset that fails the checks above.
 
     dotnet run --project tools/hip-patch-tests -- --disc DISC
     dotnet run --project tools/hip-patch-tests -- --export DISC WORK
-    python tools/hip-patch-tests/reference.py DISC WORK FOLDER_WITH_hipedit
+    python tools/hip-patch-tests/reference.py DISC WORK
     dotnet run --project tools/hip-patch-tests -- --recipe MODFOLDER --disc DISC --expect SHA256
 
 They check that every level on the disc rebuilds byte for byte, that the launcher's code agrees byte for byte with
-`hipedit.py`, and that a mod builds to a known level.
+`tools/debug/game/hipedit.py`, and that a mod builds to a known level.

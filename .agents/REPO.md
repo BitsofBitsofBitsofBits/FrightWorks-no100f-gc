@@ -119,6 +119,7 @@ Test code without launching the game where that can work.
 | --- | --- |
 | Docs | Nothing |
 | Launcher | Layout tests; a person checks it only if it looks different |
+| Patch mods (`launcher/ModPatches/`) | `tools/hip-patch-tests`, with its `--disc` and `--export` modes if level-file code changed (`docs/mod-patches.md`) + layout tests |
 | Translator | Translator tests + smoke test |
 | Game runtime or overrides | Runtime tests + smoke test; a person checks it only if behaviour changes |
 | Graphics (Aurora) | Aurora tests + smoke test + a person checks it |
@@ -187,7 +188,7 @@ The dev menu (see Facts) is the way to script a run.
   `cutscene` means only while a recorded cutscene plays.
   `NSMBW_INPUT_SCRIPT` scripts pad input from the environment instead.
 - **Boot mods:** a folder `UserData/mods/<name>/files/sd2.ini` with `BOOT=e001` starts a level directly.
-  A mod folder holds `files` mirroring the disc and/or `textures`; when two mods change the same file, the later name wins.
+  A mod folder holds `files` mirroring the disc and/or `textures`, and/or a `patch.json` (see "Patch mods" under Facts); when two mods change the same file, the later name wins.
   A file named `disabled` in the mod folder turns it off.
 - **Logs:** `RT_LOGF` and Aurora's log go to stderr, so redirect it (`2> file`).
   The current level is in the newest `UserData/Logs/*/console.log` (`[dvdread] ...xNNN.HIP` lines).
@@ -275,6 +276,18 @@ Never name a session `main`.
 - Installed: settings, logs, cache, disc and mods in `%LOCALAPPDATA%\FrightWorks-Data`, saves in `Saved Games\FrightWorks`.
   The installer's program folder is deleted on uninstall.
 - `[paths] saves_dir` overrides the saves folder.
+
+**Patch mods** (format and error handling: `docs/mod-patches.md`)
+- A mod's `patch.json` adds models and objects to a level with no game data in the mod: the launcher (`launcher/ModPatches/`) builds the level from the player's own disc into `UserData/mods/!patched`, and the game reads that like any other mod.
+- The game has no code for this, and the build runs on players' PCs, so it's C#, not Python.
+- `!patched` holds the player's disc data: never commit, share or ship it, and never write to `Disc` or the saves when building it.
+- `HipFile.cs` must match `tools/debug/game/hipedit.py` byte for byte: a change to one needs the other and a run of `tools/hip-patch-tests/reference.py`.
+- Budgets for added bytes are in `PatchBuilder.cs`: h001 and h002 1 MiB, h003 and every other level 256 KiB.
+  Each hub's budget is no more than a size that ran there, and the other levels haven't been measured, so raise one only after measuring it.
+- A material over 65,535 vertices crashes the game, whatever memory is free: the draw count is 16 bits, so it wraps and the remaining vertices run as commands.
+  The launcher reads the counts from the model's own bytes and refuses it, and it refuses a model over 13000 triangles.
+- Models take about 0.9 of their file size from the OS heap, not the main heap.
+- Added objects aren't lit at run time and aren't in saves.
 
 ## Known non-bugs and parked work
 
