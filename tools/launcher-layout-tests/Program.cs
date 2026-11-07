@@ -102,6 +102,10 @@ static class LauncherLayoutTests
         File.WriteAllText(config, initialConfig);
         for (int i = 0; i < 20; i++)
             Directory.CreateDirectory(Path.Combine(userData, "mods", $"{i:D2}-" + new string('M', 100)));
+        // A patch mod with a problem (its status line must fit under it), and the generated folder (never listed).
+        Directory.CreateDirectory(Path.Combine(userData, "mods", "patch-mod"));
+        File.WriteAllText(Path.Combine(userData, "mods", "patch-mod", "patch.json"), "{ \"format\": 9 }");
+        Directory.CreateDirectory(Path.Combine(userData, "mods", "!patched"));
 
         AppBuilder.Configure<App>().UseSkia().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
                   .WithInterFont().SetupWithoutStarting();
@@ -135,6 +139,21 @@ static class LauncherLayoutTests
         Pump();
         Check(window.padStatus.Text?.StartsWith("Looking") == false, "Controller detection status was not filled in");
         window.scene.Showcase(false);
+
+        // ----- Mods page: the status of a patch mod appears once its background check is done; the generated folder stays out of the list -----
+        window.ShowBoard("mods");
+        var modTexts = () => Descendants(window.boards["mods"]).OfType<TextBlock>().Select(t => t.Text ?? "").ToList();
+        for (int i = 0; i < 100 && !modTexts().Any(t => t.Contains("patch format 9")); i++)
+        {
+            Thread.Sleep(50);
+            Pump();
+        }
+        Check(modTexts().Any(t => t.Contains("patch format 9")), "A patch mod's problem isn't shown on the Mods page");
+        Check(modTexts().Contains("patch-mod"), "A patch mod isn't listed");
+        Check(!modTexts().Contains("!patched"), "The generated folder is listed as a mod");
+        Check(Descendants(window.boards["mods"]).OfType<PlankButton>().Any(b => b.Text == "Add a mod (zip)"), "No button to add a mod");
+        window.CloseBoards();
+        Pump();
 
         // ----- Planks: see-through corners in every state -----
         window.ShowBoard("settings");

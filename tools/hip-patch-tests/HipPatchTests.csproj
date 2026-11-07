@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>HipPatchTests</AssemblyName>
+    <RootNamespace>HipPatchTests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The launcher's patch code on its own, with no window: runs anywhere dotnet does. ModPatchPanel is the window's part. -->
+    <Compile Include="..\..\launcher\ModPatches\*.cs" Exclude="..\..\launcher\ModPatches\ModPatchPanel.cs" LinkBase="ModPatches" />
+  </ItemGroup>
+</Project>

@@ -44,7 +44,8 @@ are described at the top of that script and in `docs/testing.md` section 10. Thi
    powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 new -Name sliders -Branch fix/f10-sound-sliders -Task "Fix #37: ..."
    ```
 
-   The goal goes into the worktree's `TASK.md` and the new session starts on it. Quote the goal; keep `;` out of it
+   The goal goes into the worktree's `TASK.md` and the new session starts on it. `new` also links the worktree's
+   `.claude/skills` to its `.agents/skills` (`tools/setup-agents.py`); `open` does the same, so a worktree that has merged `main` gets its link when it is reopened (or run the script by hand). Quote the goal; keep `;` out of it
    (Windows Terminal splits its command line there).
 
    Optional: `-Model sonnet|opus|<full model ID>` and `-Effort low|medium|high|xhigh|max` pick the worker's model and
@@ -56,14 +57,14 @@ same either way.
 
 ## Check on, message, reopen
 
-- `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock.
+- `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock. Game runs take turns
+  today. Planned, not built yet: shared run slots in place of the one-at-a-time lock, a smoke test script, and the full sweep before a release (`.agents/REPO.md`, Testing).
 - ListAgents: which sessions are running. SendMessage to `<name>` to ask for a status or pass on a decision from the
   human; the answer arrives as a message. Don't report a worker's state you haven't heard back.
 - A closed tab: `worktree.ps1 open -Name <name>` starts a new session that picks the task up from `TASK.md` (so keep
   workers writing their Status there). `-Continue` tries `claude -c` (the folder's last conversation) instead. `-Model`/`-Effort` work here too but are
-  not remembered: pass them again on every `open`, or the session starts on the defaults. That
-  only works for sessions started after the environment fix (branch `tools/worktree-session-env`): earlier ones,
-  started from the coordinator's tool shell, ran as its children and saved no conversation (and weren't in ListAgents).
+  not remembered: pass them again on every `open`, or the session starts on the defaults. `new` and `open` start the tab
+  without the coordinator's Claude Code variables, so each worker is its own session (in ListAgents, conversation saved).
 - The human tests a worktree's build with its own `Play\FrightWorks Game.exe`, or its launcher (the worker runs
   `tools\build-launcher.ps1` there, then `launcher\publish\FrightWorks.exe`). The human's own `Play\` is untouched.
 - When one PR merges and another worktree's branch needs it: ask that worker to merge `origin/main` into its branch.
@@ -72,8 +73,8 @@ same either way.
 
 1. Make sure its session is done: ListAgents, or ask it. Ask the human to close its tab (removing the folder under a
    running session breaks that session).
-2. Read its `TASK.md`. Fold what every agent should know into `AGENTS.md` (case histories go in the skills, via a kit
-   PR); `TASK.md` is deleted with the folder.
+2. Read its `TASK.md`. Fold what every agent should know into `AGENTS.md`, or into `.agents/REPO.md` when it is a public rule or fact
+   (that file changes in the PR that makes it true, not afterwards; case histories go in the skills, via a kit PR); `TASK.md` is deleted with the folder.
 3. `worktree.ps1 remove -Name <name>`. It refuses while there are uncommitted or untracked changes, a program running
    from the folder (it stops leftover dotnet build servers itself) or the worktree's Claude session (`-n <name>`). Never delete a worktree folder by hand.
 4. Update `main` (`git pull --ff-only`) and delete the merged local branch (`git branch -d <branch>`; GitHub already
