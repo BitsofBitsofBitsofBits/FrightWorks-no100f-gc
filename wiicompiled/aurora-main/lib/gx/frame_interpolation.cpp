@@ -1975,7 +1975,7 @@ void record_motion_vertex_history(size_t currentTransformIndex, const FrameInter
   // is not enough: copies of a mesh the game animates on the CPU, out of step, match each other's last-frame shape
   // (the f001 fish paste), and the moving paste got no motion.
   const auto exactPrevious = s_previousTransformIndices.find(identity.combined);
-  if (exactPrevious != s_previousTransformIndices.end() &&
+  if (exactPrevious != s_previousTransformIndices.end() && !exactPrevious->second.empty() &&
       (own == SIZE_MAX ||
        std::find(exactPrevious->second.begin(), exactPrevious->second.end(), own) != exactPrevious->second.end())) {
     return; // unchanged positions: no history needed
