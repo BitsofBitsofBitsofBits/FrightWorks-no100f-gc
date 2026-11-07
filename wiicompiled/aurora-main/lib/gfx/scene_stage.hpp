@@ -30,9 +30,15 @@ bool is_solid_surface(HashType surface) noexcept;
 void set_ambient_occlusion(float strength) noexcept;
 float ambient_occlusion() noexcept;
 
+// Cartoon ink outlines on the solid scene: 0 off, 1 thin (silhouettes), 2 bold (thicker, and sharp creases too).
+// Takes effect at the next frame.
+void set_ink_outlines(int level) noexcept;
+int ink_outlines() noexcept;
+
 // Debug view: 0 off, 1 tint (everything drawn before the stage is tinted blue; what is drawn after keeps its colour),
 // 2 depth (the solid scene's distance from the camera, near = white), 3 the ambient occlusion alone (white = none),
-// all with what is drawn after the stage on top.
+// 4 the ink outlines alone (black on white; Bold when the setting is off), all with what is drawn after the stage on
+// top.
 void set_view(int mode) noexcept;
 int view() noexcept;
 

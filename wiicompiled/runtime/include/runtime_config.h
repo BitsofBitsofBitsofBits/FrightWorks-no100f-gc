@@ -37,6 +37,7 @@ struct RuntimeUserConfig {
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
     std::optional<int32_t> motionBlur;  // [video] motion_blur: strength in percent, 0 = off (MotionBlurShutter)
     std::optional<int32_t> ambientOcclusion;  // [video] ambient_occlusion: strength in percent, 0 = off
+    std::optional<int32_t> inkOutlines;  // [video] ink_outlines: 0 off, 1 thin, 2 bold
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
@@ -374,6 +375,8 @@ inline void EnsureConfigFile() {
               "# ambient occlusion (shade in creases, corners and under things) in percent: 0 = off, 35 = low, 65 = medium,\n"
               "# 100 = high\n"
               "ambient_occlusion = 0\n"
+              "# cartoon ink outlines: 0 = off, 1 = thin, 2 = bold\n"
+              "ink_outlines = 0\n"
               "# 0 = original 4:3, 1 = 16:9, 2 = fill the screen, 3 = cinematic 2.39:1\n"
               "aspect_mode = 3\n"
               "display_mode = \"borderless\"\n"
@@ -542,6 +545,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     if (auto value = FindConfigInt(document, "video", "ambient_occlusion"); value && *value >= 0 && *value <= 100) {
         config.ambientOcclusion = *value;
+    }
+    if (auto value = FindConfigInt(document, "video", "ink_outlines"); value && *value >= 0 && *value <= 2) {
+        config.inkOutlines = *value;
     }
     if (auto value = FindConfigInt(document, "video", "gpu_compat"); value && *value >= 0 && *value <= 2) {
         config.gpuCompat = *value;
@@ -1081,6 +1087,18 @@ inline bool SetAmbientOcclusion(int32_t value) {
     return WriteSetting("video", "ambient_occlusion", std::to_string(value));
 }
 
+// Cartoon ink outlines: 0 off, 1 thin, 2 bold (aurora_set_ink_outlines).
+inline int32_t InkOutlines(int32_t fallback = 0) {
+    return Get().inkOutlines.value_or(fallback);
+}
+
+inline constexpr const char* kInkOutlineLevels[] = {"Off", "Thin", "Bold"};
+
+inline bool SetInkOutlines(int32_t value) {
+    Mutable().inkOutlines = value;
+    return WriteSetting("video", "ink_outlines", std::to_string(value));
+}
+
 inline bool SetForceAspect169(bool value) {
     Mutable().forceAspect169 = value;
     return WriteSetting("video", "force_16_9", value ? "true" : "false");
@@ -1448,6 +1466,9 @@ inline void LogLoadedConfig() {
             }
             if (config.ambientOcclusion) {
                 std::cout << " ambient_occlusion=" << *config.ambientOcclusion;
+            }
+            if (config.inkOutlines) {
+                std::cout << " ink_outlines=" << *config.inkOutlines;
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");

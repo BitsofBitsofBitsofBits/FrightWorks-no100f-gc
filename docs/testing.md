@@ -164,6 +164,7 @@ Then ambient occlusion: a wall standing on a floor darkens just above the crease
 Then a solid surface drawn a second time see-through (the game's two-layer materials) is tinted with the solid scene, as part of it.
 Then a late blended surface in front of a second layer stays after it, and the second layers of solid draws that merged are recognised too.
 Then a frame split mid-way, three ways (between two flushes, with the tail pending, in the middle of the tail), has no stage at all, and the next whole frame has it again.
+Then ink outlines: a solid quad in front of nothing gets a line on its own edge only (not a pixel inside, not on what is drawn after the stage), the outline view shows it black on white, and off nothing changes. Bold's line is wider with nothing inside it, something thinner than the line keeps its colour, and a flat wall and floor stay clean. With no camera that can be inverted, the stage leaves the picture alone.
 CTest runs it three times: as is, with `AURORA_GFX_FLAGS=validate`, and with `AURORA_GFX_FLAGS=validate,nofloat32blend`, which hides that feature.
 Its transparency cases submit a cloud before late opaque foliage and check blending, foreground
 occlusion, soft cut-out fringes, translucent submission order, viewport/scissor snapshots and clear/HUD boundaries.
@@ -256,12 +257,14 @@ Grey (or the picture) is still; the hue is the direction a surface came from and
 It turns the motion vectors on while it shows, like the **Motion blur** setting (`[video] motion_blur`, 0 to 100 percent), which uses them.
 Anything that should move but shows grey, or flashes from frame to frame, has lost its pairing with last frame's draw.
 
-**Scene stage view** (F8, or `stageview MODE` in `Play\devmenu.txt`: 0 off, 1 tint, 2 depth, 3 occlusion) shows where the solid scene ends in each frame.
+**Scene stage view** (F8, or `stageview MODE` in `Play\devmenu.txt`: 0 off, 1 tint, 2 depth, 3 occlusion, 4 outlines) shows where the solid scene ends in each frame.
 Tint turns everything drawn before the stage blue: the see-through world draws (fog, particles, glow, the lit windows), the sky and the HUD come after it and keep their colour.
 Depth shows the solid scene's distance from the camera, near = white.
 Something solid that keeps its colour under the tint, or something see-through that turns blue, is drawn on the wrong side of the stage.
 Occlusion shows the **Ambient occlusion** setting's shading alone at full strength (white = none): it belongs in creases, corners and under things, never across flat walls or floors.
-`ao PERCENT` in `devmenu.txt` switches the setting's strength for one run to compare (0 off, 35 low, 65 medium, 100 high).
+`ao PERCENT` in `devmenu.txt` switches the setting's strength for one run to compare (0 off, 35 low, 65 medium).
+Outlines shows the **Ink outlines** lines alone, black on white (Bold when the setting is off): lines belong on silhouettes, never across flat walls or floors, and grass and stems keep no solid black.
+`ink LEVEL` in `devmenu.txt` switches them for one run (0 off, 1 thin, 2 bold).
 
 **F3** (developer tools on) starts / stops a video of the game: `Videos\FrightWorks_<date>_<time>.mp4` beside the
 launcher (`Play\Videos` in a source build) and a `.txt` with the build, picture size, Scooby's position at the start and

@@ -87,7 +87,8 @@ much every frame: steady motion for frame-to-frame checks; 0 stops). These comma
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `mvview MODE [SCALE]` (motion vectors view: 0 off, 1 motion only, 2 over the picture; SCALE = pixels per frame
 for full color), `stageview MODE` (scene stage view: 0 off, 1 tint what is drawn before the stage, 2 the solid scene's
-depth, 3 the ambient occlusion alone), `ao PERCENT` (ambient occlusion strength for this run, the setting unchanged),
+depth, 3 the ambient occlusion alone, 4 the ink outlines alone), `ao PERCENT` (ambient occlusion strength for this run,
+the setting unchanged), `ink LEVEL` (ink outlines for this run: 0 off, 1 thin, 2 bold, the setting unchanged),
 `cutscene` (`cutscene yes|no control yes|no`).
 
 **Player tab:** `player`, `health 1..5`, `snacks 0..99999` read/change live stats. Balance edits are separate from
