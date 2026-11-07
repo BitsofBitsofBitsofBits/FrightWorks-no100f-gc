@@ -698,6 +698,75 @@ TEST(FrameInterpolationContract, NoCameraEstimateRefusesNothing) {
   expect_translation(test.frame({{kCopy, kCopy, InterpolationPairing::at(20.0f, 0.0f, -10.0f)}})[0], 10.0f, 0.0f, -10.0f);
 }
 
+namespace {
+// The camera turning about its own position, by radians: what one frame does to every draw standing in the world.
+aurora::Mat3x4<float> turned(const aurora::Mat3x4<float>& m, float radians) {
+  const float c = std::cos(radians);
+  const float s = std::sin(radians);
+  const auto row = [&](const aurora::Vec4<float>& x, const aurora::Vec4<float>& z, float a, float b) {
+    return aurora::Vec4<float>{a * x.x() + b * z.x(), a * x.y() + b * z.y(), a * x.z() + b * z.z(), a * x.w() + b * z.w()};
+  };
+  return {row(m.m0, m.m2, c, s), m.m1, row(m.m0, m.m2, -s, c)};
+}
+constexpr float kRowTurn = -0.9f * 3.14159265f / 180.0f; // a row at z = -68.7 moves 1.08 units a frame along x
+constexpr float kRowSpacing = 1.66f;
+} // namespace
+
+// A row of copies far from a turning camera (e002 snacks): each moves further in view space than the gap to the next
+// copy's last position. Nearest in view space alone gives each its neighbour's partner.
+TEST(FrameInterpolationContract, RowOfCopiesKeepsItsPartnersInACameraTurn) {
+  InterpolationPairing test;
+  const auto viewBefore = InterpolationPairing::at(10.0f, 0.0f, -5.0f);
+  auto previous = InterpolationPairing::world(viewBefore);
+  auto current = InterpolationPairing::world(turned(viewBefore, kRowTurn));
+  const size_t row = previous.size();
+  for (int i = 0; i < 3; ++i) {
+    const auto before = InterpolationPairing::at(static_cast<float>(i) * kRowSpacing, 0.0f, -68.7f);
+    previous.push_back({kCopy, kCopy, before});
+    current.push_back({kCopy, kCopy, turned(before, kRowTurn)});
+  }
+  test.frame(previous);
+  const auto shown = test.frame(current);
+  for (size_t i = 0; i < 3; ++i) {
+    const auto& before = previous[row + i].position;
+    const auto& after = current[row + i].position;
+    EXPECT_NEAR(shown[row + i][0], (before.m0.w() + after.m0.w()) * 0.5f, 1e-2f) << "copy " << i;
+    EXPECT_NEAR(shown[row + i][2], (before.m2.w() + after.m2.w()) * 0.5f, 1e-2f) << "copy " << i;
+  }
+}
+
+// The same row attached to the camera instead: still in view space, so each stays its own partner, though with the
+// camera left out it lands nearer the next copy.
+TEST(FrameInterpolationContract, CameraAttachedCopiesKeepTheirPartnersInACameraTurn) {
+  InterpolationPairing test;
+  const auto viewBefore = InterpolationPairing::at(10.0f, 0.0f, -5.0f);
+  auto previous = InterpolationPairing::world(viewBefore);
+  auto current = InterpolationPairing::world(turned(viewBefore, kRowTurn));
+  const size_t row = previous.size();
+  for (int i = 0; i < 3; ++i) {
+    // Moving a little with the camera: an unchanged matrix gets no in-between copy to read.
+    previous.push_back({kCopy, kCopy, InterpolationPairing::at(static_cast<float>(i) * kRowSpacing, 0.0f, -68.7f)});
+    current.push_back({kCopy, kCopy, InterpolationPairing::at(static_cast<float>(i) * kRowSpacing + 0.02f, 0.0f, -68.7f)});
+  }
+  test.frame(previous);
+  const auto shown = test.frame(current);
+  for (size_t i = 0; i < 3; ++i) {
+    expect_translation(shown[row + i], static_cast<float>(i) * kRowSpacing + 0.01f, 0.0f, -68.7f);
+  }
+}
+
+// No camera estimate: pairing stays on the predicted position alone. The last position must not count, or the first
+// draw (0, -10) takes the second copy's partner, only 0.05 away, instead of its own.
+TEST(FrameInterpolationContract, NoCameraEstimateKeepsPredictedPairing) {
+  InterpolationPairing test;
+  using P = InterpolationPairing;
+  test.frame({{kCopy, kCopy, P::at(-0.7f, 0.0f, -10.0f)}, {kCopy, kCopy, P::at(0.05f, 0.0f, -10.5f)}});
+  test.frame({{kCopy, kCopy, P::at(-0.5f, 0.0f, -10.0f)}, {kCopy, kCopy, P::at(0.05f, 0.0f, -10.0f)}});
+  const auto shown = test.frame({{kCopy, kCopy, P::at(0.0f, 0.0f, -10.0f)}, {kCopy, kCopy, P::at(0.05f, 0.0f, -9.7f)}});
+  expect_translation(shown[0], -0.25f, 0.0f, -10.0f);
+  expect_translation(shown[1], 0.05f, 0.0f, -9.85f);
+}
+
 TEST(FrameInterpolationContract, RepeatedDrawsMatchByTransformInsteadOfDrawOrder) {
   const aurora::Mat3x4<float> left{
       {1.0f, 0.0f, 0.0f, -500.0f},

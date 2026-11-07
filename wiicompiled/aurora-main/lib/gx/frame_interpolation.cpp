@@ -1251,21 +1251,6 @@ float seal_frame_step_seconds() noexcept {
   return last != 0 && anchor > last ? static_cast<float>(anchor - last) * 1.0e-9f : kDefaultFrameStepSeconds;
 }
 
-// Whether a one-matrix draw can be last frame's draw: it moved no further than maximumMove, either with the camera
-// (attached to it, like Scooby under a following camera: still in view space) or in the world (the camera left out).
-// A viewport with no camera estimate gets no verdict: nothing tells a moving camera from moving draws there.
-bool pair_move_plausible(const Mat3x4<float>& previous, const FrameTransformSnapshot& current,
-                         float maximumMoveSquared) noexcept {
-  if (translation_delta_squared(previous, current.position) <= maximumMoveSquared) {
-    return true;
-  }
-  const auto* delta = motion_camera_delta(current.viewportIdentity);
-  if (delta == nullptr) {
-    return true;
-  }
-  return translation_delta_squared(previous, predicted_still(current)) <= maximumMoveSquared;
-}
-
 void finalize_frame_interpolation() noexcept {
   // Interpolation never pauses on match quality: an unmatched draw just renders its
   // end-frame state, while a ratio gate flapped the whole output cadence instead.
@@ -1342,13 +1327,38 @@ void finalize_frame_interpolation() noexcept {
     estimate_motion_camera_deltas();
   }
   const float maximumDrawMove = kMaximumDrawSpeed * frameStepSeconds;
+  // A one-matrix draw with the camera's motion left out (see predicted_still); null where there's no camera estimate,
+  // since nothing tells a moving camera from moving draws there. Every edge of a draw asks, so the last answer is kept.
+  size_t stillIndex = SIZE_MAX;
+  bool stillKnown = false;
+  Mat3x4<float> stillPosition{};
+  const auto drawStill = [&](size_t currentIndex) noexcept -> const Mat3x4<float>* {
+    if (stillIndex != currentIndex) {
+      stillIndex = currentIndex;
+      const auto& current = s_currentFrameTransforms[currentIndex].transform;
+      stillKnown = eligible && !current.indexedMatrices && motion_camera_delta(current.viewportIdentity) != nullptr;
+      if (stillKnown) {
+        stillPosition = predicted_still(current);
+      }
+    }
+    return stillKnown ? &stillPosition : nullptr;
+  };
+  // Whether a one-matrix draw can be last frame's draw: it moved no further than the limit, either with the camera
+  // (attached to it, like Scooby under a following camera: still in view space) or in the world (the camera left out).
   // Checked where pairs are made, so a refused pair leaves both draws free for a real partner, in this group or the
   // stable one. Skinned draws have no one translation, and only interpolation needs the check.
   const auto movePlausible = [&](size_t previousIndex, size_t currentIndex) noexcept {
     const auto& previous = s_previousFrameTransforms[previousIndex].transform;
     const auto& current = s_currentFrameTransforms[currentIndex].transform;
-    return !eligible || previous.indexedMatrices || current.indexedMatrices ||
-           pair_move_plausible(previous.position, current, maximumDrawMove * maximumDrawMove);
+    if (!eligible || previous.indexedMatrices || current.indexedMatrices) {
+      return true;
+    }
+    const float maximumMoveSquared = maximumDrawMove * maximumDrawMove;
+    if (translation_delta_squared(previous.position, current.position) <= maximumMoveSquared) {
+      return true;
+    }
+    const Mat3x4<float>* still = drawStill(currentIndex);
+    return still == nullptr || translation_delta_squared(previous.position, *still) <= maximumMoveSquared;
   };
 
   const auto matchGroups =
@@ -1404,7 +1414,13 @@ void finalize_frame_interpolation() noexcept {
         if (!movePlausible(previousIndex, currentIndex)) {
           return;
         }
-        const float distance = snapshot_match_distance_squared(previousEntry, currentSnapshot);
+        float distance = snapshot_match_distance_squared(previousEntry, currentSnapshot);
+        // Near in the world counts too: in a camera turn a distant draw moves further in view space than the gap to the
+        // next copy in a row, so view-space nearest alone takes the neighbour's partner (e002 snacks: 69 units away, 1.66
+        // apart, 0.9 degrees a frame). Prediction can't save it: it starts from the frame before the turn or a wrong pair.
+        if (const Mat3x4<float>* still = drawStill(currentIndex); still != nullptr && !previousEntry.transform.indexedMatrices) {
+          distance = std::min(distance, transform_match_distance_squared(previousEntry.transform.position, *still));
+        }
         if (std::isfinite(distance)) {
           edges.push_back({
               .distance = distance,
