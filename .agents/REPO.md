@@ -288,6 +288,7 @@ Never name a session `main`.
   The game draws some solid surfaces twice (two-layer materials such as the `f001` dock house: solid, then the same draws again blended, depth test only); with the stage in use, such a second layer (same geometry and matrix as a solid draw this frame) is drawn with the fringes, before the stage.
   The `game` and `cut` cut-out modes hold nothing back, so they have no stage (and no ambient occlusion or ink outlines).
   A frame submitted in parts (only a full staging buffer does that in the game) has no stage either: that frame shows without the shade, never shaded twice or over see-through draws.
+  A frame before any perspective draw has written depth has no camera to invert, and no stage either (the tint view still runs).
   With nothing using it, nothing is split or recorded.
   It records the solid scene's camera (projection and viewport of the last perspective draw that wrote depth) to turn depth back into positions.
   `stageview 1` (or F8 > Scene stage view) tints what is drawn before it, `2` shows the solid scene's depth, `3` the ambient occlusion alone, `4` the ink outlines alone.

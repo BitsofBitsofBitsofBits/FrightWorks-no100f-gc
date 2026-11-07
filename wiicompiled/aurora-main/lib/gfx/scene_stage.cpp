@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -448,8 +449,8 @@ void draw(const wgpu::CommandEncoder& encoder, Kind kind, const wgpu::TextureVie
 }
 
 // The inverse of a 4x4 matrix, from its cofactors: inverse[r][c] = cofactor[c][r] / determinant (any layout: the inverse
-// of the transpose is the transpose of the inverse); a zero matrix if it has none.
-Mat4x4<float> inverse(const Mat4x4<float>& matrix) {
+// of the transpose is the transpose of the inverse); nothing if it has none.
+std::optional<Mat4x4<float>> inverse(const Mat4x4<float>& matrix) {
   const std::array rows{&matrix.m0, &matrix.m1, &matrix.m2, &matrix.m3};
   const auto at = [&rows](size_t row, size_t column) { return rows[row]->m[column]; };
   // The three rows or columns left when one is taken out.
@@ -474,10 +475,10 @@ Mat4x4<float> inverse(const Mat4x4<float>& matrix) {
   float det = 0.f;
   for (size_t column = 0; column < 4; ++column)
     det += at(0, column) * cofactor(0, column);
-  Mat4x4<float> out{};
   if (!std::isfinite(det) || std::fabs(det) < 1e-20f) {
-    return out;
+    return std::nullopt;
   }
+  Mat4x4<float> out{};
   const std::array outRows{&out.m0, &out.m1, &out.m2, &out.m3};
   for (size_t row = 0; row < 4; ++row) {
     for (size_t column = 0; column < 4; ++column)
@@ -523,6 +524,12 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
   if ((mode == 0 && strength <= 0.f && ink == 0) || !color || !depth || size.width == 0 || size.height == 0) {
     return;
   }
+  // Without a camera that can be inverted (no perspective draw has written depth yet) no position can be worked out,
+  // so nothing that reads the depth runs: it would ink or shade from nonsense. The tint view reads none.
+  const auto inverseProjection = inverse(camera.projection);
+  if (!inverseProjection && mode != 1) {
+    return;
+  }
   // The view shows the Bold lines when the setting is off.
   const int inkLevel = ink != 0 ? ink : 2;
   ZoneScoped;
@@ -541,7 +548,7 @@ void encode(const wgpu::CommandEncoder& encoder, const wgpu::TextureView& color,
   const float minDepth = gx::UseReversedZ ? 1.f - vp.zfar : vp.znear;
   const float maxDepth = gx::UseReversedZ ? 1.f - vp.znear : vp.zfar;
   const Params params{
-      .inverseProjection = inverse(camera.projection),
+      .inverseProjection = inverseProjection.value_or(Mat4x4<float>{}),
       .projection = camera.projection,
       .viewport = {vp.left, vp.top, std::max(vp.width, 1.f), std::max(vp.height, 1.f)},
       .depthMap = {minDepth, maxDepth - minDepth != 0.f ? maxDepth - minDepth : 1.f, 0.f, 0.f},

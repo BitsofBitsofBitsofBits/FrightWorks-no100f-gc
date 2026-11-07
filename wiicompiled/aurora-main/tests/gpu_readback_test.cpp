@@ -577,7 +577,7 @@ void draw_same_state_frame(bool settingChanged) {
 // LateLayer: as Layer, then a late blended surface in front of it (alpha 0, writing depth, the place the game draws the
 // faded door and wall pieces in): it must stay after the second layer, or its depth hides the layer.
 // MergedLayers: two solid quads that merge into one draw, each drawn a second time see-through.
-enum class StageScene { Basic, Crease, Layer, SplitBetween, SplitTail, SplitMidTail, LateLayer, MergedLayers };
+enum class StageScene { Basic, Crease, Layer, SplitBetween, SplitTail, SplitMidTail, LateLayer, MergedLayers, NoCamera };
 void draw_stage_frame(StageScene scene = StageScene::Basic) {
   const bool crease = scene == StageScene::Crease;
   gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
@@ -622,7 +622,21 @@ void draw_stage_frame(StageScene scene = StageScene::Basic) {
     GXEnd();
   };
   GXSetZMode(true, GX_LEQUAL, true);
-  if (crease) {
+  if (scene == StageScene::NoCamera) {
+    // A 2D quad that writes depth, then something see-through in perspective: the stage runs, and no perspective draw
+    // has written depth for it to take a camera from.
+    const float ortho[]{1.f, 1.f, 0.f, 1.f, 0.f, -.5f, -.5f};
+    GXSetProjectionv(ortho);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy : std::array<std::array<float, 2>, 4>{{{-.5f, .5f}, {.5f, .5f}, {.5f, -.5f}, {-.5f, -.5f}}}) {
+      GXPosition3f32(xy[0], xy[1], -.5f);
+      GXColor4u8(255, 255, 255, 255);
+    }
+    GXEnd();
+    GXSetProjectionv(projection);
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.5f, .9f, {0, 255, 0, 128});
+  } else if (crease) {
     const auto face = [](std::array<std::array<float, 3>, 4> corners) {
       GXBegin(GX_QUADS, GX_VTXFMT0, 4);
       for (const auto& c : corners) {
@@ -961,6 +975,16 @@ int main(int argc, char** argv) {
       check_efb(3, 32, {0, 0, 0}, "outline view, line");
       check_efb(16, 32, {255, 255, 255}, "outline view, inside");
       gfx::scene_stage::set_view(0);
+      // With no camera that can be inverted, the stage leaves the picture alone: the 2D quad keeps its colour.
+      gfx::scene_stage::set_ink_outlines(2);
+      settle();
+      for (int frame = 0; frame < 2; ++frame) {
+        gfx::scene_stage::note_camera(Mat4x4<float>{}, webgpu::Viewport{0.f, 0.f, 64.f, 64.f, 0.f, 1.f});
+        draw_stage_frame(StageScene::NoCamera);
+        webgpu::g_instance.ProcessEvents();
+      }
+      check_efb(16, 32, {255, 255, 255}, "no camera, edge of the 2D quad");
+      check_efb(24, 32, {255, 255, 255}, "no camera, middle of the 2D quad");
       gfx::scene_stage::set_ink_outlines(0);
       settle();
       check_efb(3, 32, {255, 0, 0}, "ink off");
