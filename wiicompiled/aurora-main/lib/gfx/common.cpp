@@ -1367,7 +1367,11 @@ bool begin_frame() { return begin_frame_impl(true); }
 
 bool resume_frame() { return begin_frame_impl(false); }
 
+// Whether the frame being recorded has already been submitted in part (recording thread).
+static bool g_frameSubmittedInParts = false;
+
 void abort_frame() noexcept {
+  g_frameSubmittedInParts = false;
   efb_ram::cancel();
   efb_ram::abort_async();
   g_verts.release();
@@ -1410,7 +1414,16 @@ static void end_batch_impl(const wgpu::CommandEncoder& cmd, bool advanceFrame) {
     // Mid-frame batch split: the staging buffer is about to be unmapped and rotated, so pending
     // interpolation tasks pointing into it would dangle. Tie the clear to the rotation itself.
     gx::drop_pending_frame_interpolation_uniforms();
+    g_frameSubmittedInParts = true;
   }
+  // A frame submitted in parts has no scene stage. A part's see-through draws must go with it, as they use its staging
+  // buffers, so the last flush can come too late for them: the stage would shade them, or shade the solid scene twice.
+  if (g_frameSubmittedInParts) {
+    for (auto& pass : g_renderPasses)
+      pass.sceneStageBefore = false;
+  }
+  if (advanceFrame)
+    g_frameSubmittedInParts = false;
   g_uniforms.append_zeroes(gx::MaxUniformSize); // Pad the end of the buffer
   const auto used = staging_usage();
   for (unsigned i = 0; i < used.size(); ++i) g_stagingHighWater[i] = std::max(g_stagingHighWater[i], used[i]);
