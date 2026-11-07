@@ -1,18 +1,18 @@
 # Debug kit
 
-Tools and Claude Code skills for finding bugs in the FrightWorks static recomp. New here? Start with the walkthrough in
+Tools and agent skills for finding bugs in the FrightWorks static recomp. New here? Start with the walkthrough in
 [`docs/testing.md`](../../docs/testing.md); this page is the reference. Only things that helped in a real
 investigation (upstream PRs #8, #10–#15, #22, issue #24) or will help the next one. The build tools (`tools\build-no100f.ps1`,
 `shot-pid.ps1`, ...) live one folder up; nothing here contains game data.
 
 Until 2026-10-31 this kit was a separate repo (Scooby-Doo-Refrightened-debug) linked in with junctions. Its history was
-merged in with the paths rewritten, so `git log -- tools/debug .claude/skills` shows it.
+merged in with the paths rewritten, so `git log -- tools/debug .agents/skills .claude/skills` shows it.
 
 Layout (paths in the skills and scripts are written from the repo root):
 
 | Path | What |
 | --- | --- |
-| `.claude\skills\` | the Claude Code skills (tracked; the rest of `.claude\` is git-ignored) |
+| `.agents\skills\` | the agent skills (tracked), with `.agents\REPO.md`, the shared rules. Claude Code looks in `.claude\skills\`: `tools\setup-agents.py` (run by `worktree.ps1 new` and `open`) links that to `.agents\skills\` (local, git-ignored) |
 | `tools\debug\` | these tools |
 | `tools\debug\local\` | git-ignored, machine-local: `user-setup\` (the user's Config.toml + controller files while a test runs; `manual-session.ps1 restore` puts them back), Dolphin disc copies, a downloaded ffmpeg, `kenney-input-prompts\` (the whole Kenney Input Prompts pack, CC0, from kenney.nl: pick new button art there and copy only the SVGs used into `tools\button-art\<family>\`) |
 | `autotest\` | git-ignored work data and output: shots (`autotest\manual\`), texture-hunt data (`autotest\texhunt\`), audio dumps, logs |
@@ -34,18 +34,18 @@ Layout (paths in the skills and scripts are written from the repo root):
 | `play-patched.ps1` | Apply patches, build, play with the dev menu on (`NO100F_DEV_TOOLS=1`; the default `devmenu` patch only on branches from before it was built in); patches come out of the source when the game closes. Sound on at 5% and rumble off for the run (the user's volume, mute and rumble lines go back). `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
 | `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups] [-Sound]` (saves the user's settings, writes the test Config + `zz-manual` boot mod; sound muted, `-Sound` = on at 5% for human tests and audio work; rumble always off (`[controller] rumble = false`, no switch)), `shot`, `stop` (settings back), `prepare` (like start, no game), `restore`, `stop-tests`. Stays inside its own checkout; `prepare`/`start` wait for the game-run lock |
 | `worktree.ps1` | Parallel work (the `parallel-work` skill). A thin wrapper over `worktree.py` (Python 3.8+, standard library only; it skips the Microsoft Store stub; on Linux run `python3 tools/debug/worktree.py new --name ... --branch ...`: symlinks instead of junctions, and without `wt` the command to run is printed): `new -Name <n> -Branch <b> [-From origin/main] [-Task "goal"] [-Build] [-NoOpen] [-Model m] [-Effort e]` (a git worktree in `..\FrightWorks-worktrees\<n>` with its own Play\, links to the main checkout's Disc\, texture_pack\, toolchain\, Dependencies and `local\` folders, and a Windows Terminal tab running `claude -n <n>`; `-Task` writes the goal into its TASK.md and the session starts on it), `list`, `open -Name <n> [-Continue] [-Model m] [-Effort e]` (`-Model` = `claude --model`, e.g. `sonnet`, `opus` or a full model ID; `-Effort` = `claude --effort`, `low`..`max`; added only when given, for that session only, never remembered: a later `open` without them uses the defaults; a new session that picks the task up from TASK.md, or `claude -c`; `-Name main` = the main checkout's coordinating session, named `coordinator`; `new`/`open` drop the Claude Code variables (`CLAUDECODE`, `CLAUDE_PID`, `AI_AGENT`, `CLAUDE_CODE_*`) of the calling shell, so the tab's session is its own, not a child of the coordinator: ListAgents sees it and `-Continue` can resume it), `remove -Name <n>` (stops leftover dotnet build servers; refuses with uncommitted work or a running program; unlinks before deleting; keeps the branch) |
-| `kit-common.ps1` | Dot-sourced by the scripts: `Get-/Stop-CheckoutGames <root>` (only games started from that checkout) and the game-run lock (`Enter-/Exit-GameLock`, `%LOCALAPPDATA%\FrightWorks-kit\game-run.lock`): one checkout runs the game for a test at a time, builds run in parallel, the user's own game is never waited for or closed |
+| `kit-common.ps1` | Dot-sourced by the scripts: `Get-/Stop-CheckoutGames <root>` (only games started from that checkout) and the game-run lock (`Enter-/Exit-GameLock`, `%LOCALAPPDATA%\FrightWorks-kit\game-run.lock`): one checkout runs the game for a test at a time (shared run slots are planned, not built), builds run in parallel, the user's own game is never waited for or closed |
 | `build-translator.ps1` | Rebuild the translator after switching to/from a branch that changes `wiicompiled\translator` (then build without `-SkipTranslate`) |
 | `dol.py` | `callers` / `func` / `dis` / `name` on `game/main.dol` with MAP names (needs `capstone`) |
 | `overrides.py` | Active native overrides; `--effects`, `--xref` (`__GXData` fields only the replaced original maintained) |
 | `dff/` | Dolphin `.dff` FIFO log decoder, renders, pool/dynamic-array listers |
 | `audio/` | `crackle.py` click detector, `adpcm_ref.py` disc reference decode + bit-exact compare, `hip.py` HIP asset lister, `loopcheck.py` (is the output stuck repeating a short loop? `--scan W` over a long dump), `loop-capture.ps1` (boot a scene with the audio dump on and sound at 5%, then `loopcheck.py`) |
-| `game/` | `levels.md` (scene IDs ↔ level names, which scenes to test what in) + `levels.py` (reads the table from `main.dol`), `mkhip.py` (spawn spot / move NPCs via the boot mod), `spots.txt`, `findpos.py`, `addrrefs.py`, `parsys.py`, `births.py` + `births-run.ps1`, `fogdump.ps1` + `fogsum.py` (i004 fog bank state from a running dev menu build), `fanfog-walk.py` (walk one particle list from a pool peek) |
+| `game/` | `levels.md` (scene IDs ↔ level names, which scenes to test what in) + `levels.py` (reads the table from `main.dol`), `mkhip.py` (spawn spot / move NPCs via the boot mod), `spots.txt`, `findpos.py`, `addrrefs.py`, `parsys.py`, `births.py` + `births-run.ps1`, `fogdump.ps1` + `fogsum.py` (i004 fog bank state from a running dev menu build), `fanfog-walk.py` (walk one particle list from a pool peek), `hipedit.py` (rebuild a HIP with added assets; a no-op rebuild is byte identical), `rwdump.py` (RenderWare section tree of a file or a HIP asset) |
 | `texhunt/` | HD texture work, see below |
 | `capture/` | `get-ffmpeg.ps1` + `ffbin.py` (find or fetch ffmpeg), `record.ps1` (video of the game window: ddagrab + topmost by default, `-Method gdigrab`), `flashcount.py` (one-frame flash counter), `triplet.py` |
 | `yn-bisect/` | `curtain-repro.ps1` scripted landing template, `curtain-ask.ps1` Y/N toast helper (need `yn-bisect-harness.patch`) |
 | `holiday-shots.ps1` | Screenshot loop for `[game] holiday` dates per hub (needs PR #13) |
-| `patches/` | Diagnostics kept out of PRs; table in `.claude\skills\manual-yn-bisect\strip-before-pr.md` |
+| `patches/` | Diagnostics kept out of PRs; table in `.agents\skills\manual-yn-bisect\strip-before-pr.md` |
 
 ### F8 progression diagnostics
 

@@ -455,8 +455,9 @@ sealed class MainWindow : Window
     void BuildMods(StackPanel body)
     {
         var sep = Path.DirectorySeparatorChar;
+        var patches = Patches;
         body.Children.Add(Note($"A mod is a folder in the mods folder (the button below opens it). Its files{sep} folder mirrors the disc's files{sep} (replacing game files), " +
-                               $"and its textures{sep} folder holds texture replacements. Untick a mod to switch it off; when two mods change the same file, the later name wins."));
+                               $"its textures{sep} folder holds texture replacements, and a patch.json adds to levels using your own disc. Untick a mod to switch it off; when two mods replace the same file, the later name wins."));
         var list = new StackPanel { Orientation = Orientation.Vertical };
         var frame = new Border
         {
@@ -467,7 +468,7 @@ sealed class MainWindow : Window
         void Fill()
         {
             list.Children.Clear();
-            var dirs = Directory.Exists(modsDir) ? Directory.GetDirectories(modsDir).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray() : Array.Empty<string>();
+            var dirs = Directory.Exists(modsDir) ? Directory.GetDirectories(modsDir).Where(ModPatches.ModPatchPanel.IsListed).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray() : Array.Empty<string>();
             if (dirs.Length == 0) { list.Children.Add(Note("No mods yet.")); return; }
             foreach (var d in dirs)
             {
@@ -482,17 +483,24 @@ sealed class MainWindow : Window
                 {
                     var flag = Path.Combine(dir, "disabled");
                     if (box.IsChecked == true) File.Delete(flag); else File.WriteAllText(flag, "");
+                    patches.Update(Fill).Watch();
                 };
                 list.Children.Add(box);
+                if (patches.StatusText(d) is { } status) list.Children.Add(Note(status));
             }
         }
         body.Children.Add(new LeftCap(480, frame));
         var row = Row();
+        row.Children.Add(new PlankButton("Add a mod (zip)", (_, _) => patches.AddFromZip(Fill).Watch()));
         row.Children.Add(new PlankButton("Open the mods folder", (_, _) => OpenFolder(modsDir).Watch()));
-        row.Children.Add(new PlankButton("Refresh", (_, _) => Fill()));
+        row.Children.Add(new PlankButton("Refresh", (_, _) => { Fill(); patches.Update(Fill).Watch(); }));
         body.Children.Add(row);
         Fill();
+        patches.Update(Fill).Watch();
     }
+
+    ModPatches.ModPatchPanel? patchPanel;
+    ModPatches.ModPatchPanel Patches => patchPanel ??= new ModPatches.ModPatchPanel(this, paths, GameRunning);
 
     // ----- Extras: the disc, holidays, folders, about -----
     void BuildExtras(StackPanel body)
@@ -950,6 +958,7 @@ sealed class MainWindow : Window
         if (!enableServices) throw new InvalidOperationException("Game launch is disabled in this test fixture.");
         var exe = Path.Combine(play, GameExe);
         if (!File.Exists(exe)) { await Dialogs.Message(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher."); return; }
+        await Patches.BeforePlay();  // can't stop the game starting; the check below comes after it so a second press can't start two
         // One game at a time: two would share the saves and settings.
         if (game is { HasExited: false } || GameRunning()) { await Dialogs.Message(this, "The game is already running."); return; }
         gamepads.Pause();  // the game has the controllers to itself

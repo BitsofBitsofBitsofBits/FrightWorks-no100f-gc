@@ -8,6 +8,8 @@ FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-
 from which it split off on October 31, 2026. This repository is the GameCube version; ports of the other console versions
 may follow.
 
+[![Listed on PlayPorted](https://playported.com/badge.svg)](https://playported.com/ports/1136-scooby-doo-night-of-100-frights/)
+
 > **Artists wanted:** the launcher needs new art in the style of the original show. [Details below](#wanted-an-artist-for-the-launcher).
 
 ![Mystic Manor in widescreen at 4K](docs/screenshots/courtyard.jpg)
@@ -31,7 +33,8 @@ may follow.
   buttons. The launcher can automatically match Xbox controllers to Original Xbox and GameCube adapters to GameCube,
   until you choose a layout manually; existing saved layouts ask once before opting in
 - GameCube memory-card saves
-- Option to skip the intro movies; mods that replace game files or textures
+- Option to skip the intro movies; mods that replace game files or textures, or that [add things to a level](docs/mod-patches.md)
+  using your own disc, so no game data is shared
 - The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page
 
 **No game data is included.** You need your own disc image.
@@ -173,6 +176,8 @@ launcher/publish/FrightWorks                    # or start the game directly: "P
 On Linux the game doesn't record F3 videos or pick a fullscreen monitor yet, so the launcher leaves those out.
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
+
+**Using an AI agent on this repo?** Have it read [`.agents/REPO.md`](.agents/REPO.md) first: it holds the repo's rules and how to test, and skills are in `.agents/skills/`.
 
 ## Credits
 

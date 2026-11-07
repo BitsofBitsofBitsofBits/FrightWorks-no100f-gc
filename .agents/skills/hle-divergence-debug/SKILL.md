@@ -120,8 +120,8 @@ Read guest globals through `ctx->gpr[13]` (SDA) with `Memory::TryRead32`. Patter
 
 - Fix the override to match the original; no heuristics in Aurora to hide the symptom.
 - Re-run step 1: divergences must be 0.
-- Build without the diagnostic, human visual check (manual-session; see `manual-yn-bisect` skill for locked landings),
-  and smoke-boot `e001`, `h001`, `i001`.
+- Build without the diagnostic. Human visual check when the bug is visible (manual-session; see `manual-yn-bisect` skill for
+  locked landings), and the smoke test in `.agents/REPO.md` (Testing; the script is not built yet, so boot `h001` and the changed level).
 
 ## Step 5 — Dolphin oracle (when you need OG ground truth)
 
