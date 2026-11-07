@@ -278,8 +278,9 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0,
     GXEnd();
   };
   GXSetZMode(true, GX_LEQUAL, true);
-  quad(variant >= 11 ? -8.f : -4.f, {0, 0, 255, 255});
-  if (variant >= 11) {
+  const bool particleCase = variant >= 11 && variant < 25;
+  quad(particleCase ? -8.f : -4.f, {0, 0, 255, 255});
+  if (particleCase) {
     std::array<std::array<float, 3>, 4> post{{{-4, 4, -4}, {0, 4, -4}, {0, -4, -4}, {-4, -4, -4}}};
     GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
     GXSetArray(GX_VA_POS, post.data(), sizeof(post), sizeof(post[0]), true);
@@ -362,7 +363,19 @@ Pixels run_alpha_order(gx::CutoutMode mode, unsigned variant = 0,
   GXSetScissor(0, 0, 64, 64);
   GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
   GXSetZMode(true, GX_LEQUAL, true);
-  quad(variant == 1 ? -1.5f : -3.f, {255, 0, 0, static_cast<u8>(variant == 2 ? 64 : 255)});
+  if (variant >= 25) {
+    // An invisible blended surface the game draws after its particles, depth write on and no alpha test.
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
+    quad(-1.5f, {255, 0, 0, 0});
+    GXSetAlphaCompare(GX_GREATER, 0, GX_AOP_AND, GX_ALWAYS, 0);
+  }
+  if (variant == 26) {
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(-1.8f, {255, 255, 255, 128});  // behind that surface and after it: its depth still hides this
+    GXSetZMode(true, GX_LEQUAL, true);
+  }
+  if (variant < 25 || variant == 27)
+    quad(variant == 1 ? -1.5f : -3.f, {255, 0, 0, static_cast<u8>(variant == 2 ? 64 : 255)});
   if (variant == 6 || variant == 7 || variant == 9 || variant == 10) {
     if (variant == 9) {
       const float ortho[]{1.f, 1.f, 0.f, 1.f, 0.f, 0.f, -0.5f};
@@ -441,6 +454,9 @@ int main(int argc, char** argv) {
       check_alpha_pixel(run_alpha_order(mode), 4, {127, 128, 0});
       check_alpha_pixel(run_alpha_order(mode, 1), 4, {255, 0, 0});
       check_alpha_pixel(run_alpha_order(mode, 3), 4, {63, 64, 128});
+      check_alpha_pixel(run_alpha_order(mode, 25), 4, {0, 128, 127});
+      check_alpha_pixel(run_alpha_order(mode, 26), 4, {0, 128, 127});
+      check_alpha_pixel(run_alpha_order(mode, 27), 4, {127, 128, 0});
       for (unsigned variant : {4, 5}) {
         const auto pixels = run_alpha_order(mode, variant);
         check_alpha_pixel(pixels, 4, {127, 128, 0});
@@ -479,6 +495,8 @@ int main(int argc, char** argv) {
     check_alpha_pixel(run_alpha_order(gx::CutoutMode::TwoPassAll, 2), 4, {32, 128, 95});
     for (const auto mode : {gx::CutoutMode::Game, gx::CutoutMode::Cut}) {
       check_alpha_pixel(run_alpha_order(mode), 4, {255, 0, 0});
+      for (unsigned variant : {25, 26, 27})
+        check_alpha_pixel(run_alpha_order(mode, variant), 4, {0, 128, 127});
       for (const auto path : particlePaths) {
         const auto particles = run_alpha_order(mode, 11, path);
         check_alpha_pixel(particles, 4, {63, 64, 128});

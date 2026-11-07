@@ -160,6 +160,8 @@ occlusion, soft cut-out fringes, translucent submission order, viewport/scissor 
 Each transparency case explicitly clears its color and depth; the EFB otherwise persists between frames.
 With the enhanced two-pass cut-out modes, each render pass finishes solid geometry, then cut-out fringes, then
 depth-tested translucent world draws. Clears, overlays and non-monotonic depth passes flush that ordering.
+A blended, depth-writing draw with no alpha test that arrives after translucent draws joins them in submission order,
+so its depth can't hide the draws the game made before it; the cases cover it being invisible and writing depth.
 Original-game and single-cut modes retain the game's submission order; the test checks those controls too.
 This intentionally improves inherited foliage/particle ordering in the enhanced modes, rather than claiming a
 mismatch with console rendering. Compatible direct XYZ/RGBA/ST camera-facing triangle-pair particles are stably

@@ -390,6 +390,7 @@ void push_deferred_draw_command(const gx::DrawData& data, DeferredDrawKind) {
   }
 }
 void flush_deferred_draws() {}
+bool has_pending_translucent_draws() noexcept { return false; }
 template <>
 gx::DrawData* get_last_draw_command() {
   return s_trackDrawCommands && s_lastGxDraw.has_value() ? &*s_lastGxDraw : nullptr;

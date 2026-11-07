@@ -3374,7 +3374,13 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   const bool orderedWorld = enhancedCutouts && g_gxState.projType == GX_PERSPECTIVE &&
                             g_gxState.depthCompare &&
                             (g_gxState.depthFunc == GX_LESS || g_gxState.depthFunc == GX_LEQUAL);
-  const bool translucentWorld = orderedWorld && !g_gxState.depthUpdate;
+  // The game also draws blended surfaces after its particles with depth write on and no alpha test, such as the faded
+  // door and wall pieces between the camera and the room at the start of i004. They keep that place in the tail: drawn
+  // earlier, their depth would hide every translucent draw behind them, even at alpha 0.
+  const bool lateBlendedSurface = orderedWorld && g_gxState.depthUpdate && g_gxState.blendMode == GX_BM_BLEND &&
+                                  g_gxState.alphaCompare.comp0 == GX_ALWAYS &&
+                                  g_gxState.alphaCompare.comp1 == GX_ALWAYS && gfx::has_pending_translucent_draws();
+  const bool translucentWorld = orderedWorld && (!g_gxState.depthUpdate || lateBlendedSurface);
   if (!orderedWorld && (enhancedCutouts || !g_gxState.depthCompare ||
                         !g_gxState.depthUpdate || g_gxState.depthFunc == GX_ALWAYS)) {
     gfx::flush_deferred_draws();
