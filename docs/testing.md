@@ -250,7 +250,10 @@ test and doc files changed since (`tools/testkit/`, `tools/smoke-test.py`, `docs
 All jobs fail on a crash, a fault in the log or a black picture. Only a timeout is retried, once from a fresh launch, and reported as "passed on retry" (`h001`
 has a known intermittent intro hang). A check that cannot run (no numpy, no screenshot tool on Linux) is "not run", never a pass: exit code 3.
 Exit codes: 0 passed, 1 failed, 2 wrong build, 3 only checks not run. The report is `autotest\smoke-<time>\REPORT.md` (with `results.json`, shots and logs).
-Options: `--jobs`, `--slots N`, `--timeout S` (playable limit per job, 150), `--keep` (keep the `Play` copies), `--exclusive` (the machine to yourself, for timings), `--skip-build-check` (manual override, said in the report).
+Options: `--jobs`, `--scenes`, `--slots N`, `--timeout S` (playable limit per job, 150), `--keep` (keep the `Play` copies), `--exclusive` (the machine to yourself) with `--sequential` (one job after another: solo timings), `--activate-when-shown 0|1` (sets `SDL_WINDOW_ACTIVATE_WHEN_SHOWN`), `--skip-build-check` (manual override, said in the report).
+
+Measured on one PC (Ryzen 9 7900X, RTX 3090, 2026-11-07, 1280x720 windows): the three jobs at once take about 47 s after the build (h001 27 s, i004 20 s, g001 47 s, each playable after 8-14 s); one after another 85 s (11.5 + 6 + 12 s to playable). Every window held 60 fps (p95 frame time under 17 ms) whether it was in front of the others or behind, with or without `--activate-when-shown 0`: nothing in the game or runtime sets `pauseOnFocusLost` (it is off), and background windows did not stall.
+A fresh `Play` copy starts with an empty shader and pipeline cache (`UserData\Cache`), which costs about 3.4 s (h001 playable in 13.4 s cold, 10.0 s warm); each game also reads about 1 GiB of disc files into its read cache and starts 22 pipeline compile threads, so more than 3 at once will slow each one down.
 
 The pieces are in `tools/testkit/` and are meant for every automated game run (`level-sweep.py` and the PowerShell scripts have not been moved onto them yet):
 - `launch.py`: the one launch helper. Its own copy of `Play\` in a folder you give it (the HD pack and button icons are linked, never copied; deleting never follows a link),

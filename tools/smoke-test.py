@@ -64,7 +64,8 @@ class Job:
 
     def new_game(self, attempt, **kw):
         g = launch.TestGame(self.name, self.out / "work" / f"{self.name}-{attempt}",
-                            build_check=not self.args.skip_build_check, **kw)
+                            build_check=not self.args.skip_build_check,
+                            activate_when_shown=getattr(self.args, "activate_when_shown", None), **kw)
         g.prepare()
         self.games.append(g)
         return g
@@ -257,6 +258,7 @@ def job_g001(job, attempt):
     player = dm.command("player", 10)
     job.require(f"snacks={SNACKS}" in player, "snack count survived the save and load", player.split(";")[0])
     job.check_picture(game, "g001-loaded")
+    job.record_perf(game, "g001")
     job.finish_attempt(game)
 
 
@@ -354,6 +356,9 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--keep", action="store_true", help="keep the Play copies (default: delete them when the run passed)")
     ap.add_argument("--exclusive", action="store_true", help="take the machine alone (timing measurements)")
+    ap.add_argument("--activate-when-shown", type=int, choices=(0, 1), default=None,
+                    help="set SDL_WINDOW_ACTIVATE_WHEN_SHOWN for the games (0: new windows do not take focus); default: SDL's")
+    ap.add_argument("--sequential", action="store_true", help="one job after another (solo timings; with --exclusive)")
     ap.add_argument("--skip-build-check", action="store_true", help="manual override: do not check the build ID (reported)")
     args = ap.parse_args()
     args.slots = slots.slot_count(args.slots)
@@ -366,7 +371,7 @@ def main():
     if bad:
         ap.error(f"--scenes takes scene IDs like e005 (not one of the jobs): {bad}")
     names += [x for x in scenes if x not in names]
-    out = Path(args.out) if args.out else REPO / "autotest" / time.strftime("smoke-%Y%m%d-%H%M%S")
+    out = Path(args.out).resolve() if args.out else REPO / "autotest" / time.strftime("smoke-%Y%m%d-%H%M%S")
     for sub in ("shots", "logs", "work"):
         (out / sub).mkdir(parents=True, exist_ok=True)
 
@@ -386,11 +391,15 @@ def main():
             r = run_job(name, args, out, pool, exclusive is not None)
             with lock:
                 results.append(r)
-        threads = [threading.Thread(target=work, args=(n,), name=n) for n in names]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        if args.sequential:
+            for n in names:
+                work(n)
+        else:
+            threads = [threading.Thread(target=work, args=(n,), name=n) for n in names]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
     finally:
         if exclusive:
             exclusive.release()
