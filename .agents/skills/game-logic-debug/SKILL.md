@@ -30,7 +30,7 @@ what changes: positions, timers, spawn counts, pools. The usual cause in this po
    address, `dol.py callers/func` for who writes it. `trace ADDR N` follows a linked list per frame.
 3. **Count, don't eyeball**: per-system pool use (`parsys.py`), per-emitter spawn rate at 30 vs 60 (`births-run.ps1` + `births.py`).
 4. **Fix at the per-call site**, re-measure with the same tools (rates within noise of 30 fps, flash count 0), then human visual
-   check if the change is visible, and the smoke test in `.agents/REPO.md` (Testing; the script is not built yet, so boot `h001` and the changed level).
+   check if the change is visible, and the smoke test in `.agents/REPO.md` (Testing: `python tools/smoke-test.py --scenes <changed level>`).
 
 ## Parking Scooby at a fixed spot (`tools/debug/game/mkhip.py`)
 
@@ -86,7 +86,10 @@ this pose, degrees; pitch > 0 looks down), `camspin DEG` / `cammove DX DY DZ` (t
 much every frame: steady motion for frame-to-frame checks; 0 stops). These commands don't edit warp flags or save files.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `mvview MODE [SCALE]` (motion vectors view: 0 off, 1 motion only, 2 over the picture; SCALE = pixels per frame
-for full color), `cutscene` (`cutscene yes|no control yes|no`).
+for full color), `stageview MODE` (scene stage view: 0 off, 1 tint what is drawn before the stage, 2 the solid scene's
+depth, 3 the ambient occlusion alone, 4 the ink outlines alone), `ao PERCENT` (ambient occlusion strength for this run,
+the setting unchanged), `ink LEVEL` (ink outlines for this run: 0 off, 1 thin, 2 bold, the setting unchanged),
+`cutscene` (`cutscene yes|no control yes|no`).
 
 **Player tab:** `player`, `health 1..5`, `snacks 0..99999` read/change live stats. Balance edits are separate from
 collection progression; 99999 is a conservative tool limit, not the game's cap. No kill/resurrection; pending
@@ -115,6 +118,23 @@ like w028's Fred are in control and advance with A). The game counts all of thes
 scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines `BUTTON[+BUTTON] [FRAMES] [cutscene]`
 (`cutscene` = only while one plays), injected into pad 1 by PADRead. `tools\debug\texhunt\look.ps1` presses A every 2 s
 while `cutscene yes`, then waits for `control yes`.
+
+**Stick and timed input without dev tools:** `tools/debug/patches/pad-script.patch` adds a scripted pad 1 (`devmenu_press.txt` needs dev tools and `NSMBW_INPUT_SCRIPT` has no stick). A route file has one step per line: `wait MS`, `waitmode MODE STATE`, `waitplay SCENE`, `do SX SY BUTTONS PERIOD_MS DURATION_MS [until SCENE | untilmode MODE STATE]`; `#` starts a comment. The full format is at the top of `no100f_pad_script.h`, which the patch adds; read it in the patch file. One bad line means no step of that file runs, and stderr says which line. `NO100F_PAD_SCRIPT_LIVE=<file>` takes more steps while the game runs. Routes: `tools/debug/game/pad-walk-check.txt`, `tools/debug/audio/issue14-route.txt`.
+
+```powershell
+git apply tools\debug\patches\pad-script.patch
+powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # first build in a checkout: full
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare -Boot e001  # muted, rumble off, boot mod
+$env:NO100F_DEV_TOOLS = '0'
+$env:NO100F_PAD_SCRIPT = (Resolve-Path tools\debug\game\pad-walk-check.txt).Path            # full path: the game runs in Play\
+Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play -RedirectStandardError autotest\pad-script.log
+# wait on the [padscript] step lines in the log; manual-session.ps1 shot takes a picture
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
+Remove-Item Env:NO100F_*
+git apply -R tools\debug\patches\pad-script.patch                                           # next build: full translate
+```
+
+For dev tools on, `manual-session start` passes the variable to the game. A real pad still counts, and the game reads it without focus, so leave it alone during a run. On Linux `manual-session` isn't available: set the same variables, set `[audio] muted` and `[controller] rumble = false` yourself and run `Play/FrightWorks Game`.
 
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
 optional seventh column starting with `effect`, any case = Effects tab instead; `#` comments; the Reload button re-reads

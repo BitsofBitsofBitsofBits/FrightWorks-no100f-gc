@@ -1,5 +1,7 @@
 #include "shader_info.hpp"
 
+#include "../gfx/scene_stage.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -640,6 +642,11 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
   const size_t projectionOffset = stagedSize;
   const Mat4x4<float> effectiveProj = effective_projection();
   stage(&effectiveProj, sizeof(effectiveProj));
+  // The solid scene's camera for the scene stage: the last perspective draw that writes depth.
+  if (g_gxState.projType == GX_PERSPECTIVE && g_gxState.depthCompare && g_gxState.depthUpdate &&
+      gfx::scene_stage::wanted()) {
+    gfx::scene_stage::note_camera(effectiveProj, g_gxState.renderViewport);
+  }
 
   const size_t positionOffset = stagedSize;
   for (u32 i = 0; i < layout.postexCount; ++i) {
@@ -754,8 +761,8 @@ UniformRanges build_uniform(const ShaderInfo& info, u32 vtxStart, const BindGrou
     motionPrevData = buf.data() + buf.size();
     const auto& vp = g_gxState.renderViewport;
     buf.append(Vec4<float>{vp.left, vp.top, vp.width, vp.height});
-    // x: where last frame's copy of the POS array is, y: flags (bit 0 the copy is there, bit 1 the HUD); both set at
-    // seal (frame_interpolation.cpp).
+    // x: where last frame's copy of the POS array is, y: flags (bit 0 the copy is there, bit 1 the HUD), z: how far along
+    // the frame this image is (a float); all set by frame_interpolation.cpp.
     buf.append(Vec4<u32>{0, 0, 0, 0});
     buf.append(effectiveProj);
     buf.append(staged.data() + positionOffset, sizeof(Mat3x4<float>) * layout.postexCount);

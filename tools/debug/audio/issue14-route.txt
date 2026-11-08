@@ -1,0 +1,44 @@
+# Issue 14 route: load a save in g001, walk to the warp gate, warp to the Mystery Machine (h001) within about 1.2 s of
+# the music starting, which is the window that made the music stick. Check the result with loopcheck.py.
+# Needs your own save with Scooby in g001, in the first slot, and no boot mod: it starts at the title screen.
+# The map cursor steps below were timed on one save at 60 fps: if another save's map differs, they need changing.
+# Format: top of wiicompiled/runtime/include/hle/no100f_pad_script.h (tools/debug/patches/pad-script.patch).
+
+# Title screen, Load Game, first slot.
+waitmode 2 0
+wait 100
+do 0 0 start 0 100
+wait 1100
+do 0 0 down 0 80
+wait 150
+do 0 0 a 0 100
+wait 900
+do 0 0 a 60 8000 until G001
+waitplay G001
+
+# Walk left to the warp gate (4.6 units), let go of the stick, open the map.
+do -127 0 - 0 850
+do 0 0 x 0 100
+do 0 0 x 200 3000 untilmode 7 0
+
+# The map drops presses that come too early: wait 800 ms after it opens, then 300 ms between presses.
+wait 800
+do 0 0 right 0 100
+wait 300
+do 0 0 right 0 100
+wait 300
+do 0 0 right 0 100
+wait 300
+do 0 0 up 0 100
+wait 300
+do 0 0 left 0 100
+wait 300
+do 0 0 up 0 100
+wait 300
+do 0 0 up 0 100
+wait 300
+do 0 0 a 0 100
+wait 1500
+do 0 0 right 0 100
+wait 300
+do 0 0 a 0 100

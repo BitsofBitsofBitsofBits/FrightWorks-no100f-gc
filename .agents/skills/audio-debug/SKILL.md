@@ -36,15 +36,26 @@ For music-only listening in the hubs, make sure no holiday fires: builds with PR
 builds read the date 2000-01-01 (fireworks every load) unless they have PR #12 or `tools\debug\patches\real-date.patch`
 (`NO100F_REAL_DATE=1`).
 
-**Stuck loop** (music repeating ~1 s, hub report 2026-10-25, not reproduced yet): `python tools\debug\audio\loopcheck.py
-<dump> --scan 10` (stuck ring ≈ 0.99, normal music ≈ 0.1). `tools\debug\audio\loop-capture.ps1 -Label x [-Boot h001]
-[-Hd] [-Cmd "scene H001" -CmdAt 20]` boots a scene with the dump on (sound at 5%) and checks it; `texhunt\hunt.ps1` checks every session.
+**Stuck loop** (music repeating ~1 s): `python tools\debug\audio\loopcheck.py <dump> --scan 10` (stuck ring ≈ 0.99, normal
+music ≈ 0.1). `tools\debug\audio\loop-capture.ps1 -Label x [-Boot h001] [-Hd] [-Cmd "scene H001" -CmdAt 20]` boots a scene
+with the dump on (sound at 5%) and checks it; `texhunt\hunt.ps1` checks every session.
+
+Issue 14's cause: the game's end-of-track check kept a stale value between streams (`hle/no100f_stream_read.h`). To see it
+come back, take a save in `g001`, walk left to the warp gate and warp to the Mystery Machine (`h001`) with the map open
+within about 1.2 s of the music starting: the stream restarts every 1.02 s. Dev tools don't matter. Dev menu `scene` warps
+and slow play miss the window, so a clean run from them says nothing about this bug. Other stuck-sounding bugs may still
+exist: check the stream entry's flags before assuming this one. `tools\debug\audio\issue14-route.txt` is that route as a
+pad script (`tools\debug\patches\pad-script.patch`, usage in `game-logic-debug`); it needs your own save.
 
 ## Game facts
 
 - Music = one ADPCM **stream** voice (`is_stream 1`, e.g. PB `8025EAF4` in `h002`), 48 kHz source (SNDI may say 47999),
   SRC ratio `0x17FFD`, `src_type 1` (linear). Ring buffer in ARAM refilled by the game; `h002` ring = 48,000 nibbles =
   0.875 s. The game never sets `adpcm_loop_info` (old AX lib, always 0).
+- Stream table: 6 entries at `0x8024C258`, `0x104` apart: +0 voice, +4 flags, +0x88 disc position, +0x8C size, +0x90 bytes
+  read, +0x94 bytes read at the last crossing into half 1. Each chunk is `0x2EE0` bytes (0.4375 s). The refill runs in
+  `fn_800D9EF8` (per AX frame); stream start is `fn_800D8CA8`. Flags: 0x20 end, 0x40 final, 0x800 chunk ready,
+  0x1000/0x2000 half 1/2 full, 0x4000/0x8000 playing half 1/2. The warp map pauses the voice (flag 0x2).
 - Tracks live in `boot.HIP` as `SNDS` assets (raw ADPCM frames, no header; names end `-L`). Coefficients etc. in the
   `SNDI` asset: u32 count, then per entry **[0x60-byte DSP header][u32 asset id]** — the id comes *after* its header
   (reading it as id-then-header gives the neighbour's coefs). `h002` music = `9974599F` "action loop 06-L".

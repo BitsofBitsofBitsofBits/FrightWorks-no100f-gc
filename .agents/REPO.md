@@ -119,6 +119,10 @@ Check new dependencies for it.
 Avalonia's `Avalonia.BuildServices` posts on every compile, so it's pinned and blocked through the root `Directory.Build.targets` (bumping Avalonia may need that pin bumped).
 Set `DOTNET_CLI_TELEMETRY_OPTOUT=1` when running `dotnet` by hand.
 
+**New downloads:** when adding a download to the build or tools, or changing its source, check what it fetches and from where.
+Pin a version and hash where the source allows it, and say so in the PR.
+A new download that runs an installer or changes security settings needs the maintainer's OK.
+
 **Credits:** in game "Made by Loneranger419 with the help of BitsofBitsofBits" (`no100f_credits.h`; later helpers are appended to `kHelpers`).
 JosiahG in the README, launcher Extras > About and `tools/package-README.txt`.
 ScoobyHD by dogerki in the README.
@@ -144,9 +148,16 @@ Aurora's tests are its standalone build: `gx_fifo_tests`, and `gx_readback_tests
 The Windows command is in `docs/testing.md`.
 Anything beyond the table needs a stated reason.
 
-**Not built yet:** the smoke test script, shared run slots (game runs take turns for now), the shared wait-until-playable routine (`texhunt\look.ps1` has its own), controller isolation for test runs and the full sweep before a release.
-Until they exist, a smoke test means booting `h001` and the changed level with `manual-session` from a fresh build, checking the build ID, the level load and that the game stays up.
-Nothing runs these automatically, so the PR says what was run.
+**The smoke test** is `python tools/smoke-test.py`, run after a fresh build (`docs/testing.md`, section 4a): three jobs at once from their own copies of `Play/` (`h001` boot, HD textures and audio; `i004` gameplay, then `scene` to `e001`; `g001` save and load).
+It checks the build ID, then crashes, faults, a black picture, and for `h001` that HD textures were really drawn and the sound is neither silent nor stuck.
+Add a scene you changed with `--scenes <scene,...>` and say so in the PR.
+The pieces are in `tools/testkit/`: shared run slots (3 by default), the launch helper (own `Play/` copy, rumble off, muted, controller isolation) and the wait-until-playable routine.
+New automated game runs use them.
+
+**Not built yet:** moving `level-sweep.py` and the PowerShell scripts onto the test kit (they still take turns through `kit-common.ps1`'s `game-run.lock`, which the slots respect, so old and new scripts cannot overlap), the full sweep before a release and the asset check.
+The controller isolation was tried once on a real pad (2026-11-07): a person pressed buttons and sticks for about 40 s of a full three-job run, and all three jobs passed with the same results as without.
+The game logs no controller connects, so the proof is those results, not a log line; repeat it when the isolation changes.
+Nothing runs the smoke test automatically, so the PR says what was run.
 
 **Habits**
 - A build passing, tests passing and a real game run are different evidence.
@@ -201,12 +212,13 @@ The dev menu (see Facts) is the way to script a run.
 - **Command file:** `devmenu.txt` in the game's working folder (`Play/` for a normal run).
   It is read every 30 frames, then deleted, and results go to `devmenu.log`.
   It waits until the game is in play, except `skip` and `scene`.
-  Useful commands: `scene ID`, `cam X Y Z YAW PITCH`, `camspin DEG`, `cammove DX DY DZ`, `freecam on|off`, `where`, `perf`, `mvview MODE [SCALE]`, `save NAME`, `cutscene`, `skip`.
+  Useful commands: `scene ID`, `cam X Y Z YAW PITCH`, `camspin DEG`, `cammove DX DY DZ`, `freecam on|off`, `where`, `perf`, `mvview MODE [SCALE]`, `stageview MODE`, `ao PERCENT`, `ink LEVEL`, `save NAME`, `cutscene`, `skip`.
   The full list is at the top of `PollCommandFile` in `wiicompiled/runtime/src/no100f_devmenu.cpp` and in the `game-logic-debug` skill.
 - **Presses:** `devmenu_press.txt`, read every 30 frames even outside play.
   Each line is `BUTTON[+BUTTON] [FRAMES] [cutscene]`, with buttons `a b x y z start up down left right` and 10 frames by default.
   `cutscene` means only while a recorded cutscene plays.
   `NSMBW_INPUT_SCRIPT` scripts pad input from the environment instead.
+  For the stick or timed routes with dev tools off, use `tools/debug/patches/pad-script.patch` (usage in the `game-logic-debug` skill).
 - **Boot mods:** a folder `UserData/mods/<name>/files/sd2.ini` with `BOOT=e001` starts a level directly.
   A mod folder holds `files` mirroring the disc and/or `textures`, and/or a `patch.json` (see "Patch mods" under Facts); when two mods change the same file, the later name wins.
   A file named `disabled` in the mod folder turns it off.
@@ -279,8 +291,29 @@ Never name a session `main`.
 - Frame interpolation (#92) pairs draws across frames by an exact identity (it hashes the POS array contents, not addresses), then a stable identity, then nearest distance (`frame_interpolation.cpp`, `command_processor.cpp`).
   A pair moving more than 0.5 units in one frame with the camera still is a wrong pair.
   F3 recordings don't show interpolated frames.
+- Frame interpolation only runs at 60 fps: with `[video] fps60` off the game treats `frame_interpolation_fps` as 0 whatever the file says (`RuntimeConfigFile::FrameInterpolationFps`), and the launcher and F10 show the row as Off and locked.
+  `vi.cpp` would count every frame's 2-retrace wait as late, so it would do nothing. Motion blur doesn't depend on it. Changing the launcher's Frame rate saves it as 0.
 - Cut-outs: `[video] cutout_mode`, default two passes.
   Fringes are deferred and flushed before non-depth-writing and z-ALWAYS draws (#46).
+- The scene stage (`gfx/scene_stage.cpp`) is where effects on the solid scene go (ambient occlusion, lighting), before the see-through world draws and the HUD; effects on the final picture go at present, like motion blur.
+  The game never marks that point: in a frame it draws the solid world (in several groups around its mist and glow copies of a 710x512 corner), then one see-through tail (the world's second, blended pass, particles, glow), then the HUD.
+  So the stage is the two-pass cut-out modes' tail: the pass splits when the tail is flushed (or at the next copy or the frame's end), after the fringes; with more than one flush, the last one.
+  The game draws some solid surfaces twice (two-layer materials such as the `f001` dock house: solid, then the same draws again blended, depth test only); with the stage in use, such a second layer (same geometry and matrix as a solid draw this frame) is drawn with the fringes, before the stage.
+  The `game` and `cut` cut-out modes hold nothing back, so they have no stage (and no ambient occlusion or ink outlines).
+  A frame submitted in parts (only a full staging buffer does that in the game) has no stage either: that frame shows without the shade or the ink lines, never shaded or inked twice or over see-through draws.
+  A frame before any perspective draw has written depth has no camera to invert, and no stage either (the tint view still runs).
+  With nothing using it, nothing is split or recorded.
+  It records the solid scene's camera (projection and viewport of the last perspective draw that wrote depth) to turn depth back into positions.
+  `stageview 1` (or F8 > Scene stage view) tints what is drawn before it, `2` shows the solid scene's depth, `3` the ambient occlusion alone, `4` the ink outlines alone.
+- Ambient occlusion (`[video] ambient_occlusion`, percent; F10 > Video > Picture and the launcher: Off, Low 35, Medium 65; any other value up to 100, set by hand, shows as its percentage) runs at the scene stage: at half resolution from the depth alone, blurred keeping edges, then multiplied into the solid scene's colour (never its alpha).
+  Its tuning is at the top of `scene_stage.cpp`; the angle bias keeps the game's low-poly walls and rocks from darkening at every polygon edge.
+  `ao PERCENT` in `devmenu.txt` sets it for one run without changing the setting.
+  Its targets exist only while it is on or the occlusion view is showing, and are freed at the next frame.
+- Ink outlines (`[video] ink_outlines`: 0 off, 1 thin, 2 bold; F10 > Video > Picture and the launcher) run at the scene stage after the ambient occlusion, from the depth alone: a silhouette is a kink in the inverse depth (flat surfaces have none, even at grazing angles), inked on the nearer side only; Bold is the same test with a wider line, with no creases (inking them tore up small and curved things).
+  A pixel inks only when one side drops away, so things thinner than one line keep their colour; those between one and two lines are mostly black.
+  Line width follows the picture's height, and lines fade out from 35 to 80 units.
+  Tuning is at the top of `scene_stage.cpp`.
+  `ink LEVEL` in `devmenu.txt` sets it for one run without changing the setting.
 - MSAA: on Linux (x86_64 and aarch64) the Vulkan 2x and 8x modes need the patched Dawn package that the build downloads from FrightWorks/dawn-build (release `v20260603.191052-msaa`).
   Other platforms, Windows included, use the stock package.
   Pipelines cached for another MSAA setting are skipped, not failed.
@@ -301,6 +334,8 @@ Never name a session `main`.
 - GC audio runs on the game thread.
 - Volume sliders work through a native override of MIXAdjustFader (#86, `music_attenuation.cpp`).
   Known limits: resident dialog counts as SFX, Bink audio is master only.
+- Stream voices' DVD read callback is a native override that also fixes the game's end-of-track check (`hle/no100f_stream_read.h`, issue 14).
+- Timing-sensitive bugs: dev menu `scene` warps skip what a player does before the warp, so a clean run from them doesn't clear a bug reported from normal play. Reproduce it with the reporter's route, using timed presses rather than mashing: menus drop presses that arrive too early.
 
 **Paths**
 - Portable (`data\portable.txt`): everything in `data\UserData`, disc in `data\Disc\DATA`.

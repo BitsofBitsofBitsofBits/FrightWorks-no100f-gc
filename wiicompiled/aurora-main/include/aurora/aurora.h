@@ -144,6 +144,10 @@ typedef struct {
   AuroraGpuCompat gpuCompat;
   // Motion blur at start (see aurora_set_motion_blur); 0 = off.
   float motionBlur;
+  // Ambient occlusion at start (see aurora_set_ambient_occlusion); 0 = off.
+  float ambientOcclusion;
+  // Cartoon ink outlines at start (see aurora_set_ink_outlines); 0 = off.
+  int inkOutlines;
 } AuroraConfig;
 
 typedef enum {
@@ -239,6 +243,22 @@ bool aurora_motion_vectors_active();
 void aurora_set_motion_vector_view(int mode, float scale);
 int aurora_get_motion_vector_view();
 float aurora_get_motion_vector_view_scale();
+// The scene stage: the point in each frame where the solid scene is finished, before the see-through world draws and
+// the HUD (effects on the solid scene run there). Its debug view: 0 = off, 1 = tint (everything drawn before the stage
+// is tinted blue), 2 = depth (the solid scene's distance, near = white), 3 = the ambient occlusion alone, 4 = the ink
+// outlines alone.
+// Ambient occlusion: how much the solid scene darkens where surfaces crowd each other (creases, corners, under
+// things), 0 = off to 1 = full; AuroraConfig::ambientOcclusion at start. Both take effect at the next frame.
+#define AURORA_HAS_SCENE_STAGE 1
+void aurora_set_scene_stage_view(int mode);
+int aurora_get_scene_stage_view();
+void aurora_set_ambient_occlusion(float strength);
+float aurora_get_ambient_occlusion();
+// Cartoon ink outlines on the solid scene: 0 = off, 1 = thin (silhouettes), 2 = bold (thicker, sharp creases too);
+// AuroraConfig::inkOutlines at start. Takes effect at the next frame.
+#define AURORA_HAS_INK_OUTLINES 1
+void aurora_set_ink_outlines(int level);
+int aurora_get_ink_outlines();
 
 typedef enum {
   AURORA_METALFX_DISABLED,

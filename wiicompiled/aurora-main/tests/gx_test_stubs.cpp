@@ -69,6 +69,10 @@ auto fmt::formatter<AuroraLogLevel>::format(AuroraLogLevel level, format_context
   return fmt::format_to(ctx.out(), "{}", static_cast<int>(level));
 }
 
+namespace aurora {
+std::atomic<uint64_t> g_presentScheduleBaseNanos{0};
+} // namespace aurora
+
 // --- GPU buffers (default-constructed, not used in tests) ---
 namespace aurora::gfx {
 AuroraStats g_stats;
@@ -80,6 +84,13 @@ uint32_t g_drawCallCount = 0;
 uint32_t g_mergedDrawCallCount = 0;
 bool motion_vectors_active() noexcept { return false; }
 } // namespace aurora::gfx
+
+namespace aurora::gfx::scene_stage {
+bool wanted() noexcept { return false; }
+void note_camera(const Mat4x4<float>&, const webgpu::Viewport&) noexcept {}
+void note_solid_surface(HashType) noexcept {}
+bool is_solid_surface(HashType) noexcept { return false; }
+} // namespace aurora::gfx::scene_stage
 
 namespace aurora::webgpu {
 GraphicsConfig g_graphicsConfig{};

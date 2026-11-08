@@ -1,0 +1,248 @@
+diff --git a/wiicompiled/runtime/include/hle/no100f_pad_script.h b/wiicompiled/runtime/include/hle/no100f_pad_script.h
+new file mode 100644
+index 0000000..73c7f6e
+--- /dev/null
++++ b/wiicompiled/runtime/include/hle/no100f_pad_script.h
+@@ -0,0 +1,222 @@
++#pragma once
++
++// Scripted pad 1 for tests: hold the stick and press buttons at set times, with dev tools on or off.
++// Kit patch (tools/debug/patches/pad-script.patch): never in a fix PR or a release. Called once per PADRead.
++//
++// NO100F_PAD_SCRIPT=<file>       read once, at the first PADRead.
++// NO100F_PAD_SCRIPT_LIVE=<file>  polled every 10 PADReads, read, then deleted, so a tool can add steps while the game
++//                                runs. Write it under another name and rename it, or a half-written file gets read.
++//
++// One step per line, run in order. Blank lines are skipped, and # starts a comment.
++//   wait MS                      do nothing for MS milliseconds
++//   waitmode MODE STATE          until the game mode and state match (modes: no100f_game_state.h)
++//   waitplay SCENE               until in play (mode 11, state 1) in this scene, e.g. G001
++//   do SX SY BUTTONS PERIOD_MS DURATION_MS [until SCENE | untilmode MODE STATE]
++//       Stick at SX SY (-128..127; +X right, +Y up) and BUTTONS (a b x y z start up down left right, joined with +, or
++//       - for none) for DURATION_MS, or until the scene or mode matches. PERIOD_MS 0 holds the buttons; otherwise they
++//       are down for PERIOD_MS, up for PERIOD_MS, and so on. The stick always holds.
++//
++// These are GameCube buttons, written after the [controller] mapping and the Xbox layout, so neither changes them. L, R
++// and the C stick aren't covered. A real pad still works alongside: buttons add up, and a do step replaces the stick.
++// While a script is set, pad 1 counts as connected.
++//
++// Log (stderr): [padscript] for each step started, each mode, state or scene change, and each rejected line. One bad
++// line means no step of that file runs: a route missing a step could walk somewhere else.
++
++#include "memory.h"
++#include "no100f_game_state.h"
++#include "runtime_log.h"
++#include "hle/no100f_xbox_layout.h"
++
++#include <dolphin/pad.h>
++
++#include <cctype>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <deque>
++#include <fstream>
++#include <sstream>
++#include <string>
++
++namespace No100fPadScript {
++
++enum class Verb { Wait, WaitMode, WaitPlay, Do };
++
++struct Step {
++    Verb verb = Verb::Wait;
++    std::string text;           // the line as written, for the log
++    std::string scene;          // waitplay, or until
++    int mode = -1, state = -1;  // waitmode, or untilmode
++    int ms = 0;                 // wait, do
++    int stickX = 0, stickY = 0, periodMs = 0;
++    uint16_t buttons = 0;
++};
++
++inline std::deque<Step> g_steps;
++
++inline bool ParseButtons(const std::string& names, uint16_t& bits) {
++    bits = 0;
++    if (names == "-") return true;
++    std::istringstream ss(names);
++    for (std::string n; std::getline(ss, n, '+');) {
++        if (n == "a") bits |= PAD_BUTTON_A;
++        else if (n == "b") bits |= PAD_BUTTON_B;
++        else if (n == "x") bits |= PAD_BUTTON_X;
++        else if (n == "y") bits |= PAD_BUTTON_Y;
++        else if (n == "z") bits |= PAD_TRIGGER_Z;
++        else if (n == "start") bits |= PAD_BUTTON_START;
++        else if (n == "up") bits |= PAD_BUTTON_UP;
++        else if (n == "down") bits |= PAD_BUTTON_DOWN;
++        else if (n == "left") bits |= PAD_BUTTON_LEFT;
++        else if (n == "right") bits |= PAD_BUTTON_RIGHT;
++        else return false;
++    }
++    return bits != 0;
++}
++
++// Scene IDs are four characters. Any case is taken (boot mods use i001, the game G001): a wrong one would wait forever.
++inline bool ParseScene(std::istringstream& ss, std::string& scene) {
++    if (!(ss >> scene) || scene.size() != 4) return false;
++    for (char& c : scene) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
++    return true;
++}
++
++inline bool AtLineEnd(std::istringstream& ss) {
++    std::string rest;
++    return !(ss >> rest) || rest[0] == '#';
++}
++
++inline bool ParseStep(std::istringstream& ss, const std::string& verb, Step& st) {
++    if (verb == "wait") {
++        st.verb = Verb::Wait;
++        return ss >> st.ms && st.ms >= 0 && AtLineEnd(ss);
++    }
++    if (verb == "waitmode") {
++        st.verb = Verb::WaitMode;
++        return ss >> st.mode >> st.state && AtLineEnd(ss);
++    }
++    if (verb == "waitplay") {
++        st.verb = Verb::WaitPlay;
++        return ParseScene(ss, st.scene) && AtLineEnd(ss);
++    }
++    if (verb != "do") return false;
++    st.verb = Verb::Do;
++    std::string buttons;
++    if (!(ss >> st.stickX >> st.stickY >> buttons >> st.periodMs >> st.ms) || !ParseButtons(buttons, st.buttons)) {
++        return false;
++    }
++    if (st.stickX < -128 || st.stickX > 127 || st.stickY < -128 || st.stickY > 127 || st.periodMs < 0 || st.ms < 0) {
++        return false;
++    }
++    std::string word;
++    if (!(ss >> word) || word[0] == '#') return true;
++    if (word == "until") return ParseScene(ss, st.scene) && AtLineEnd(ss);
++    if (word == "untilmode") return ss >> st.mode >> st.state && AtLineEnd(ss);
++    return false;
++}
++
++inline void Load(const char* path, const bool live) {
++    std::ifstream in(path);
++    if (!in) {
++        if (!live) RT_LOGF(RT_TAG_OS, "[padscript] can't read %s\n", path);
++        return;
++    }
++    std::deque<Step> steps;
++    bool rejected = false;
++    int number = 0;
++    for (std::string line; std::getline(in, line);) {
++        ++number;
++        std::istringstream ss(line);
++        std::string verb;
++        if (!(ss >> verb) || verb[0] == '#') continue;
++        Step st;
++        if (!ParseStep(ss, verb, st)) {
++            RT_LOGF(RT_TAG_OS, "[padscript] %s line %d rejected: %s\n", path, number, line.c_str());
++            rejected = true;
++            continue;
++        }
++        st.text = line.substr(0, line.find_last_not_of(" \t\r") + 1);
++        steps.push_back(st);
++    }
++    in.close();
++    if (live) std::remove(path);
++    if (rejected) {
++        RT_LOGF(RT_TAG_OS, "[padscript] %s not used\n", path);
++        return;
++    }
++    g_steps.insert(g_steps.end(), steps.begin(), steps.end());
++}
++
++inline std::string SceneText(const uint32_t id) {
++    std::string text;
++    for (int shift = 24; shift >= 0; shift -= 8) {
++        const char c = static_cast<char>(id >> shift);
++        text += c >= 32 && c < 127 ? c : '.';
++    }
++    return text;
++}
++
++inline void Apply(PADStatus& pad) {
++    static const char* const once = std::getenv("NO100F_PAD_SCRIPT");
++    static const char* const live = std::getenv("NO100F_PAD_SCRIPT_LIVE");
++    if (!once && !live) return;
++    // With no controller or keyboard bindings the game pauses on "controller removed", also during a wait step.
++    pad.err = PAD_ERR_NONE;
++
++    static bool loaded = false;
++    if (once && !loaded) {
++        loaded = true;
++        Load(once, false);
++    }
++    static unsigned reads = 0;
++    if (live && ++reads % 10 == 0) Load(live, true);
++
++    const int mode = static_cast<int>(Memory::Read32(no100f_game_state::kModeAddress));
++    const int state = static_cast<int>(Memory::Read32(no100f_game_state::kStateAddress));
++    const uint32_t scenePtr = Memory::Read32(No100fXboxLayout::kScenePointer);
++    const uint32_t sceneAddress = scenePtr + No100fXboxLayout::kSceneIdOffset;
++    const uint32_t sceneId = scenePtr && Memory::Contains(sceneAddress, 4) ? Memory::Read32(sceneAddress) : 0;
++    const std::string scene = SceneText(sceneId);
++    static int lastMode = -1, lastState = -1;
++    static uint32_t lastScene = ~0u;
++    if (mode != lastMode || state != lastState || sceneId != lastScene) {
++        RT_LOGF(RT_TAG_OS, "[padscript] mode %d state %d scene %s\n", mode, state, scene.c_str());
++        lastMode = mode;
++        lastState = state;
++        lastScene = sceneId;
++    }
++
++    if (g_steps.empty()) return;
++    const Step& st = g_steps.front();
++    static std::chrono::steady_clock::time_point started;
++    static bool active = false;
++    const auto now = std::chrono::steady_clock::now();
++    if (!active) {
++        active = true;
++        started = now;
++        RT_LOGF(RT_TAG_OS, "[padscript] step: %s\n", st.text.c_str());
++    }
++    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count();
++    bool done = false;
++    switch (st.verb) {
++        case Verb::Wait: done = elapsed >= st.ms; break;
++        case Verb::WaitMode: done = mode == st.mode && state == st.state; break;
++        case Verb::WaitPlay: done = mode == 11 && state == 1 && scene == st.scene; break;
++        case Verb::Do:
++            pad.stickX = static_cast<s8>(st.stickX);
++            pad.stickY = static_cast<s8>(st.stickY);
++            if (st.periodMs == 0 || (elapsed / st.periodMs) % 2 == 0) pad.button |= st.buttons;
++            done = elapsed >= st.ms || (!st.scene.empty() && scene == st.scene) ||
++                   (st.mode >= 0 && mode == st.mode && state == st.state);
++            break;
++    }
++    if (done) {
++        g_steps.pop_front();
++        active = false;
++        if (g_steps.empty()) RT_LOGF(RT_TAG_OS, "[padscript] done\n");
++    }
++}
++
++} // namespace No100fPadScript
+diff --git a/wiicompiled/runtime/src/hle/input/pad.cpp b/wiicompiled/runtime/src/hle/input/pad.cpp
+index 6139f82..1fc77b0 100644
+--- a/wiicompiled/runtime/src/hle/input/pad.cpp
++++ b/wiicompiled/runtime/src/hle/input/pad.cpp
+@@ -2,6 +2,7 @@
+ #include "memory.h"
+ #include "hle/controller_status_contract.h"
+ #include "hle/no100f_pad_actions.h"
++#include "hle/no100f_pad_script.h"
+ #include "hle/no100f_xbox_layout.h"
+ #include "controller_button_names.h"
+ #include "input_bindings.h"
+@@ -281,6 +282,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
+         statuses[0].button |= scripted;
+         if (scripted) { static int n = 0; if (n++ < 5) RT_LOGF(RT_TAG_OS, "[pad] PADRead scripted buttons 0x%04X\n", scripted); }
+     }
++    No100fPadScript::Apply(statuses[0]);
+ 
+     try {
+         for (uint32_t i = 0; i < PAD_CHANMAX; ++i) {

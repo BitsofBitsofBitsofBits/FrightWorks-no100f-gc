@@ -3,6 +3,7 @@
 #include "gfx/clear.hpp"
 #include "gfx/efb_ram_copy.hpp"
 #include "gfx/motion_effects.hpp"
+#include "gfx/scene_stage.hpp"
 #include "gfx/pipeline_cache.hpp"
 #include "gfx/texture.hpp"
 #include "gx/gx.hpp"
@@ -709,13 +710,311 @@ void draw_same_state_frame(bool settingChanged) {
   submit(true, false, false, true);
 }
 
-void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
-  const auto actual = read_motion(x, y);
+// ----- Scene stage: a solid quad (writes depth) on the left half, then a see-through world quad (depth test, no
+// depth write: the cut-out modes' tail) on the right half; the frame ends with nothing after the tail.
+// Crease: instead a floor (y = -0.5, from 1.5 to 3 units away) meeting a wall (3 units away, up to y = 1), with a
+// small see-through quad in the top-left corner so the frame has a tail.
+// Layer: the left quad is drawn a second time, see-through (half green from the material colour, the same vertices,
+// depth test only), like the game's two-layer materials; the right quad as usual.
+// SplitBetween, SplitTail, SplitMidTail: as Basic, submitted in two parts by a full staging buffer: after a flush with
+// solid and see-through draws still to come; with the tail pending and nothing after it; in the middle of the tail.
+// LateLayer: as Layer, then a late blended surface in front of it (alpha 0, writing depth, the place the game draws the
+// faded door and wall pieces in): it must stay after the second layer, or its depth hides the layer.
+// MergedLayers: two solid quads that merge into one draw, each drawn a second time see-through.
+enum class StageScene { Basic, Crease, Layer, SplitBetween, SplitTail, SplitMidTail, LateLayer, MergedLayers, NoCamera, ThinThing, Ridge };
+void draw_stage_frame(StageScene scene = StageScene::Basic) {
+  const bool crease = scene == StageScene::Crease;
+  gx::set_cutout_mode(gx::CutoutMode::TwoPassAll);
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Scene stage frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+                                              .color = {0.f, 0.f, 0.f, 1.f},
+                                              .depth = gx::clear_depth_value()});
+  alignas(32) static std::array<uint8_t, 32768> fifo;
+  GXInit(fifo.data(), fifo.size());
+  gx::g_gxState.viewportPolicy = AURORA_VIEWPORT_NATIVE;
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetScissor(0, 0, 64, 64);
+  GXSetCullMode(GX_CULL_NONE);
+  GXSetColorUpdate(true);
+  GXSetAlphaUpdate(true);
+  GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_COPY);
+  GXSetNumTexGens(0);
+  GXSetNumChans(1);
+  GXSetNumTevStages(1);
+  GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+  GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+  GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+  const float projection[]{0.f, 1.f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+  GXSetProjectionv(projection);
+  const float identity[3][4]{{1.f, 0.f, 0.f, 0.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+  GXLoadPosMtxImm(identity, GX_PNMTX0);
+  GXSetCurrentMtx(GX_PNMTX0);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+  GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+  constexpr float z = -4.f;
+  const auto quad = [&](float left, float right, std::array<u8, 4> color, float quadZ = z) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy :
+         std::array<std::array<float, 2>, 4>{{{left, .5f}, {right, .5f}, {right, -.5f}, {left, -.5f}}}) {
+      GXPosition3f32(xy[0] * -quadZ, xy[1] * -quadZ, quadZ);
+      GXColor4u8(color[0], color[1], color[2], color[3]);
+    }
+    GXEnd();
+  };
+  GXSetZMode(true, GX_LEQUAL, true);
+  if (scene == StageScene::NoCamera) {
+    // A 2D quad that writes depth, then something see-through in perspective: the stage runs, and no perspective draw
+    // has written depth for it to take a camera from.
+    const float ortho[]{1.f, 1.f, 0.f, 1.f, 0.f, -.5f, -.5f};
+    GXSetProjectionv(ortho);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy : std::array<std::array<float, 2>, 4>{{{-.5f, .5f}, {.5f, .5f}, {.5f, -.5f}, {-.5f, -.5f}}}) {
+      GXPosition3f32(xy[0], xy[1], -.5f);
+      GXColor4u8(255, 255, 255, 255);
+    }
+    GXEnd();
+    GXSetProjectionv(projection);
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.5f, .9f, {0, 255, 0, 128});
+  } else if (crease) {
+    const auto face = [](std::array<std::array<float, 3>, 4> corners) {
+      GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+      for (const auto& c : corners) {
+        GXPosition3f32(c[0], c[1], c[2]);
+        GXColor4u8(200, 200, 200, 255);
+      }
+      GXEnd();
+    };
+    face({{{-3.f, -.5f, -1.5f}, {3.f, -.5f, -1.5f}, {3.f, -.5f, -3.f}, {-3.f, -.5f, -3.f}}}); // floor
+    face({{{-3.f, 1.f, -3.f}, {3.f, 1.f, -3.f}, {3.f, -.5f, -3.f}, {-3.f, -.5f, -3.f}}});     // wall
+    GXSetZMode(true, GX_LEQUAL, false);
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (const auto& xy :
+         std::array<std::array<float, 2>, 4>{{{-.95f, .95f}, {-.9f, .95f}, {-.9f, .9f}, {-.95f, .9f}}}) {
+      GXPosition3f32(xy[0] * -z, xy[1] * -z, z);
+      GXColor4u8(0, 255, 0, 128);
+    }
+    GXEnd();
+  } else if (scene == StageScene::Ridge) {
+    // Two faces meeting at column 32, 90 degrees apart, the ridge nearest the camera: a sharp turn, no silhouette.
+    for (const float side : {-1.f, 1.f}) {
+      GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+      for (const auto& v : std::array<std::array<float, 3>, 4>{
+               {{0.f, 1.5f, -4.f}, {side, 1.5f, -5.f}, {side, -1.5f, -5.f}, {0.f, -1.5f, -4.f}}}) {
+        GXPosition3f32(v[0], v[1], v[2]);
+        GXColor4u8(200, 200, 200, 255);
+      }
+      GXEnd();
+    }
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.9f, .95f, {0, 255, 0, 128});
+  } else if (scene == StageScene::ThinThing) {
+    // Two columns wide (16 and 17), thinner than Bold's line.
+    quad(-.5f, -.4375f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.1f, .9f, {0, 255, 0, 128});
+  } else if (scene == StageScene::MergedLayers) {
+    quad(-.9f, -.5f, {255, 0, 0, 255});
+    quad(-.5f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanMatColor(GX_COLOR0A0, GXColor{0, 255, 0, 128});
+    quad(-.9f, -.5f, {255, 0, 0, 255});
+    quad(-.5f, -.1f, {255, 0, 0, 255});
+    GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    quad(.1f, .9f, {0, 255, 0, 128});
+  } else if (scene == StageScene::SplitBetween) {
+    quad(-.9f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.1f, .3f, {0, 255, 0, 128});
+    gx::fifo::drain();
+    gfx::flush_deferred_draws();
+    gfx::split_staging_batch();
+    GXSetZMode(true, GX_LEQUAL, true);
+    quad(.4f, .6f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.7f, .9f, {0, 255, 0, 128});
+  } else if (scene == StageScene::SplitTail) {
+    quad(-.9f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.1f, .9f, {0, 255, 0, 128});
+    gx::fifo::drain();
+    gfx::split_staging_batch();
+  } else if (scene == StageScene::SplitMidTail) {
+    quad(-.9f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    quad(.1f, .4f, {0, 255, 0, 128});
+    gx::fifo::drain();
+    gfx::split_staging_batch();
+    quad(.5f, .9f, {0, 255, 0, 128});
+  } else {
+    quad(-.9f, -.1f, {255, 0, 0, 255});
+    GXSetZMode(true, GX_LEQUAL, false);
+    if (scene == StageScene::Layer || scene == StageScene::LateLayer) {
+      GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+      GXSetChanMatColor(GX_COLOR0A0, GXColor{0, 255, 0, 128});
+      quad(-.9f, -.1f, {255, 0, 0, 255});
+      GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    }
+    if (scene == StageScene::LateLayer) {
+      GXSetZMode(true, GX_LEQUAL, true);
+      quad(-.9f, -.1f, {0, 0, 0, 0}, -2.f);
+      GXSetZMode(true, GX_LEQUAL, false);
+    }
+    quad(.1f, .9f, {0, 255, 0, 128});
+  }
+  gx::fifo::drain();
+  submit(true, false, false, true);
+}
+
+// The EFB colour at (x, y) as R, G, B.
+std::array<int, 3> read_efb(unsigned x, unsigned y) {
+  const auto bytes = read_texel(webgpu::g_frameBuffer.texture, x, y);
+  if (webgpu::g_frameBuffer.format == wgpu::TextureFormat::BGRA8Unorm)
+    return {bytes[2], bytes[1], bytes[0]};
+  return {bytes[0], bytes[1], bytes[2]};
+}
+
+void check_efb(unsigned x, unsigned y, std::array<int, 3> expected, const char* what) {
+  const auto actual = read_efb(x, y);
+  for (int c = 0; c < 3; ++c) {
+    if (std::abs(actual[c] - expected[c]) > 3) {
+      std::fprintf(stderr, "scene stage %s at %u,%u expected=%d,%d,%d actual=%d,%d,%d\n", what, x, y, expected[0],
+                   expected[1], expected[2], actual[0], actual[1], actual[2]);
+      require(false, "Scene stage pixel mismatch");
+    }
+  }
+}
+
+// Draws the scene until its pipelines are built (unready ones are skipped), then once more to read.
+void settle_stage_frame(StageScene scene) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+  for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+    require(std::chrono::steady_clock::now() < deadline, "Scene stage pipelines were not built");
+    draw_stage_frame(scene);
+    webgpu::g_instance.ProcessEvents();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  draw_stage_frame(scene);
+}
+
+// The GX state both animated-mesh tests draw with: indexed positions, opaque, on a black 64x64 frame.
+void begin_animated_frame() {
+  gx::g_gxState.clearColor = {0.f, 0.f, 0.f, 1.f};
+  require(gfx::begin_frame(), "Animated frame begin failed");
+  gfx::push_draw_command(gfx::clear::DrawData{.pipeline = gfx::pipeline_ref(gfx::clear::PipelineConfig{}),
+                                              .color = {0.f, 0.f, 0.f, 1.f},
+                                              .depth = gx::clear_depth_value()});
+  alignas(32) static std::array<uint8_t, 32768> fifo;
+  GXInit(fifo.data(), fifo.size());
+  gx::g_gxState.viewportPolicy = AURORA_VIEWPORT_NATIVE;
+  GXSetViewport(0.f, 0.f, 64.f, 64.f, 0.f, 1.f);
+  GXSetScissor(0, 0, 64, 64);
+  GXSetCullMode(GX_CULL_NONE);
+  GXSetColorUpdate(true);
+  GXSetAlphaUpdate(true);
+  GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_COPY);
+  GXSetZMode(true, GX_LEQUAL, true);
+  GXSetNumTexGens(0);
+  GXSetNumChans(1);
+  GXSetNumTevStages(1);
+  GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+  GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+  GXSetChanCtrl(GX_COLOR0A0, false, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+  const float projection[]{0.f, 1.f, 0.f, 1.f, 0.f, -0.01f, -0.1f};
+  GXSetProjectionv(projection);
+  GXClearVtxDesc();
+  GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+  GXSetVtxDesc(GX_VA_CLR0, GX_DIRECT);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+  GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+}
+
+void draw_indexed_quad() {
+  GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+  for (u8 index = 0; index < 4; ++index) {
+    GXPosition1x8(index);
+    GXColor4u8(255, 255, 255, 255);
+  }
+  GXEnd();
+}
+
+// Two copies of a mesh the game animates on the CPU (like the f001 fish paste), one step out of phase: each frame both
+// rewrite their positions (indexed, from their own arrays), copy 1 at x = -2 with its quad raised `step` x 0.5 units,
+// copy 2 at x = +2 a step further. In the next frame copy 1 has the shape copy 2 had: same positions, same identity.
+// `secondOnly`: copy 1 isn't drawn, as when the game stops drawing one of a mesh's copies.
+void draw_animated_copies(int step, bool secondOnly = false) {
+  begin_animated_frame();
+  // Each copy's own array, rewritten every frame (aligned like the game's).
+  alignas(32) static std::array<std::array<float, 3>, 4> arrays[2];
+  constexpr float z = -4.f;
+  for (int copy = secondOnly ? 1 : 0; copy < 2; ++copy) {
+    const float raise = static_cast<float>(step + copy) * .5f;
+    arrays[copy] = {{{-.8f, raise + .8f, z}, {.8f, raise + .8f, z}, {.8f, raise - .8f, z}, {-.8f, raise - .8f, z}}};
+    const float position[3][4]{{1.f, 0.f, 0.f, copy == 0 ? -2.f : 2.f}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+    GXLoadPosMtxImm(position, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXSetArray(GX_VA_POS, arrays[copy].data(), sizeof(arrays[copy]), sizeof(arrays[copy][0]), true);
+    draw_indexed_quad();
+  }
+  gx::fifo::drain();
+  submit(true, false, false, true);
+}
+
+// One mesh animated on the CPU (the i004 ghosts) that also moves by its matrix, `step` x 1 unit to the right (8 pixels)
+// with its quad raised `step` x 0.5 units (4 pixels). Returns the motion at (x, y) in each image of the frame, the
+// in-between images first, as the frame's presentation replays them.
+std::vector<std::array<float, 2>> draw_animated_mover(int step, unsigned x, unsigned y) {
+  begin_animated_frame();
+  alignas(32) static std::array<std::array<float, 3>, 4> array;
+  constexpr float z = -4.f;
+  const float raise = static_cast<float>(step) * .5f;
+  array = {{{-1.6f, raise + 1.6f, z}, {1.6f, raise + 1.6f, z}, {1.6f, raise - 1.6f, z}, {-1.6f, raise - 1.6f, z}}};
+  const float position[3][4]{{1.f, 0.f, 0.f, static_cast<float>(step)}, {0.f, 1.f, 0.f, 0.f}, {0.f, 0.f, 1.f, 0.f}};
+  GXLoadPosMtxImm(position, GX_PNMTX0);
+  GXSetCurrentMtx(GX_PNMTX0);
+  GXSetArray(GX_VA_POS, array.data(), sizeof(array), sizeof(array[0]), true);
+  draw_indexed_quad();
+  gx::fifo::drain();
+
+  auto encoder = webgpu::g_device.CreateCommandEncoder();
+  gfx::end_frame(encoder);
+  gfx::SealedFrame frame;
+  gfx::seal_frame(frame);
+  std::vector<std::array<float, 2>> motion;
+  const auto image = [&](int32_t interpolatedFrame, bool finalize) {
+    gfx::render(frame, encoder, interpolatedFrame, finalize);
+    const auto commands = encoder.Finish();
+    webgpu::g_queue.Submit(1, &commands);
+    motion.push_back(read_motion(x, y));
+    encoder = webgpu::g_device.CreateCommandEncoder();
+  };
+  if (gx::frame_interpolation_replay_safe()) {
+    AuroraFrameInterpolationDiagnostics interpolation{};
+    gx::get_frame_interpolation_diagnostics(interpolation);
+    for (uint32_t sample = 0; sample < interpolation.activeSamples; ++sample) {
+      image(static_cast<int32_t>(sample), false);
+    }
+  }
+  image(-1, true);
+  gfx::after_submit();
+  return motion;
+}
+
+void check_motion_value(std::array<float, 2> actual, std::array<float, 2> expected, const char* what) {
   if (std::fabs(actual[0] - expected[0]) > 0.25f || std::fabs(actual[1] - expected[1]) > 0.25f) {
-    std::fprintf(stderr, "motion %s at %u,%u expected=%g,%g actual=%g,%g\n", what, x, y, expected[0], expected[1],
-                 actual[0], actual[1]);
+    std::fprintf(stderr, "motion %s expected=%g,%g actual=%g,%g\n", what, expected[0], expected[1], actual[0],
+                 actual[1]);
     require(false, "Motion vector mismatch");
   }
+}
+
+void check_motion(unsigned x, unsigned y, std::array<float, 2> expected, const char* what) {
+  check_motion_value(read_motion(x, y), expected, what);
 }
 } // namespace
 
@@ -769,6 +1068,57 @@ int main(int argc, char** argv) {
     draw_motion_frame(.25f);
     check_motion(36, 32, {-8.f, 0.f}, "moved");
     check_motion(4, 32, {0.f, 0.f}, "background");
+    // Copies of a CPU-animated mesh, out of phase: copy 1 now has the shape copy 2 had last frame. It pairs with its
+    // own draw, not copy 2's (which would read a 32-pixel jump), and gets its vertices' own motion: up 0.5 units, 4
+    // pixels.
+    for (int step = 0; step < 4; ++step)
+      draw_animated_copies(step); // pipelines built, history recorded
+    {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      while (gfx::queued_pipeline_count() != 0) {
+        require(std::chrono::steady_clock::now() < deadline, "Animated copies pipelines were not built");
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    draw_animated_copies(4);
+    draw_animated_copies(5);
+    // Copy 1 at x = -2 (NDC -0.5: column 16), raised 2.5 units (NDC 0.625: row 12).
+    check_motion(16, 12, {0.f, 4.f}, "animated copy");
+    std::printf("Actual Aurora motion vectors: a CPU-animated copy out of phase with another keeps its own motion\n");
+    // The game stops drawing copy 1 (the i004 ghosts, as one leaves the view). Copy 2 is now the mesh's first draw, but
+    // its previous shape is still its own: 4 pixels, not the 8 it would read from copy 1's. At x = +2 (column 48), raised
+    // 3.5 units (NDC 0.875: row 4).
+    draw_animated_copies(6, true);
+    check_motion(48, 4, {0.f, 4.f}, "animated copy, the other copy gone");
+    std::printf("Actual Aurora motion vectors: a CPU-animated copy keeps its own previous shape when another stops drawing\n");
+    // In-between images: the blur scales each one's motion up by the inverse of how far along it is, so all of a draw's
+    // motion has to cover that share of the frame, the vertices' too, or they blur 3x, then 1.5x, then 1x, every frame.
+    // 8 pixels by the matrix and 4 by the vertices a frame; pixel (36, 30) stays on the quad in all three images.
+    aurora_set_frame_interpolation_fps(180);
+    {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      for (int step = -3; step < 0 || gfx::queued_pipeline_count() != 0; ++step) {
+        require(std::chrono::steady_clock::now() < deadline, "Animated mover pipelines were not built");
+        draw_animated_mover(std::min(step, -1), 36, 30);
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    draw_animated_mover(-1, 36, 30);
+    draw_animated_mover(0, 36, 30);
+    {
+      const auto images = draw_animated_mover(1, 36, 30);
+      for (const auto& m : images) {
+        std::printf("Animated mover image motion %g,%g\n", m[0], m[1]);
+      }
+      require(images.size() == 3, "Animated mover did not replay two in-between images");
+      check_motion_value(images[0], {-8.f / 3.f, 4.f / 3.f}, "animated mover, first in-between image");
+      check_motion_value(images[1], {-16.f / 3.f, 8.f / 3.f}, "animated mover, second in-between image");
+      check_motion_value(images[2], {-8.f, 4.f}, "animated mover, the frame's own image");
+    }
+    aurora_set_frame_interpolation_fps(0);
+    std::printf("Actual Aurora motion vectors: an in-between image's vertex motion covers its share of the frame\n");
     // A camera cut: when the whole picture moves more than a camera can in one frame (here 2.4 units, over the
     // 2-unit limit), the frame has no motion; 1 unit is still motion.
     settle_motion_pipelines(false, true);
@@ -796,6 +1146,207 @@ int main(int argc, char** argv) {
     gfx::request_motion_vectors(false);
     draw_same_state_frame(true);
     std::printf("Actual Aurora motion setting change resolves the pipeline again\n");
+    // The scene stage runs after the solid scene and before the see-through tail: tinted, the solid quad is
+    // multiplied by (0.35, 0.55, 1) and the see-through one drawn after keeps its colour (half green over black: 128;
+    // tinted it would be 70). The depth view shows the solid quad 4 units away as exp(-4 / 8) grey. Off (before and
+    // after), nothing changes.
+    for (const int mode : {0, 1, 2, 0}) {
+      gfx::scene_stage::set_view(mode);
+      // Draws until the pipelines are built (unready ones are skipped), then once more to read.
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+        require(std::chrono::steady_clock::now() < deadline, "Scene stage pipelines were not built");
+        draw_stage_frame();
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      draw_stage_frame();
+      const int grey = static_cast<int>(std::lround(255.0 * std::exp(-0.5)));
+      check_efb(16, 32,
+                mode == 1   ? std::array{89, 0, 0}
+                : mode == 2 ? std::array{grey, grey, grey}
+                            : std::array{255, 0, 0},
+                mode == 1   ? "tinted solid"
+                : mode == 2 ? "solid depth"
+                            : "solid, view off");
+      // Behind the see-through quad nothing solid is drawn: the depth view shows the clear's depth there, as at the
+      // corner, and the half-green quad drawn after the stage goes over it.
+      const auto under = mode == 2 ? read_efb(4, 4) : std::array{0, 0, 0};
+      check_efb(48, 32, {under[0] / 2, 128 + under[1] / 2, under[2] / 2}, "see-through after the stage");
+    }
+    std::printf(
+        "Actual Aurora scene stage: solid scene tinted, see-through tail after it, depth view, off untouched\n");
+    // Ambient occlusion, seen alone (view 3, full strength): a wall standing on a floor darkens just above their crease
+    // (the wall is 3 units away, so its foot is at row 37 of 64), and neither the wall high up nor the open floor near
+    // the camera shades itself. Applied at full strength the crease darkens the picture too; at 0 nothing changes.
+    {
+      const auto settle = [] {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+          require(std::chrono::steady_clock::now() < deadline, "Ambient occlusion pipelines were not built");
+          draw_stage_frame(StageScene::Crease);
+          webgpu::g_instance.ProcessEvents();
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        draw_stage_frame(StageScene::Crease);
+      };
+      gfx::scene_stage::set_view(3);
+      settle();
+      const int crease = read_efb(32, 35)[0];
+      const int wallHigh = read_efb(32, 24)[0];
+      const int openFloor = read_efb(32, 44)[0];
+      std::printf("Actual Aurora ambient occlusion (0-255, 255 = none): crease %d, wall high %d, open floor %d\n",
+                  crease, wallHigh, openFloor);
+      require(crease < 215, "Ambient occlusion: the crease is not darkened");
+      require(wallHigh > 248 && openFloor > 248, "Ambient occlusion: a flat surface shades itself");
+      gfx::scene_stage::set_view(0);
+      gfx::scene_stage::set_ambient_occlusion(1.f);
+      settle();
+      const int litCrease = read_efb(32, 35)[0];
+      const int litWall = read_efb(32, 24)[0];
+      require(gfx::scene_stage::holds_targets(), "Ambient occlusion has no targets while on");
+      gfx::scene_stage::set_ambient_occlusion(0.f);
+      settle();
+      require(!gfx::scene_stage::holds_targets(), "Ambient occlusion targets kept after it was turned off");
+      const int plainCrease = read_efb(32, 35)[0];
+      require(litCrease < plainCrease - 10 && std::abs(litWall - read_efb(32, 24)[0]) <= 2,
+              "Ambient occlusion: applying it does not darken only the crease");
+    }
+    // A see-through second layer of a solid surface is part of the solid scene: drawn before the stage, it is tinted
+    // with its surface (half green over red: R 128 x 0.35, G 128 x 0.55 = 70; after the stage G would stay 128).
+    {
+      gfx::scene_stage::set_view(1);
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+        require(std::chrono::steady_clock::now() < deadline, "Surface layer pipelines were not built");
+        draw_stage_frame(StageScene::Layer);
+        webgpu::g_instance.ProcessEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      draw_stage_frame(StageScene::Layer);
+      check_efb(16, 32, {45, 70, 0}, "second layer of a solid surface");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the stage, with a layer");
+      gfx::scene_stage::set_view(0);
+      std::printf("Actual Aurora scene stage: a solid surface's see-through second layer is drawn before the stage\n");
+    }
+    // A frame submitted in parts has no stage: nothing is tinted, so nothing is tinted twice (31 instead of 89) and no
+    // see-through draw is tinted (70 instead of 128). The next whole frame has the stage again.
+    {
+      gfx::scene_stage::set_view(1);
+      settle_stage_frame(StageScene::SplitBetween);
+      check_efb(16, 32, {255, 0, 0}, "split between flushes, first solid");
+      check_efb(38, 32, {0, 128, 0}, "split between flushes, first see-through");
+      check_efb(48, 32, {255, 0, 0}, "split between flushes, later solid");
+      check_efb(57, 32, {0, 128, 0}, "split between flushes, later see-through");
+      settle_stage_frame(StageScene::SplitTail);
+      check_efb(16, 32, {255, 0, 0}, "split with the tail pending, solid");
+      check_efb(48, 32, {0, 128, 0}, "split with the tail pending, see-through");
+      settle_stage_frame(StageScene::SplitMidTail);
+      check_efb(16, 32, {255, 0, 0}, "split in the tail, solid");
+      check_efb(40, 32, {0, 128, 0}, "split in the tail, first part");
+      check_efb(56, 32, {0, 128, 0}, "split in the tail, second part");
+      settle_stage_frame(StageScene::Basic);
+      check_efb(16, 32, {89, 0, 0}, "whole frame after a split, solid");
+      check_efb(48, 32, {0, 128, 0}, "whole frame after a split, see-through");
+      gfx::scene_stage::set_view(0);
+      std::printf("Actual Aurora scene stage: a frame submitted in parts has no stage, the next whole frame has it\n");
+    }
+    // A late blended surface in front of a second layer: the same picture with the stage in use as without, but for the
+    // tint on what is before the stage. Drawn too early, its depth hides the layer behind it (89, 0, 0).
+    {
+      settle_stage_frame(StageScene::LateLayer);
+      check_efb(16, 32, {127, 128, 0}, "second layer under a late surface, stage off");
+      gfx::scene_stage::set_view(1);
+      settle_stage_frame(StageScene::LateLayer);
+      check_efb(16, 32, {45, 70, 0}, "second layer under a late surface");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the stage, with a late surface");
+      // Second layers of solid draws that merged: each is recognised (G would stay 128 for the merged one).
+      settle_stage_frame(StageScene::MergedLayers);
+      require(gfx::g_stats.mergedDrawCallCount > 0, "The solid quads did not merge");
+      check_efb(10, 32, {45, 70, 0}, "second layer of the first merged quad");
+      check_efb(22, 32, {45, 70, 0}, "second layer of the next merged quad");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the stage, with merged layers");
+      gfx::scene_stage::set_view(0);
+      std::printf("Actual Aurora scene stage: second layers stay before a late surface, merged solids keep theirs\n");
+    }
+    // Ink outlines: the solid quad (columns 3 to 28, 4 units away) stands in front of nothing, so its silhouette inks
+    // on the quad's side (column 3, 85% dark at Thin: 255 x 0.15 = 38) and nowhere inside it (column 4 is a pixel in,
+    // the middle at 16). The outline view shows the line alone, black on white. Off, nothing changes.
+    {
+      const auto settle = [](StageScene scene = StageScene::Basic) {
+        const auto frame_of = [scene] {
+          if (scene == StageScene::NoCamera) {
+            gfx::scene_stage::note_camera(Mat4x4<float>{}, webgpu::Viewport{0.f, 0.f, 64.f, 64.f, 0.f, 1.f});
+          }
+          draw_stage_frame(scene);
+        };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        for (unsigned frame = 0; frame < 2 || gfx::queued_pipeline_count() != 0; ++frame) {
+          require(std::chrono::steady_clock::now() < deadline, "Ink outline pipelines were not built");
+          frame_of();
+          webgpu::g_instance.ProcessEvents();
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        frame_of();
+      };
+      gfx::scene_stage::set_ink_outlines(1);
+      settle();
+      check_efb(3, 32, {38, 0, 0}, "ink on the silhouette");
+      check_efb(4, 32, {255, 0, 0}, "no ink a pixel inside");
+      check_efb(16, 32, {255, 0, 0}, "no ink in the middle");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the ink");
+      gfx::scene_stage::set_view(4);
+      settle();
+      check_efb(3, 32, {0, 0, 0}, "outline view, line");
+      check_efb(16, 32, {255, 255, 255}, "outline view, inside");
+      gfx::scene_stage::set_view(0);
+      // Bold: the same silhouette, a line two columns wide here and 90% dark (255 x 0.1 = 25), nothing inside it.
+      gfx::scene_stage::set_ink_outlines(2);
+      settle();
+      check_efb(3, 32, {25, 0, 0}, "bold ink on the silhouette");
+      check_efb(4, 32, {25, 0, 0}, "bold ink, second column");
+      check_efb(5, 32, {255, 0, 0}, "no bold ink past the line");
+      check_efb(16, 32, {255, 0, 0}, "no bold ink in the middle");
+      check_efb(48, 32, {0, 128, 0}, "see-through after the bold ink");
+      // Something thinner than the line drops away on both sides, so it keeps its colour.
+      settle(StageScene::ThinThing);
+      check_efb(16, 32, {255, 0, 0}, "bold keeps a thin thing's colour, left");
+      check_efb(17, 32, {255, 0, 0}, "bold keeps a thin thing's colour, right");
+      // A flat wall and floor have no line across them, whatever the angle (view 4: white = no line).
+      gfx::scene_stage::set_view(4);
+      settle(StageScene::Crease);
+      check_efb(32, 30, {255, 255, 255}, "no bold line across the wall");
+      check_efb(32, 44, {255, 255, 255}, "no bold line across the floor");
+      // Nor is a sharp turn of the surface a line: Bold inks silhouettes only.
+      settle(StageScene::Ridge);
+      for (const unsigned column : {28u, 29u, 30u, 31u, 32u, 33u, 34u, 35u}) {
+        check_efb(column, 32, {255, 255, 255}, "no bold line on a ridge");
+      }
+      gfx::scene_stage::set_view(0);
+      // With no camera that can be inverted, the stage leaves the picture alone: the 2D quad keeps its colour.
+      settle();
+      settle(StageScene::NoCamera);
+      check_efb(16, 32, {255, 255, 255}, "no camera, edge of the 2D quad");
+      check_efb(24, 32, {255, 255, 255}, "no camera, middle of the 2D quad");
+      gfx::scene_stage::set_ink_outlines(0);
+      gfx::scene_stage::set_ambient_occlusion(1.f);
+      settle();
+      settle(StageScene::NoCamera);
+      check_efb(24, 32, {255, 255, 255}, "no camera, no shade");
+      gfx::scene_stage::set_ambient_occlusion(0.f);
+      gfx::scene_stage::set_view(2);
+      settle();
+      settle(StageScene::NoCamera);
+      check_efb(24, 32, {255, 255, 255}, "no camera, no depth view");
+      gfx::scene_stage::set_view(0);
+      gfx::scene_stage::set_ink_outlines(2);
+      gfx::scene_stage::set_ink_outlines(0);
+      settle();
+      check_efb(3, 32, {255, 0, 0}, "ink off");
+      std::printf(
+          "Actual Aurora ink outlines: silhouette inked on the quad's own side, Bold wider with thin things kept, no camera "
+          "no stage, view black on white, off clean\n");
+    }
     // An alpha-blended surface moves like any other. It owns the depth only on a GPU that can blend the 32-bit float
     // target; elsewhere (AURORA_GFX_FLAGS=nofloat32blend hides the feature) it leaves the depth behind it.
     gfx::request_motion_vectors(true);

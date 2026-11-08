@@ -1477,6 +1477,51 @@ void DrawVideoSettings() {
         Hint("Used when the game goes fullscreen (F11 or Display mode).");
     }
 #endif
+#ifdef AURORA_HAS_SCENE_STAGE
+    {
+        // A strength set by hand in Config.toml that is none of the levels shows as its percentage.
+        const int percent = std::clamp(RuntimeConfigFile::AmbientOcclusion(), 0, 100);
+        std::string current = std::to_string(percent) + "%";
+        for (const auto& level : RuntimeConfigFile::kAmbientOcclusionLevels) {
+            if (level.percent == percent) current = level.name;
+        }
+        RowLabel("Ambient occlusion", labelWidth, controlWidth);
+        if (ImGui::BeginCombo("##ambientocclusion", current.c_str())) {
+            for (const auto& level : RuntimeConfigFile::kAmbientOcclusionLevels) {
+                const bool selected = level.percent == percent;
+                if (ImGui::Selectable(level.name, selected) && !selected) {
+                    aurora_set_ambient_occlusion(static_cast<float>(level.percent) / 100.0f);
+                    RuntimeConfigFile::SetAmbientOcclusion(level.percent);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        Hint("Soft shade where surfaces meet: in corners, creases and under things.");
+    }
+#endif
+#ifdef AURORA_HAS_INK_OUTLINES
+    {
+        const int level = std::clamp(RuntimeConfigFile::InkOutlines(), 0, 2);
+        RowLabel("Ink outlines", labelWidth, controlWidth);
+        if (ImGui::BeginCombo("##inkoutlines", RuntimeConfigFile::kInkOutlineLevels[level])) {
+            for (int i = 0; i < 3; ++i) {
+                const bool selected = i == level;
+                if (ImGui::Selectable(RuntimeConfigFile::kInkOutlineLevels[i], selected) && !selected) {
+                    aurora_set_ink_outlines(i);
+                    RuntimeConfigFile::SetInkOutlines(i);
+                }
+                if (selected) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        Hint("Cartoon lines around characters and objects. Bold also draws sharp edges inside them.");
+    }
+#endif
 
 #if defined(_WIN32)
     SectionTitle("HDR");
@@ -1492,7 +1537,10 @@ void DrawVideoSettings() {
         "Off", "120 FPS", "180 FPS",
     };
     bool frameInterpolationModeChanged = false;
+    // At 30 fps the mode is Off (RuntimeConfigFile::FrameInterpolationFps). fps60 can't change while the game runs.
+    const bool frameInterpolationLocked = !RuntimeConfigFile::Fps60();
     RowLabel("Frame interpolation", labelWidth, controlWidth);
+    ImGui::BeginDisabled(frameInterpolationLocked);
     if (ImGui::BeginCombo("##interpolation", kFrameInterpolationModes[static_cast<size_t>(g_frameInterpolationMode)])) {
         for (int mode = 0; mode < static_cast<int>(kFrameInterpolationModes.size()); ++mode) {
             const bool selected = g_frameInterpolationMode == mode;
@@ -1506,6 +1554,7 @@ void DrawVideoSettings() {
         }
         ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
     if (frameInterpolationModeChanged) {
         const uint32_t targetFps = kFrameInterpolationTargetFps[static_cast<size_t>(g_frameInterpolationMode)];
         aurora_set_frame_interpolation_fps(targetFps);
@@ -1516,7 +1565,8 @@ void DrawVideoSettings() {
             aurora_set_display_mode(AURORA_DISPLAY_MODE_EXCLUSIVE);
         }
     }
-    Hint("Experimental: you might see visual artifacts.");
+    Hint(frameInterpolationLocked ? "Only works at 60 fps, so it stays off at 30 fps. The launcher sets the frame rate."
+                                  : "Experimental: you might see visual artifacts.");
     {
         // A strength set by hand in Config.toml that is none of the levels shows as its percentage.
         const int percent = std::clamp(RuntimeConfigFile::MotionBlur(), 0, 100);

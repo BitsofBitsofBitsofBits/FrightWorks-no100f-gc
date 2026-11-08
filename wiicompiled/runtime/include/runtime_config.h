@@ -36,6 +36,8 @@ struct RuntimeUserConfig {
     std::optional<bool> forceAspect169;
     std::optional<int32_t> aspectMode;  // 0 original 4:3, 1 16:9, 2 fill the window (DisplaySettings)
     std::optional<int32_t> motionBlur;  // [video] motion_blur: strength in percent, 0 = off (MotionBlurShutter)
+    std::optional<int32_t> ambientOcclusion;  // [video] ambient_occlusion: strength in percent, 0 = off
+    std::optional<int32_t> inkOutlines;  // [video] ink_outlines: 0 off, 1 thin, 2 bold
     std::optional<int32_t> gpuCompat;  // 0 auto (by graphics adapter), 1 on, 2 off (AuroraGpuCompat)
     std::optional<int32_t> windowPosX;
     std::optional<int32_t> windowPosY;
@@ -55,7 +57,7 @@ struct RuntimeUserConfig {
     std::optional<bool> showFps;
     std::optional<bool> skipIntro;
     std::optional<bool> fps60;
-    std::optional<std::string> holiday;  // NO100F [game] holiday: "auto" (today), "off" or "MM-DD"
+    std::optional<std::string> holiday;  // NO100F [game] holiday: "auto" (today), "off", "confetti" or "MM-DD"
     std::optional<bool> devTools;        // NO100F [game] dev_tools: F8 dev menu + DEV build mark (launcher Extras)
     std::optional<bool> recordAudio;     // NO100F [game] record_audio: F3 videos (dev tools) include the game's sound
     std::optional<bool> captureOverlay;  // NO100F [game] capture_overlay: F2/F3 captures show the F8/F10 menus (dev tools)
@@ -214,9 +216,9 @@ inline bool IsSupportedDisplayMode(std::string_view value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-// NO100F [game] holiday: "auto", "off", or a forced date "MM-DD".
+// NO100F [game] holiday: "auto", "off", "confetti" (multicoloured fireworks), or a forced date "MM-DD".
 inline bool IsSupportedHoliday(std::string_view value) {
-    if (value == "auto" || value == "off") return true;
+    if (value == "auto" || value == "off" || value == "confetti") return true;
     if (value.size() != 5 || value[2] != '-') return false;
     for (const size_t i : {size_t{0}, size_t{1}, size_t{3}, size_t{4}})
         if (value[i] < '0' || value[i] > '9') return false;
@@ -354,8 +356,8 @@ inline void EnsureConfigFile() {
         return;
     }
     // Scooby-Doo! Night of 100 Frights defaults: borderless 1080p (2.25 x 480 lines; 4.5 = 4K, 0 = the screen's
-    // own size), cinematic 2.39:1, no frame interpolation (the game runs at 30 fps, which the 60 fps-based
-    // interpolation backs off from), HD textures on. The launcher writes the same keys.
+    // own size), cinematic 2.39:1, no frame interpolation (the game runs at 30 fps, where interpolation stays off:
+    // FrameInterpolationFps), HD textures on. The launcher writes the same keys.
     output << "# FrightWorks: Night of 100 Frights user configuration\n"
               "# paths.dvd_root is your Scooby-Doo! Night of 100 Frights (USA, GIHE78) extracted to a DATA folder;\n"
               "# the launcher fills it in from a .iso/.gcm/.ciso.\n\n"
@@ -364,12 +366,17 @@ inline void EnsureConfigFile() {
               "force_16_9 = false\n"
               "# render height = 480 x resolution_multiplier: 1.5 = 720p, 2.25 = 1080p, 4.5 = 4K, 0 = screen size\n"
               "resolution_multiplier = 2.25\n"
-              "# 0 (off), 120 or 180\n"
+              "# 0 (off), 120 or 180; only with fps60 = true, it stays off at 30 fps\n"
               "frame_interpolation_fps = 0\n"
               "# true = 60 fps (the game times itself by the clock, so it keeps its speed)\n"
               "fps60 = false\n"
               "# motion blur strength in percent: 0 = off, 10 = extra low, 20 = low, 30 = medium, 40 = high, 50 = extra high\n"
               "motion_blur = 0\n"
+              "# ambient occlusion (shade in creases, corners and under things) in percent: 0 = off, 35 = low, 65 = medium,\n"
+              "# 100 = high\n"
+              "ambient_occlusion = 0\n"
+              "# cartoon ink outlines: 0 = off, 1 = thin, 2 = bold\n"
+              "ink_outlines = 0\n"
               "# 0 = original 4:3, 1 = 16:9, 2 = fill the screen, 3 = cinematic 2.39:1\n"
               "aspect_mode = 3\n"
               "display_mode = \"borderless\"\n"
@@ -387,7 +394,8 @@ inline void EnsureConfigFile() {
               "texture_dumps = false\n\n"
               "[game]\n"
               "# Holiday events in the hubs (fireworks, Halloween bats, ...): \"auto\" = by today's date,\n"
-              "# \"off\" = never, or \"MM-DD\" to pretend it is that day (e.g. \"10-31\").\n"
+              "# \"off\" = never, \"confetti\" = fireworks with the colours mixed through each burst,\n"
+              "# or \"MM-DD\" to pretend it is that day (e.g. \"10-31\").\n"
               "holiday = \"auto\"\n"
               "# Developer tools: the F8 dev menu (travel, spots, free camera, texture finder) and a DEV build mark.\n"
               "dev_tools = false\n"
@@ -534,6 +542,12 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
     if (auto value = FindConfigInt(document, "video", "motion_blur"); value && *value >= 0 && *value <= 100) {
         config.motionBlur = *value;
+    }
+    if (auto value = FindConfigInt(document, "video", "ambient_occlusion"); value && *value >= 0 && *value <= 100) {
+        config.ambientOcclusion = *value;
+    }
+    if (auto value = FindConfigInt(document, "video", "ink_outlines"); value && *value >= 0 && *value <= 2) {
+        config.inkOutlines = *value;
     }
     if (auto value = FindConfigInt(document, "video", "gpu_compat"); value && *value >= 0 && *value <= 2) {
         config.gpuCompat = *value;
@@ -1084,6 +1098,33 @@ inline bool SetMotionBlur(int32_t value) {
     return WriteSetting("video", "motion_blur", std::to_string(value));
 }
 
+// Ambient occlusion strength in percent, 0 = off (aurora_set_ambient_occlusion takes it as 0 to 1). The menus offer the
+// levels below; any other value from 0 to 100 works too.
+inline int32_t AmbientOcclusion(int32_t fallback = 0) {
+    return Get().ambientOcclusion.value_or(fallback);
+}
+
+inline constexpr MotionBlurLevel kAmbientOcclusionLevels[] = {
+    {"Off", 0}, {"Low", 35}, {"Medium", 65},
+};
+
+inline bool SetAmbientOcclusion(int32_t value) {
+    Mutable().ambientOcclusion = value;
+    return WriteSetting("video", "ambient_occlusion", std::to_string(value));
+}
+
+// Cartoon ink outlines: 0 off, 1 thin, 2 bold (aurora_set_ink_outlines).
+inline int32_t InkOutlines(int32_t fallback = 0) {
+    return Get().inkOutlines.value_or(fallback);
+}
+
+inline constexpr const char* kInkOutlineLevels[] = {"Off", "Thin", "Bold"};
+
+inline bool SetInkOutlines(int32_t value) {
+    Mutable().inkOutlines = value;
+    return WriteSetting("video", "ink_outlines", std::to_string(value));
+}
+
 inline bool SetForceAspect169(bool value) {
     Mutable().forceAspect169 = value;
     return WriteSetting("video", "force_16_9", value ? "true" : "false");
@@ -1206,9 +1247,14 @@ inline bool SetWiiAccelOffset(const std::array<double, 3>& offset) {
     return ok;
 }
 
-// Target frame rate for frame interpolation, or 0 to disable it.
+// Target frame rate for frame interpolation, or 0 to disable it. Always 0 at 30 fps ([video] fps60 off), whatever the
+// file says: vi.cpp would report every frame as late there, so it would do nothing. The saved value isn't touched.
+inline uint32_t FrameInterpolationFpsIn(const RuntimeUserConfig& config, uint32_t fallback = 0) {
+    return config.fps60.value_or(false) ? config.frameInterpolationFps.value_or(fallback) : 0;
+}
+
 inline uint32_t FrameInterpolationFps(uint32_t fallback = 0) {
-    return Get().frameInterpolationFps.value_or(fallback);
+    return FrameInterpolationFpsIn(Get(), fallback);
 }
 
 // Whether to skip draws whose graphics pipeline has not finished compiling yet.
@@ -1234,7 +1280,8 @@ inline bool SkipIntro(bool fallback = false) {
     return Get().skipIntro.value_or(fallback);
 }
 
-// NO100F: the date the hubs' holiday events see (launcher "Holidays"): "auto" = today, "off" = none, "MM-DD" = that day.
+// NO100F: the date the hubs' holiday events see (launcher "Holidays"): "auto" = today, "off" = none, "confetti" = Jan 1
+// with confetti firework bursts, "MM-DD" = that day.
 inline std::string Holiday() {
     return Get().holiday.value_or("auto");
 }
@@ -1447,6 +1494,12 @@ inline void LogLoadedConfig() {
             }
             if (config.motionBlur) {
                 std::cout << " motion_blur=" << *config.motionBlur;
+            }
+            if (config.ambientOcclusion) {
+                std::cout << " ambient_occlusion=" << *config.ambientOcclusion;
+            }
+            if (config.inkOutlines) {
+                std::cout << " ink_outlines=" << *config.inkOutlines;
             }
             if (config.skipUnreadyPipelines) {
                 std::cout << " skip_unready_pipelines=" << (*config.skipUnreadyPipelines ? "true" : "false");
