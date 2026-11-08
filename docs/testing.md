@@ -260,7 +260,8 @@ The pieces are in `tools/testkit/` and are meant for every automated game run (`
   its own `Config.toml` (windowed, rumble off, muted), the environment scrubbed of leftover `NO100F_*`, `AX_*`, `NSMBW_*`, `AUDIO_*` switches and of
   `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS` (never set it: SDL then refuses the game's own hint call and the game treats that as an error).
   Controller isolation, per game process only, so your own game is unaffected: `NSMBW_INPUT_SCRIPT` set (the game reports pad 1 connected, nothing pressed) and
-  `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0xDEAD/0xBEEF`, an ID no controller has, so a real pad's presses do not reach the game.
+  `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0xDEAD/0xBEEF`, an ID no controller has, so a real pad's presses do not reach the game
+  (tried once with a person pressing a real pad throughout a full smoke run: all three jobs passed as without; the game logs no controller connects, so there is no log line to check).
 - `slots.py`: shared run slots, 3 by default (`--slots`, or `FRIGHTWORKS_TEST_SLOTS`). `acquire(why, exclusive=True)` is for the human check and performance
   checks: it waits for every slot and blocks new ones. Files live in `%LOCALAPPDATA%\FrightWorks-kit\slots` (Linux `$XDG_STATE_HOME/FrightWorks-kit`), with a heartbeat so a
   crashed run's slot is taken over after 90 s. While any slot is held a `game-run.lock` exists in the old format (its `root` is the slots folder, so no checkout's old script takes it over), and a lock held by an old PowerShell script makes
