@@ -148,9 +148,16 @@ Aurora's tests are its standalone build: `gx_fifo_tests`, and `gx_readback_tests
 The Windows command is in `docs/testing.md`.
 Anything beyond the table needs a stated reason.
 
-**Not built yet:** the smoke test script, shared run slots (game runs take turns for now), the shared wait-until-playable routine (`texhunt\look.ps1` has its own), controller isolation for test runs and the full sweep before a release.
-Until they exist, a smoke test means booting `h001` and the changed level with `manual-session` from a fresh build, checking the build ID, the level load and that the game stays up.
-Nothing runs these automatically, so the PR says what was run.
+**The smoke test** is `python tools/smoke-test.py`, run after a fresh build (`docs/testing.md`, section 4a): three jobs at once from their own copies of `Play/` (`h001` boot, HD textures and audio; `i004` gameplay, then `scene` to `e001`; `g001` save and load).
+It checks the build ID, then crashes, faults, a black picture, and for `h001` that HD textures were really drawn and the sound is neither silent nor stuck.
+Add a scene you changed with `--scenes <scene,...>` and say so in the PR.
+The pieces are in `tools/testkit/`: shared run slots (3 by default), the launch helper (own `Play/` copy, rumble off, muted, controller isolation) and the wait-until-playable routine.
+New automated game runs use them.
+
+**Not built yet:** moving `level-sweep.py` and the PowerShell scripts onto the test kit (they still take turns through `kit-common.ps1`'s `game-run.lock`, which the slots respect, so old and new scripts cannot overlap), the full sweep before a release and the asset check.
+The controller isolation was tried once on a real pad (2026-11-07): a person pressed buttons and sticks for about 40 s of a full three-job run, and all three jobs passed with the same results as without.
+The game logs no controller connects, so the proof is those results, not a log line; repeat it when the isolation changes.
+Nothing runs the smoke test automatically, so the PR says what was run.
 
 **Habits**
 - A build passing, tests passing and a real game run are different evidence.

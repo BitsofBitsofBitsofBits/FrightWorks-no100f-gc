@@ -57,8 +57,8 @@ same either way.
 
 ## Check on, message, reopen
 
-- `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock. Game runs take turns
-  today. Planned, not built yet: shared run slots in place of the one-at-a-time lock, a smoke test script, and the full sweep before a release (`.agents/REPO.md`, Testing).
+- `worktree.ps1 list`: every worktree with its branch, changed files and who holds the game-run lock. Game runs of the PowerShell scripts take turns;
+  the Python test kit (`tools/testkit/`, `tools/smoke-test.py`) uses shared run slots and respects that lock. Not built yet: the full sweep before a release (`.agents/REPO.md`, Testing).
 - ListAgents: which sessions are running. SendMessage to `<name>` to ask for a status or pass on a decision from the
   human; the answer arrives as a message. Don't report a worker's state you haven't heard back.
 - A closed tab: `worktree.ps1 open -Name <name>` starts a new session that picks the task up from `TASK.md` (so keep

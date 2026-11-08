@@ -220,7 +220,8 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
   in its workers' configs, and `play-patched`, `iterate` and `capture-window` set it for the run and put your
   `Config.toml` back afterwards. Sound is muted the same way in `iterate`, `capture-window` and `level-sweep.py`
   (no switch), and all three wait for the game-run lock and give it back when the run ends. The helpers are in `tools\debug\kit-common.ps1`.
-  Game runs take one at a time today; shared run slots for automated runs are planned and not built (see `.agents/REPO.md`, Testing).
+  The PowerShell scripts take turns through that lock, one at a time. The Python test kit (section 4a) uses shared run slots
+  instead and respects the same lock both ways, so old and new scripts never overlap.
   Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
   or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
   `e001`.
@@ -230,6 +231,46 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop    
   section to `Config.toml`, launch the exe, and `stop` when done (`shot` captures any running game). Example:
   `tools\debug\holiday-shots.ps1`. The other scripts in `tools\debug` that start the game do the same.
 - Don't run several game windows or level-sweep automation for visual bugs: one window, looked at by a person.
+
+## 4a. Smoke test and the test kit
+
+`python tools/smoke-test.py` (Python 3.8 or newer, Windows and Linux, standard library; the stuck-music check needs numpy) boots the
+game for real from a fresh build and checks it still works. Run it before a PR, after `toolsuild-no100f.ps1`.
+Three jobs run at once, each from its own copy of `Play\`:
+
+| Job | What it does and checks |
+| --- | --- |
+| `h001` | Boots the hub with the HD pack on, skips the intro, waits until it is playable. At least 20 of the pack's textures were really drawn (every pack file is registered with the dev menu's `textures` command, which lists the ones the game drew: not "the picture differs"). The audio dump is not silent and `tools/debug/audio/loopcheck.py` finds no stuck loop. The picture is not black. |
+| `i004` | HD off: none of the pack's textures are drawn. A scripted A press moves Scooby. The dev menu's `scene e001` travels there and the game becomes playable again. |
+| `g001` | Sets a known snack count, `tp`s onto the save point (-25.618 1.186 -1.515), saves with scripted presses, finds the file in `Saves\MemoryCard`, restarts from the same copy, loads from the title menu and checks Scooby is back at the save point with the same count. |
+
+`--scenes e005,f001` adds a job per scene: boots it, waits until playable, checks the picture and that the game stays up.
+Every job first checks that the game was built from the code under test: the build ID (`1.1.1 branch@commit`, in the exe and in `console.log`) must be this checkout's commit, or an older commit of the same branch with only
+test and doc files changed since (`tools/testkit/`, `tools/smoke-test.py`, `docs/`, any `*.md`, `autotest/`). Any other change since the build says "rebuild".
+All jobs fail on a crash, a fault in the log or a black picture. Only a timeout is retried, once from a fresh launch, and reported as "passed on retry" (`h001`
+has a known intermittent intro hang). A check that cannot run (no numpy, no screenshot tool on Linux) is "not run", never a pass: exit code 3.
+Exit codes: 0 passed, 1 failed, 2 wrong build, 3 only checks not run. The report is `autotest\smoke-<time>\REPORT.md` (with `results.json`, shots and logs).
+Options: `--jobs`, `--scenes`, `--slots N`, `--timeout S` (playable limit per job, 150), `--keep` (keep the `Play` copies), `--exclusive` (the machine to yourself) with `--sequential` (one job after another: solo timings), `--activate-when-shown 0|1` (sets `SDL_WINDOW_ACTIVATE_WHEN_SHOWN`), `--skip-build-check` (manual override, said in the report).
+
+Measured on one PC (Ryzen 9 7900X, RTX 3090, 2026-11-07, 1280x720 windows): the three jobs at once take about 47 s after the build (h001 27 s, i004 20 s, g001 47 s, each playable after 8-14 s); one after another 85 s (11.5 + 6 + 12 s to playable). Every window held 60 fps (p95 frame time under 17 ms) whether it was in front of the others or behind, with or without `--activate-when-shown 0`: nothing in the game or runtime sets `pauseOnFocusLost` (it is off), and background windows did not stall.
+A fresh `Play` copy starts with an empty shader and pipeline cache (`UserData\Cache`), which costs about 3.4 s (h001 playable in 13.4 s cold, 10.0 s warm); each game also reads about 1 GiB of disc files into its read cache and starts 22 pipeline compile threads, so more than 3 at once will slow each one down.
+
+The pieces are in `tools/testkit/` and are meant for every automated game run (`level-sweep.py` and the PowerShell scripts have not been moved onto them yet):
+- `launch.py`: the one launch helper. Its own copy of `Play\` in a folder you give it (the HD pack and button icons are linked, never copied; deleting never follows a link),
+  its own `Config.toml` (windowed, rumble off, muted), the environment scrubbed of leftover `NO100F_*`, `AX_*`, `NSMBW_*`, `AUDIO_*` switches and of
+  `SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS` (never set it: SDL then refuses the game's own hint call and the game treats that as an error).
+  Controller isolation, per game process only, so your own game is unaffected: `NSMBW_INPUT_SCRIPT` set (the game reports pad 1 connected, nothing pressed) and
+  `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0xDEAD/0xBEEF`, an ID no controller has, so a real pad's presses do not reach the game
+  (tried once with a person pressing a real pad throughout a full smoke run: all three jobs passed as without; the game logs no controller connects, so there is no log line to check).
+- `slots.py`: shared run slots, 3 by default (`--slots`, or `FRIGHTWORKS_TEST_SLOTS`). `acquire(why, exclusive=True)` is for the human check and performance
+  checks: it waits for every slot and blocks new ones. Files live in `%LOCALAPPDATA%\FrightWorks-kit\slots` (Linux `$XDG_STATE_HOME/FrightWorks-kit`), with a heartbeat so a
+  crashed run's slot is taken over after 90 s. While any slot is held a `game-run.lock` exists in the old format (its `root` is the slots folder, so no checkout's old script takes it over), and a lock held by an old PowerShell script makes
+  the kit wait: `python tools/testkit/slots.py status` shows who holds what.
+- `devmenu.py` and `waitplay.py`: the dev menu's `devmenu.txt` / `devmenu_press.txt` as a client, and the one wait-until-playable routine (from `texhunt\look.ps1`): uses `cutscene`
+  (`cutscene yes|no control yes|no`): skip (A) every 2 s while a cutscene plays, nothing while there is no control and no cutscene (a camera pan, a dialogue box), ready the moment the player has control; a time limit fails with the last state and a screenshot.
+- `checks.py`: black-picture test (PNG, no Pillow), audio peak and loop check, the HD-drawn probe.
+
+Tests of the kit need no game: `python -m unittest discover -s tools/testkit -p "test_*.py"` (about a minute; uses a windowless stand-in game).
 
 ## 5. Dev menu (F8)
 
@@ -367,7 +408,7 @@ useful:
 - Fix-only: minimal diff, no diagnostics (revert any patch: `play-patched.ps1 -Remove -Patch <name>` or `git apply -R`),
   no unrelated changes, no heuristics that hide a symptom.
 - Run what the change needs (the table in `.agents/REPO.md`, Testing): the unit tests it affects, and a full build if you touched overrides.
-- Smoke test: not built yet. Until it is, boot `h001` and the level you changed something in, from a fresh build, and check the build ID, the level load and that the game stays up. Keep it short; nothing runs it automatically (no CI), so the PR says what was run.
+- Smoke test: build first, then `python tools\smoke-test.py` (add `--scenes <scene,...>` for a level you changed; section 4a). Keep it short; nothing runs it automatically (no CI), so the PR says what was run, and what it could not run.
 - Open it as a draft and say plainly what you tested and what you didn't.
 
 ## 10. Working on several branches at once
@@ -409,7 +450,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\worktree.ps1 remove -Name i
 - To try a worktree's build, run its `Play\FrightWorks Game.exe`, or build its launcher there
   (`toolsuild-launcher.ps1`) and run its `launcher\publish\FrightWorks.exe`: it starts that worktree's game, with its
   own settings.
-- Builds can run side by side. Game runs take turns (shared slots are planned, not built): `manual-session prepare/start` and `play-patched.ps1` wait while
+- Builds can run side by side. Game runs take turns in the PowerShell scripts: `manual-session prepare/start` and `play-patched.ps1` wait while
   another checkout's test has the game open. Scripts only close the game they started from their own checkout; your
   own game (launcher or `Play\` in the main checkout) is never closed by a test.
 - Never delete a worktree folder by hand: `Disc`, `texture_pack`, `toolchain` there are links, and some delete tools
