@@ -217,3 +217,6 @@ Not covered by the GPL (these stay under their owners' terms):
 Scooby-Doo ™ & © Hanna-Barbera / Warner Bros. Night of 100 Frights © THQ / Warner Bros. Interactive, developed by
 Heavy Iron Studios. Unofficial fan project, not affiliated with or endorsed by them. The repository contains no game
 code or assets; the game's data is read from your own copy.
+
+# Other FrightWorks Projects
+[FrightWorks: UnMasked](https://github.com/FrightWorks/FrightWorks-unmasked)
